@@ -3,7 +3,7 @@
 # fixtures only for app-wide state/routing, terminal split-axis and syntax-library facade.
 # Does not build the application, execute its build phases or install any binary.
 set -eu
-repo=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd)
 src="$repo/apps/purepoint-macos/purepoint-macos"
 set --
 for name in ChannelModel ManifestModel WorkspaceModel AgentStatus DiffModel PRModel EditorTab FileNode; do set -- "$@" "$src/Models/$name.swift"; done
@@ -17,5 +17,5 @@ if [ -z "$platform" ]; then platform=/Applications/Xcode.app/Contents/Developer/
 xcrun swiftc -typecheck -swift-version 5 -warnings-as-errors -default-isolation MainActor \
   -enable-upcoming-feature NonisolatedNonsendingByDefault \
   -plugin-path "$platform/Developer/usr/lib/swift/host/plugins" \
-  "$@" "$repo/tools/verification/agent-watch-view-fixtures.swift"
+  "$@" "$repo/apps/purepoint-macos/verification/agent-watch/agent-watch-view-fixtures.swift"
 printf '%s\n' 'PASS native channel, review and editable-file components with actual wire/Git producers (isolated app-wide dependency fixtures)'

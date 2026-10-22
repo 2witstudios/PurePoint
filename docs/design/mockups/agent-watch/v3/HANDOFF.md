@@ -8,7 +8,7 @@ Snapshot saved 2026-10-09T17:19:34.237562+00:00. User accepted the quieter v2 la
 - [Worktree](https://pagespace.ai/dashboard/nmyzsuuo4kc1u4y2e9vsndft/toovv5ea7b8ckgpknr4n7mqm) — page `toovv5ea7b8ckgpknr4n7mqm`, observed revision 1, SHA-256 `db4cdee28349f1a741456714d0fdd56a59a54558d5a854eeef0b4982071fd88e`.
 - [Channel](https://pagespace.ai/dashboard/nmyzsuuo4kc1u4y2e9vsndft/titpzeae2wj2msf00asnof68) — page `titpzeae2wj2msf00asnof68`, observed revision 1, SHA-256 `48985e330ece535536149d3098f4d80ced5df346a82a1b9bd593799690e79b0a`.
 
-Exact inline HTML sources are saved at `designs/agent-watch/v3/project.html`, `worktree.html`, and `channel.html`, with source hashes, timestamps and readback verification in `manifest.json`. All saved Canvas bodies matched local files byte for byte. Component authoring source is `channel.js` and `channel.css`; each is embedded in the HTML snapshots. Revision metadata is observed state, not a claim of immutable revision URLs. Preserve this named snapshot before another direction.
+Exact inline HTML sources are saved at `docs/design/mockups/agent-watch/v3/project.html`, `worktree.html`, and `channel.html`, with source hashes, timestamps and readback verification in `manifest.json`. All saved Canvas bodies matched local files byte for byte. Component authoring source is `channel.js` and `channel.css`; each is embedded in the HTML snapshots. Revision metadata is observed state, not a claim of immutable revision URLs. Preserve this named snapshot before another direction.
 
 ## Shared visual system
 

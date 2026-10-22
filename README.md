@@ -139,7 +139,7 @@ Run `pu --help` for full usage.
 
 ## Current Status
 
-The app is macOS only. The daemon and CLI also run on Linux servers; see [Run PurePoint on a Linux server](docs/guide/linux-server.md).
+The desktop app is macOS only, with a companion iPhone/iPad app for watching and steering agents remotely. The daemon and CLI also run on Linux servers; see [Run PurePoint on a Linux server](docs/guide/linux-server.md).
 
 PurePoint is early and under active development — the core works, but some features are still in design. See [`docs/`](docs/) for specs and architecture.
 

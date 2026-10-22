@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs meaningful Git/state tests in disposable repositories without the app build.
 set -eu
-repo=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd)
 output=$(mktemp -d /tmp/purepoint-git-review-check.XXXXXX)
 trap 'rm -rf "$output"' EXIT
 src="$repo/apps/purepoint-macos/purepoint-macos"

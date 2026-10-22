@@ -351,7 +351,7 @@ These apply to the Linux host, and those marked (shared) also apply to the Mac b
 
 ## Implementation plan
 
-The dependency-ordered epic lives in [`tasks/linux-phone-host-epic.md`](../../tasks/linux-phone-host-epic.md), with per-task status. It builds on PR #264 (chat grants) and PR #265 (owner-only daemon socket, explicit `pu-engine` lookup: the bridge runs the `pu` beside the installed `pu-engine`). The user guide is [`guide/linux-server.md`](../guide/linux-server.md#5-pair-a-phone-or-ipad-optional).
+Implemented on `pu/linux-phone-host`. It builds on PR #264 (chat grants) and PR #265 (owner-only daemon socket, explicit `pu-engine` lookup: the bridge runs the `pu` beside the installed `pu-engine`). The user guide is [`guide/linux-server.md`](../guide/linux-server.md#5-pair-a-phone-or-ipad-optional).
 
 ## Risks
 
