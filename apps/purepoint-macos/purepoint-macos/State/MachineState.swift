@@ -53,6 +53,7 @@ final class MachineState: Identifiable {
     private static let refreshInterval: Duration = .seconds(30)
     /// Bumped by each local move, so a project list fetched before it can't undo it.
     @ObservationIgnored private var orderRevision = 0
+    @ObservationIgnored private lazy var orderSaver = ProjectOrderSaver(endpoint: endpoint)
 
     var endpoint: DaemonEndpoint { .machine(machine.id) }
     var isConnectedOrConnecting: Bool { state != .disconnected }
@@ -365,7 +366,11 @@ final class MachineState: Identifiable {
     }
 
     private func setProjects(roots: [String]) {
-        let visible = roots.filter { !hiddenRoots.contains($0) }
+        var visible = roots.filter { !hiddenRoots.contains($0) }
+        if orderSaver.pending > 0 {
+            // The list may predate a move still being saved: keep the order on screen.
+            visible = ProjectOrder.sorted(visible, by: projects.map(\.projectRoot), root: { $0 })
+        }
         let wanted = Set(visible)
         var kept: [ProjectState] = []
         for project in projects where !wanted.contains(project.projectRoot) {
@@ -406,14 +411,13 @@ final class MachineState: Identifiable {
         guard let next = ProjectOrder.moving(root, to: index, in: projects) else { return }
         projects = next
         orderRevision += 1
-        let roots = next.map(\.projectRoot)
-        let client = endpoint.makeClient()
-        Task { [weak self] in
-            let response = try? await client.send(.reorderProjects(projectRoots: roots))
+        orderSaver.save(next.map(\.projectRoot)) { [weak self] in
             guard let self else { return }
-            if case .projectOrder = response { return }
-            await self.refreshProjects()
-            self.actionError = "Could not save the project order on \(self.machine.name)."
+            Task {
+                // Show the order the machine kept.
+                await self.refreshProjects()
+                self.actionError = "Could not save the project order on \(self.machine.name)."
+            }
         }
     }
 

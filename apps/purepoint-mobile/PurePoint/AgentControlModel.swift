@@ -36,6 +36,10 @@ import UserNotifications
     // Workspace grant changes must not invalidate an authorized terminal receipt.
     private var terminalPermissionRevision = 0
     private var refreshRevision = 0
+    /// Bumped by each project reorder; an inventory fetched across one keeps the order on screen.
+    private var projectOrderRevision = 0
+    /// Project reorders sent but not yet answered.
+    private var projectOrdersPending = 0
     private var pendingOpen: AgentPendingOpen?
     // The agent a transport drop closed, reopened once the same host reconnects.
     private var resumeScope: AgentScope?
@@ -278,16 +282,30 @@ import UserNotifications
     /// Saves a machine's project order on that machine, so every device lists it the same way.
     func reorderProjects(machine: String, projectIds: [String]) async throws {
         guard canReorderProjects else { throw AgentControlFailure(message: "Reordering projects requires workspace management and an updated bridge.") }
-        if let index = machines.firstIndex(where: { $0.id == machine }), let projects = machines[index].registeredProjects {
-            machines[index].registeredProjects = projectIds.compactMap { id in projects.first { $0.id == id } }
-                + projects.filter { !projectIds.contains($0.id) }
-        }
+        projectOrderRevision += 1
+        projectOrdersPending += 1
+        defer { projectOrdersPending -= 1 }
+        applyProjectOrder(projectIds, machine: machine)
         let receipt = try await workspaceRequest(
             "workspace.reorderProjects",
             fields: ["operationId": UUID().uuidString, "machine": machine, "projectIds": projectIds])
         guard receipt.state == "succeeded" else {
             throw AgentControlFailure(message: receipt.message ?? "Project order wasn't saved. Refresh and try again.")
         }
+        // The machine's saved order, in case a refresh that predates the move was skipped.
+        if let saved = receipt.detail?.projectIds { applyProjectOrder(saved, machine: machine) }
+    }
+    private func applyProjectOrder(_ projectIds: [String], machine: String) {
+        guard let index = machines.firstIndex(where: { $0.id == machine }),
+              let projects = machines[index].registeredProjects else { return }
+        machines[index].registeredProjects = Self.ordered(projects, by: projectIds)
+    }
+    /// `projects` in the order of `ids`; projects not listed keep their order after them.
+    static func ordered(_ projects: [WorkspaceProject], by ids: [String]) -> [WorkspaceProject] {
+        projects.enumerated().sorted { left, right in
+            let l = ids.firstIndex(of: left.element.id) ?? Int.max, r = ids.firstIndex(of: right.element.id) ?? Int.max
+            return l != r ? l < r : left.offset < right.offset
+        }.map(\.element)
     }
     func refreshWorkspaceForReview(machine: String, project: String) async -> Bool {
         let token = generation, revision = permissionRevision
@@ -333,6 +351,7 @@ import UserNotifications
         let owningGeneration = generation
         defer { if generation == owningGeneration { inventoryInFlight = false } }
         refreshRevision += 1; let revision = refreshRevision; let token = generation
+        let orderRevision = projectOrderRevision
         loading = true
         do {
             let data = try await request("agents", [:])
@@ -342,6 +361,14 @@ import UserNotifications
             machines = inventory.machines.map { machine in
                 guard (!machine.online || machine.metadataStatus == "error"), let cached = prior.first(where: { $0.id == machine.id }) else { return machine }
                 return AgentMachine(id: machine.id, name: machine.name, online: machine.online, protocolVersion: machine.protocolVersion, screenMayBeInexact: machine.screenMayBeInexact, error: machine.error, complete: false, agents: cached.agents, registeredProjects: cached.registeredProjects, worktrees: cached.worktrees, metadataStatus: machine.metadataStatus ?? "offline", metadataError: machine.metadataError ?? machine.error)
+            }.map { machine in
+                // Fetched across a reorder: its project order may predate it, so keep the one on screen.
+                guard orderRevision != projectOrderRevision || projectOrdersPending > 0,
+                      let shown = prior.first(where: { $0.id == machine.id })?.registeredProjects?.map(\.id),
+                      let projects = machine.registeredProjects else { return machine }
+                var kept = machine
+                kept.registeredProjects = Self.ordered(projects, by: shown)
+                return kept
             }.sorted {
                 let left = $0.agents.contains { $0.phase == "dialog" },
                     right = $1.agents.contains { $0.phase == "dialog" }

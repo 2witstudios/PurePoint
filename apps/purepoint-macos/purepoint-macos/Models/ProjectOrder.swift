@@ -37,3 +37,31 @@ extension ProjectOrder {
         moving(root, to: index, in: projects, root: { $0.projectRoot })
     }
 }
+
+/// Saves one daemon's project order. Moves are sent one at a time, in the order they were
+/// made, so the daemon always ends up with the last one; each send carries the full order.
+@MainActor
+final class ProjectOrderSaver {
+    private let endpoint: DaemonEndpoint
+    private var last: Task<Void, Never>?
+    /// Moves sent but not yet answered. While any are, a project list pushed or fetched from
+    /// the daemon may predate them, so its order must not replace the one on screen.
+    private(set) var pending = 0
+
+    init(endpoint: DaemonEndpoint) {
+        self.endpoint = endpoint
+    }
+
+    func save(_ roots: [String], failed: @escaping @MainActor () -> Void) {
+        let previous = last
+        let endpoint = endpoint
+        pending += 1
+        last = Task { [weak self] in
+            await previous?.value
+            let response = try? await endpoint.makeClient().send(.reorderProjects(projectRoots: roots))
+            self?.pending -= 1
+            if case .projectOrder = response { return }
+            failed()
+        }
+    }
+}

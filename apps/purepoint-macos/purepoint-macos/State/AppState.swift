@@ -122,6 +122,9 @@ final class AppState {
     @ObservationIgnored private var lastLocalProjects: Set<String>?
     /// Each opened root's canonical path, resolved once rather than on every report.
     @ObservationIgnored private var canonicalRoots: [String: String] = [:]
+    /// The local daemon's project order as last reported.
+    @ObservationIgnored private var localProjectOrder: [String] = []
+    @ObservationIgnored private lazy var localOrderSaver = ProjectOrderSaver(endpoint: .local)
     #endif
     /// Point Guard folders the user also opened as sidebar projects. Other Point Guard
     /// folders stay out of the sidebar even though the daemon has them registered.
@@ -360,12 +363,11 @@ final class AppState {
         #if os(macOS)
         guard let next = ProjectOrder.moving(project.projectRoot, to: index, in: projects) else { return }
         projects = next
-        let roots = next.map(\.projectRoot)
-        Task { [weak self] in
-            // On success the daemon pushes the new order to every device following it.
-            let response = try? await DaemonEndpoint.local.makeClient().send(.reorderProjects(projectRoots: roots))
-            if case .projectOrder = response { return }
-            self?.daemonError = "Could not save the project order."
+        // On success the daemon pushes the new order to every device following it.
+        localOrderSaver.save(next.map(\.projectRoot)) { [weak self] in
+            guard let self else { return }
+            self.daemonError = "Could not save the project order."
+            self.sortLocalProjects(by: self.localProjectOrder)
         }
         #endif
     }
@@ -458,12 +460,20 @@ final class AppState {
             guard FileManager.default.fileExists(atPath: root), !isTooBroadProjectRoot(root) else { continue }
             openProject(root, resumingSuspendedAgents: resuming)
         }
-        // The daemon's list is in its saved order, which every device shows.
-        let ordered = ProjectOrder.sorted(projects, by: roots, root: { self.canonicalRoot(of: $0.projectRoot) })
-        if ordered.map(\.projectRoot) != projects.map(\.projectRoot) { projects = ordered }
+        // The daemon's list is in its saved order, which every device shows, unless it may
+        // predate a move this Mac is still saving.
+        localProjectOrder = roots
+        if localOrderSaver.pending == 0 { sortLocalProjects(by: roots) }
         lastLocalProjects = registered
         #endif
     }
+
+    #if os(macOS)
+    private func sortLocalProjects(by roots: [String]) {
+        let ordered = ProjectOrder.sorted(projects, by: roots, root: { self.canonicalRoot(of: $0.projectRoot) })
+        if ordered.map(\.projectRoot) != projects.map(\.projectRoot) { projects = ordered }
+    }
+    #endif
 
     #if os(macOS)
     private func canonicalRoot(of root: String) -> String {
