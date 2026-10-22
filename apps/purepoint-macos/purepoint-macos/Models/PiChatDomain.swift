@@ -8,7 +8,7 @@ struct PiDraftState: Equatable {
         guard !value.isEmpty else { return }; text = text.isEmpty ? value : text + "\n\n" + value
     }
 }
-struct PiComposerAttachment: Codable, Identifiable, Sendable {
+nonisolated struct PiComposerAttachment: Codable, Identifiable, Sendable {
     let id: String
     let name: String
     let mimeType: String
@@ -51,7 +51,7 @@ struct PiComposerError: LocalizedError {
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
 }
-enum PiLocalRecoveryStore {
+nonisolated enum PiLocalRecoveryStore {
     private static func url(_ name: String) throws -> URL {
         let base = try FileManager.default.url(
             for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
@@ -177,13 +177,13 @@ struct PiPairingCode: Decodable {
         return code
     }
 }
-struct PiChatMessage: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct PiChatMessage: Codable, Identifiable, Equatable, Sendable {
     let id: String; let role: String; let text: String; var activity: String?; var error: String?
 }
-struct PiToolActivity: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct PiToolActivity: Codable, Identifiable, Equatable, Sendable {
     let id: String; let name: String; let state: String; let text: String
 }
-enum PiTranscriptRow: Identifiable, Equatable, Sendable {
+nonisolated enum PiTranscriptRow: Identifiable, Equatable, Sendable {
     case message(PiChatMessage)
     case activity([PiToolActivity])
     var id: String {
@@ -193,7 +193,7 @@ enum PiTranscriptRow: Identifiable, Equatable, Sendable {
         }
     }
 }
-enum PiTranscriptRows {
+nonisolated enum PiTranscriptRows {
     static func make(messages: [PiChatMessage], tools: [PiToolActivity]) -> [PiTranscriptRow] {
         var rows: [PiTranscriptRow] = []
         var represented = Set<String>()
@@ -229,7 +229,7 @@ enum PiTranscriptRows {
 /// How much of a transcript the eager chat renders. The bridge bounds snapshots by bytes
 /// (1 MiB), not rows, so a long session of short messages can hold thousands of rows; only
 /// the newest page renders until the reader asks for earlier ones.
-struct PiTranscriptWindow: Equatable, Sendable {
+nonisolated struct PiTranscriptWindow: Equatable, Sendable {
     static let page = 200
     /// First row the reader asked to see. Anchored by ID so rows arriving at the end, or the
     /// bridge trimming the oldest rows, never pull already-loaded history out from under them.
@@ -248,30 +248,30 @@ struct PiTranscriptWindow: Equatable, Sendable {
     }
     mutating func reset() { anchor = nil }
 }
-struct PiQueuedText: Codable, Sendable { let id: String; let clientId: String?; let mode: String; let text: String }
-struct PiExtensionDialog: Codable, Identifiable, Sendable {
+nonisolated struct PiQueuedText: Codable, Sendable { let id: String; let clientId: String?; let mode: String; let text: String }
+nonisolated struct PiExtensionDialog: Codable, Identifiable, Sendable {
     let id: String; let method: String; var title: String?; var message: String?; var prefill: String?;
     var placeholder: String?; var options: [String]?; var optionIds: [String]? = nil
 }
-struct PiEditorText: Codable, Sendable { let id: String; let text: String }
-struct PiCanceledText: Codable, Identifiable, Sendable {
+nonisolated struct PiEditorText: Codable, Sendable { let id: String; let text: String }
+nonisolated struct PiCanceledText: Codable, Identifiable, Sendable {
     let clientId: String?; let id: String; let text: String; let sessionId: String
 }
-struct PiSnapshot: Codable, Sendable {
+nonisolated struct PiSnapshot: Codable, Sendable {
     let version: Int; let epoch: String; let revision: Int; let busy: Bool; var runId: String?; let sessionId: String;
     let title: String
     let messages: [PiChatMessage]; let tools: [PiToolActivity]; let queue: [PiQueuedText];
     let dialogs: [PiExtensionDialog]; let notices: [String]; var error: String?; var editor: PiEditorText? = nil;
     var canceled: [PiCanceledText]? = nil; var capabilities: [String]? = nil
 }
-struct PiConversation: Codable, Identifiable, Sendable { let id: String; let title: String; var date: String? }
-struct PiHistory: Codable, Sendable { let sessionId: String; let title: String; let messages: [PiChatMessage] }
-struct PiSubmission: Codable, Identifiable, Sendable {
+nonisolated struct PiConversation: Codable, Identifiable, Sendable { let id: String; let title: String; var date: String? }
+nonisolated struct PiHistory: Codable, Sendable { let sessionId: String; let title: String; let messages: [PiChatMessage] }
+nonisolated struct PiSubmission: Codable, Identifiable, Sendable {
     let id: String; let text: String; let sessionId: String; var status: String; var recoverable: Bool;
     var attachments: [PiComposerAttachment]? = nil
 }
 // Receipts are deliberately independent of transcript rows: acceptance does not imply completion.
-enum PiJSONValue: Codable, Sendable {
+nonisolated enum PiJSONValue: Codable, Sendable {
     case object([String: PiJSONValue]), array([PiJSONValue]), string(String), number(Double), bool(Bool), null
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -307,7 +307,7 @@ enum PiJSONValue: Codable, Sendable {
         try JSONDecoder().decode(type, from: JSONEncoder().encode(self))
     }
 }
-struct PiWireEnvelope: Decodable, Sendable {
+nonisolated struct PiWireEnvelope: Decodable, Sendable {
     let type: String; var id: String?; var ok: Bool?; var data: PiJSONValue?; var error: String?; var text: String?
     /// A paired device's terminals grant, on `permissions` records.
     var terminals: String?
@@ -353,7 +353,7 @@ final class PiCoalescedWriter: @unchecked Sendable {
         }
     }
 }
-enum PiIncomingRecord: Sendable {
+nonisolated enum PiIncomingRecord: Sendable {
     case snapshot(PiSnapshot, [PiTranscriptRow])
     case envelope(PiWireEnvelope)
     static func decode(_ data: Data) throws -> Self {

@@ -295,7 +295,7 @@ struct TabBarButton: View {
 
 /// Drag payload for a tab. Tabs only move within a workspace, and surface IDs are unique
 /// there, so the ID alone identifies the tab; the prefix keeps stray text drops out.
-enum TabDragPayload {
+nonisolated enum TabDragPayload {
     private static let prefix = "purepoint-tab:"
 
     static func string(for surfaceId: Int) -> String { prefix + String(surfaceId) }

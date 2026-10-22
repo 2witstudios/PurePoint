@@ -311,7 +311,7 @@ final class MachineState: Identifiable {
         stopRefreshing()
         let subscription = DaemonProjectsSubscription(client: endpoint.makeClient())
         projectsSubscription = subscription
-        Task {
+        Task { [weak self] in
             await subscription.start { [weak self] roots in
                 guard let self, self.projectsSubscription === subscription, self.state.isDaemonRunning else { return }
                 self.setProjects(roots: roots)

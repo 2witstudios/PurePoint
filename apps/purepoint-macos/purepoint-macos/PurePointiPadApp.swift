@@ -32,7 +32,7 @@ struct PurePointiPadApp: App {
                 .font(.body)
                 // Mac checkboxes and push buttons for controls that name no style (MacControlStyles+iOS.swift).
                 .macControlDefaults()
-                .onAppear {
+                .onAppear { [appState] in
                     appState.registry = registry
                     viewCache.agentStatus = { [weak appState] agentId in
                         appState?.agent(byId: agentId)?.status
