@@ -1396,7 +1396,10 @@ async fn assert_invalid_bytes_close_stream(sock_path: &std::path::Path, subscrib
     let first = read_response(&mut reader).await;
     assert!(subscribed(&first), "{first:?}");
     writer.write_all(b"\xff{}\n").await.unwrap();
-    write_line(&mut writer, &Request::Health).await;
+    // The daemon may already have closed the connection, so this write can fail with a
+    // broken pipe; either way the request must not run.
+    let health = serde_json::to_string(&Request::Health).unwrap() + "\n";
+    let _ = writer.write_all(health.as_bytes()).await;
     let responses = responses_until_close(&mut reader).await;
     assert!(
         !responses

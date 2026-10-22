@@ -609,6 +609,16 @@ struct RemoteLayoutPersistenceTests {
         #expect(outcome == .written(modifiedMs: 30))
     }
 
+    @Test func givenDocumentDeletedSinceReadSaveShouldWriteItAgain() {
+        let host = FakeHost(
+            reads: [.failure(.notFound("gone"))],
+            writes: [.success(HostFileStat(exists: true, isDirectory: false, size: 1, modifiedMs: 30))])
+        let outcome = WorkspacePersistence.saveRemote(
+            Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
+        #expect(host.writes.map(\.expectedModifiedMs) == [nil])
+        #expect(outcome == .written(modifiedMs: 30))
+    }
+
     @Test func givenDocumentChangedElsewhereSaveShouldAdoptItNotOverwrite() {
         // Another Mac wrote the layout after this app last read it (5 → 20).
         let theirs = #"{"version":3,"workspaces":[]}"#

@@ -242,6 +242,21 @@ struct WorkspaceRegistryTests {
         #expect(onDisk == written)
     }
 
+    @Test func givenLayoutFileDeletedASaveShouldWriteItAgain() throws {
+        let project = root + "-deleted"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a"])
+        registry.saveAll()
+        let path = WorkspacePersistence.filePath(projectRoot: project)
+        try FileManager.default.removeItem(atPath: path)
+        registry.split(workspaceId: "ws-ag-a", leafId: 0, axis: .vertical)
+
+        registry.saveAll()
+
+        let restored = try WorkspacePersistence.loadForRegistry(projectRoot: project)
+        #expect(restored.first { $0.id == "ws-ag-a" }?.paneCount == 2)
+    }
+
     @Test func givenOwnSavesShouldNotBeMistakenForAnotherMacs() throws {
         let project = root + "-own"
         defer { try? FileManager.default.removeItem(atPath: project) }

@@ -145,13 +145,14 @@ nonisolated enum WorkspacePersistence {
     /// Write a local project's layout unless the document on disk changed since this app last
     /// read or wrote it (`expectedModifiedMs`, nil when there was no document). Another Mac
     /// reaching this one over SSH writes the same file; its change is returned as a conflict
-    /// for the caller to adopt instead of being overwritten.
+    /// for the caller to adopt instead of being overwritten. A document deleted meanwhile has
+    /// nothing to adopt, so it is written again.
     static func saveLocal(_ data: Data, projectRoot: String, expectedModifiedMs: Int64?) -> RemoteSaveOutcome {
         let host = LocalProjectHost.shared
         let path = filePath(projectRoot: projectRoot)
         guard let stat = try? host.stat(path: path) else { return .skipped }
         let onDisk = stat.exists ? stat.modifiedMs : nil
-        if onDisk != expectedModifiedMs {
+        if let onDisk, onDisk != expectedModifiedMs {
             guard let current = try? host.read(path: path, maxBytes: maxRemoteLayoutBytes), !current.truncated,
                 !isNewerThanSupported(data: current.data)
             else { return .skipped }
@@ -260,8 +261,10 @@ nonisolated enum WorkspacePersistence {
         }
         do {
             return .written(
+                // `onDisk` equals `expectedModifiedMs` when both are known. A document deleted
+                // since it was read has nothing to adopt, so it is written again.
                 modifiedMs: try host.write(
-                    path: path, data: data, expectedModifiedMs: expectedModifiedMs ?? onDisk, createDirectories: true
+                    path: path, data: data, expectedModifiedMs: onDisk, createDirectories: true
                 ).modifiedMs)
         } catch HostError.conflict {
             // Changed between the read and the write: adopt what is there now.
