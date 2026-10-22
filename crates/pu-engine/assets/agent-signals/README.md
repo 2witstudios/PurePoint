@@ -8,8 +8,7 @@ macOS Settings toggle); new and resumed agents then launch without adapters.
 
 Observation is separate from process liveness. The daemon keeps its existing PTY,
 input, native session, resume and shutdown paths. No adapter answers requests or
-returns policy decisions. Research remains in `reports/Agent state signal discovery.md`
-and `research_notes/Agent state signal discovery/`.
+returns policy decisions. Research lives in `docs/research/agent-state-signals/`.
 
 | Runtime | Activation | Facts and qualification limits |
 | --- | --- | --- |

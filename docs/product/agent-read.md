@@ -37,8 +37,8 @@ Installed schema evidence: Claude JSONL message content/tool blocks; Codex rollo
 `session_meta` and `response_item` records (avoid duplicate `event_msg` messages);
 OpenCode v2 SQLite `session_v2`/`session_message` and legacy message/part storage;
 Pi native JSONL tree messages. Sources: existing `TranscriptParser.swift`,
-`CodexConversationIndex.swift`, bridge native/session code, and runtime research
-record `tasks/pu-read-session-research.md`. Private format changes require fixtures
+`CodexConversationIndex.swift`, bridge native/session code, and runtime transcript-binding research
+(2026-10-10). Private format changes require fixtures
 and explicit schema diagnostics, not a terminal fallback.
 
 ## Interfaces
