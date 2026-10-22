@@ -803,7 +803,7 @@ struct RemoteLayoutConflictTests {
             changed.nextSurfaceId += 50
             return changed
         }
-        registry.adoptRemoteLayout(projectId, workspaces: theirs)
+        registry.adoptExternalLayout(projectId, workspaces: theirs)
         #expect(registry.workspaces(forProject: projectId) == theirs)
         registry.forgetProject(projectId)
     }

@@ -208,11 +208,12 @@ Spawn a new agent, optionally in a new worktree.
   "extra_args": null,
   "plan_mode": false,
   "no_trigger": false,
-  "trigger": null
+  "trigger": null,
+  "placement": {"workspace": "ws-ag-abc", "surface": 2}
 }
 ```
 
-`no_auto: true` launches the agent's bare command, ignoring project and machine-level launch args; `extra_args` still apply. The `trigger` field optionally binds a trigger by name to the spawned agent.
+`no_auto: true` launches the agent's bare command, ignoring project and machine-level launch args; `extra_args` still apply. The `trigger` field optionally binds a trigger by name to the spawned agent. `placement` (optional) names the app tab the agent was spawned for; the daemon only records it on the agent's manifest entry and status report, so every app showing the project puts the agent in that tab rather than giving it a workspace of its own.
 
 **Response**:
 ```json

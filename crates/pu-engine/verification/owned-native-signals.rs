@@ -486,6 +486,7 @@ fn main() {
                 plan_mode: false,
                 no_trigger: true,
                 trigger: None,
+                placement: None,
             })
             .await;
         save(dir, "spawn.json", &response)?;

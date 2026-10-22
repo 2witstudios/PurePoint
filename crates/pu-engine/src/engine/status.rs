@@ -89,6 +89,7 @@ impl Engine {
             trigger_seq_index: agent.trigger_seq_index,
             trigger_state: agent.trigger_state,
             trigger_total: agent.trigger_total,
+            placement: agent.placement.clone(),
         }
     }
 

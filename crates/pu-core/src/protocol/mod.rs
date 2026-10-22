@@ -120,6 +120,9 @@ pub enum Request {
         no_trigger: bool,
         #[serde(default)]
         trigger: Option<String>,
+        /// The app tab this agent is for; recorded on its manifest entry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<crate::types::SpawnPlacement>,
     },
     Status {
         project_root: String,

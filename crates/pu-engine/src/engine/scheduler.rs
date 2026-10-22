@@ -93,6 +93,7 @@ impl Engine {
                         plan_mode: false,
                         no_trigger: false,
                         trigger: None,
+                        placement: None,
                     })
                     .await
                 } else {
@@ -125,6 +126,7 @@ impl Engine {
                     plan_mode: false,
                     no_trigger: false,
                     trigger: None,
+                    placement: None,
                 })
                 .await
             }

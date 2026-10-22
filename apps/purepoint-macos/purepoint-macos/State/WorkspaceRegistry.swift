@@ -67,6 +67,10 @@ final class WorkspaceRegistry {
     @ObservationIgnored private let loadWorkspaces: (String) throws -> [Workspace]
     /// Remote projects persist through their machine's daemon rather than the local disk.
     @ObservationIgnored private var remoteSavers: [String: ([Workspace], String?) -> Void] = [:]
+    /// Modification time of each loaded local project's layout document as this app last read
+    /// or wrote it (nil: there was none). A Mac reaching this one over SSH writes the same
+    /// file, so a different time on disk is a change to adopt, never to overwrite.
+    @ObservationIgnored private var localLayoutStamps: [String: Int64?] = [:]
 
     init(loadWorkspaces: @escaping (String) throws -> [Workspace] = { try WorkspacePersistence.loadForRegistry(projectRoot: $0) }) {
         self.loadWorkspaces = loadWorkspaces
@@ -92,9 +96,10 @@ final class WorkspaceRegistry {
         }
     }
 
-    /// The machine's layout document changed under this app (a conditional save hit a
-    /// conflict): adopt it instead of overwriting it, then fold in the live agents.
-    func adoptRemoteLayout(_ projectId: String, workspaces: [Workspace]) {
+    /// The project's layout document changed under this app (a conditional save hit a
+    /// conflict, or another Mac wrote this Mac's file): adopt it instead of overwriting it,
+    /// then fold in the live agents.
+    func adoptExternalLayout(_ projectId: String, workspaces: [Workspace]) {
         guard loadedProjects.contains(projectId) else { return }
         saveWorkItems[projectId]?.cancel()
         saveWorkItems[projectId] = nil
@@ -111,6 +116,23 @@ final class WorkspaceRegistry {
     func setRemoteLayoutError(_ projectId: String, _ message: String?) {
         guard !loadedProjects.contains(projectId) else { return }
         layoutErrorsByProject[projectId] = message.map { "Could not restore this project's layout: " + $0 }
+    }
+
+    /// Adopt a local project's layout document if something other than this app wrote it
+    /// since this app last read or wrote it — a Mac that opened the project over SSH. Cheap
+    /// when nothing changed: one `stat`.
+    func adoptLocalLayoutIfChanged(projectRoot: String) {
+        guard !ProjectKey(id: projectRoot).isRemote, loadedProjects.contains(projectRoot),
+            let known = localLayoutStamps[projectRoot],
+            WorkspacePersistence.localModifiedMs(projectRoot: projectRoot) != known,
+            let read = try? LocalProjectHost.shared.read(
+                path: WorkspacePersistence.filePath(projectRoot: projectRoot),
+                maxBytes: WorkspacePersistence.maxRemoteLayoutBytes),
+            !read.truncated, !WorkspacePersistence.isNewerThanSupported(data: read.data)
+        else { return }
+        localLayoutStamps[projectRoot] = read.modifiedMs
+        adoptExternalLayout(
+            projectRoot, workspaces: WorkspacePersistence.workspaces(from: read.data, projectId: projectRoot))
     }
 
     /// Names of file tabs in this project's workspaces holding unsaved edits.
@@ -133,6 +155,7 @@ final class WorkspaceRegistry {
             let restored = try loadWorkspaces(projectRoot)
             workspacesByProject[projectRoot] = restored
             loadedProjects.insert(projectRoot)
+            localLayoutStamps[projectRoot] = WorkspacePersistence.localModifiedMs(projectRoot: projectRoot)
             layoutErrorsByProject[projectRoot] = nil
             return true
         } catch {
@@ -214,6 +237,9 @@ final class WorkspaceRegistry {
             return
         }
         do { _ = try loadProjectIfNeeded(projectRoot) } catch { return }
+        // A Mac working on this project over SSH may have just written the tab this new agent
+        // was spawned for; take its layout first so the agent lands there.
+        adoptLocalLayoutIfChanged(projectRoot: projectRoot)
         publish(projectRoot: projectRoot, stored: workspacesByProject[projectRoot] ?? [], live: live)
     }
 
@@ -560,11 +586,21 @@ final class WorkspaceRegistry {
             if let remoteSave {
                 remoteSave(snapshot, active)
             } else {
-                WorkspacePersistence.save(snapshot, projectRoot: projectRoot, activeWorkspaceId: active)
+                MainActor.assumeIsolated {
+                    self?.saveLocal(snapshot, projectRoot: projectRoot, activeWorkspaceId: active)
+                }
             }
         }
         saveWorkItems[projectRoot] = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
+    }
+
+    /// Write a project's pending layout change now rather than after the debounce.
+    func saveNow(projectRoot: String) {
+        guard pendingSaves.contains(projectRoot), let item = saveWorkItems[projectRoot] else { return }
+        saveWorkItems[projectRoot] = nil
+        item.perform()
+        item.cancel()
     }
 
     /// Flush pending writes — called on quit.
@@ -577,8 +613,27 @@ final class WorkspaceRegistry {
                 // Unchanged since the last write: rewriting could revert another Mac's edit.
                 if pending { remoteSave(workspaces, active) }
             } else if !ProjectKey(id: projectRoot).isRemote {
-                WorkspacePersistence.save(workspaces, projectRoot: projectRoot, activeWorkspaceId: active)
+                saveLocal(workspaces, projectRoot: projectRoot, activeWorkspaceId: active)
             }
+        }
+    }
+
+    /// Write a local project's layout, unless another Mac changed the file since this app
+    /// last read or wrote it — then adopt that layout instead of overwriting it.
+    private func saveLocal(_ workspaces: [Workspace], projectRoot: String, activeWorkspaceId: String?) {
+        guard let data = WorkspacePersistence.documentData(workspaces, activeWorkspaceId: activeWorkspaceId) else {
+            return
+        }
+        let expected = localLayoutStamps[projectRoot] ?? WorkspacePersistence.localModifiedMs(projectRoot: projectRoot)
+        switch WorkspacePersistence.saveLocal(data, projectRoot: projectRoot, expectedModifiedMs: expected) {
+        case .written(let modified):
+            localLayoutStamps[projectRoot] = modified
+        case .conflict(let document, let modified):
+            localLayoutStamps[projectRoot] = modified
+            adoptExternalLayout(
+                projectRoot, workspaces: WorkspacePersistence.workspaces(from: document, projectId: projectRoot))
+        case .skipped:
+            break
         }
     }
 
@@ -613,6 +668,7 @@ final class WorkspaceRegistry {
         layoutErrorsByProject[projectRoot] = nil
         loadedProjects.remove(projectRoot)
         remoteSavers[projectRoot] = nil
+        localLayoutStamps[projectRoot] = nil
         pruneActiveSelection()
     }
 }

@@ -142,6 +142,39 @@ nonisolated enum WorkspacePersistence {
         try? data.write(to: url, options: .atomic)
     }
 
+    /// Write a local project's layout unless the document on disk changed since this app last
+    /// read or wrote it (`expectedModifiedMs`, nil when there was no document). Another Mac
+    /// reaching this one over SSH writes the same file; its change is returned as a conflict
+    /// for the caller to adopt instead of being overwritten.
+    static func saveLocal(_ data: Data, projectRoot: String, expectedModifiedMs: Int64?) -> RemoteSaveOutcome {
+        let host = LocalProjectHost.shared
+        let path = filePath(projectRoot: projectRoot)
+        guard let stat = try? host.stat(path: path) else { return .skipped }
+        let onDisk = stat.exists ? stat.modifiedMs : nil
+        if onDisk != expectedModifiedMs {
+            guard let current = try? host.read(path: path, maxBytes: maxRemoteLayoutBytes), !current.truncated,
+                !isNewerThanSupported(data: current.data)
+            else { return .skipped }
+            return .conflict(current.data, modifiedMs: current.modifiedMs)
+        }
+        guard !isNewerThanSupported(projectRoot: projectRoot) else { return .skipped }
+        do {
+            return .written(
+                modifiedMs: try host.write(
+                    path: path, data: data, expectedModifiedMs: onDisk, createDirectories: true
+                ).modifiedMs)
+        } catch {
+            return .skipped
+        }
+    }
+
+    /// Modification time of a local project's layout document, nil when there is none.
+    static func localModifiedMs(projectRoot: String) -> Int64? {
+        guard let stat = try? LocalProjectHost.shared.stat(path: filePath(projectRoot: projectRoot)), stat.exists
+        else { return nil }
+        return stat.modifiedMs
+    }
+
     /// The encoded layout document. Shared by local saves and saves through a remote host.
     static func documentData(_ workspaces: [Workspace], activeWorkspaceId: String?) -> Data? {
         let document = PersistedWorkspaceDocument(
@@ -441,7 +474,7 @@ nonisolated enum RemoteLayoutError: LocalizedError {
     }
 }
 
-/// What a remote layout save did.
+/// What a conditional layout save (remote, or local via `saveLocal`) did.
 nonisolated enum RemoteSaveOutcome: Equatable, Sendable {
     case written(modifiedMs: Int64)
     /// The machine's document changed since this app last read or wrote it; it was not

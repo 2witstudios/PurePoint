@@ -51,6 +51,8 @@ final class ProjectState: Identifiable {
     @ObservationIgnored private let service: any WorkspaceService
     #if os(macOS)
     @ObservationIgnored private var manifestWatcher: ManifestWatcher?
+    /// Watches this project's `.pu/workspaces.json`, which a Mac working on it over SSH writes too.
+    @ObservationIgnored private var layoutWatcher: ManifestWatcher?
     #endif
     @ObservationIgnored private var gridSubscription: DaemonGridSubscription?
     @ObservationIgnored private var statusSubscription: DaemonStatusSubscription?
@@ -134,6 +136,8 @@ final class ProjectState: Identifiable {
         refreshTask?.cancel()
         manifestWatcher?.stop()
         manifestWatcher = nil
+        layoutWatcher?.stop()
+        layoutWatcher = nil
         hasLoadedWorktrees = false
 
         openTask = Task { [weak self] in
@@ -176,6 +180,12 @@ final class ProjectState: Identifiable {
             self.manifestWatcher = ManifestWatcher(path: manifestPath) { [weak self] in
                 self?.refresh()
             }
+            let projectId = self.projectId
+            self.layoutWatcher = ManifestWatcher(
+                path: WorkspacePersistence.filePath(projectRoot: root)
+            ) { [weak self] in
+                self?.registry?.adoptLocalLayoutIfChanged(projectRoot: projectId)
+            }
 
             self.channel.startBackground()
             self.startGridSubscription()
@@ -214,6 +224,8 @@ final class ProjectState: Identifiable {
         #if os(macOS)
         manifestWatcher?.stop()
         manifestWatcher = nil
+        layoutWatcher?.stop()
+        layoutWatcher = nil
         #endif
         hasLoadedWorktrees = false
 
@@ -279,7 +291,7 @@ final class ProjectState: Identifiable {
                 let weakSaver = WeakSaverRef(saver)
                 saver.onConflict { document, modified in
                     Task { @MainActor in
-                        target.value?.adoptRemoteLayout(
+                        target.value?.adoptExternalLayout(
                             projectId, workspaces: WorkspacePersistence.workspaces(from: document, projectId: projectId))
                         weakSaver.value?.loaded(modifiedMs: modified)
                     }
@@ -317,6 +329,8 @@ final class ProjectState: Identifiable {
         #if os(macOS)
         manifestWatcher?.stop()
         manifestWatcher = nil
+        layoutWatcher?.stop()
+        layoutWatcher = nil
         #endif
     }
 
@@ -348,6 +362,9 @@ final class ProjectState: Identifiable {
     func refresh() {
         let root = projectRoot
         let svc = service
+        #if os(macOS)
+        layoutWatcher?.retry()  // the layout file may not have existed when watching began
+        #endif
 
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
@@ -418,7 +435,8 @@ final class ProjectState: Identifiable {
     ///
     /// The tab is reserved before the request goes out, so whichever arrives first — the
     /// manifest write or the spawn response — the agent lands in this tab and never
-    /// surfaces as a workspace of its own.
+    /// surfaces as a workspace of its own. The request also names the tab, which the daemon
+    /// records on the agent, so any other Mac showing this project places it there too.
     func spawnAgentForSurface(
         agent: String, prompt: String, workspaceId: String, surfaceId: Int,
         name: String? = nil, command: String? = nil
@@ -428,12 +446,30 @@ final class ProjectState: Identifiable {
         let spawnWorktree = workspace.container.worktreeId
 
         registry.reserveSurface(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
+        let request = DaemonRequest.spawn(
+            projectRoot: projectRoot, prompt: prompt, agent: agent,
+            name: name, root: spawnWorktree == nil, worktree: spawnWorktree, command: command,
+            placement: SpawnPlacement(workspace: workspaceId, surface: surfaceId)
+        )
 
+        guard let saver = remoteLayoutSaver else {
+            sendSurfaceSpawn(request, workspaceId: workspaceId, surfaceId: surfaceId)
+            return
+        }
+        // The machine's app (if one has this project open) must see the new tab before the
+        // agent appears, or it has nowhere to put it: write the layout first.
+        registry.saveNow(projectRoot: root)
+        Task {
+            _ = await HostIO.value { saver.flush(until: .now() + 5) }
+            self.sendSurfaceSpawn(request, workspaceId: workspaceId, surfaceId: surfaceId)
+        }
+    }
+
+    private func sendSurfaceSpawn(_ request: DaemonRequest, workspaceId: String, surfaceId: Int) {
+        let root = projectId
+        let registry = self.registry
         sendDaemonRequest(
-            .spawn(
-                projectRoot: projectRoot, prompt: prompt, agent: agent,
-                name: name, root: spawnWorktree == nil, worktree: spawnWorktree, command: command
-            ),
+            request,
             onFailure: { [weak registry] in
                 registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
             }

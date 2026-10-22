@@ -432,10 +432,17 @@ nonisolated enum FocusDirection: Sendable {
 
 // MARK: - Reconciler
 
+/// The tab an agent was spawned for, as recorded on its manifest entry.
+nonisolated struct SpawnPlacement: Codable, Hashable, Sendable {
+    let workspace: String
+    let surface: Int
+}
+
 /// One live agent as the manifest reports it.
 nonisolated struct LiveAgent: Equatable, Sendable {
     let id: String
     let container: WorkspaceContainer
+    var placement: SpawnPlacement? = nil
 }
 
 /// The single function that turns (stored layout, manifest) into the canonical workspace list.
@@ -451,8 +458,17 @@ nonisolated enum WorkspaceReconciler {
     /// 3. Every workspace holds a live agent or a file tab, or is waiting on a spawn
     ///    (`reserved`) — no ghost rows.
     /// 4. Each workspace's container matches where its agents actually live.
+    /// 5. An agent no tab holds yet goes into the empty tab it was spawned for, when that tab
+    ///    is still there — so every app showing the project places it the same way.
     static func reconcile(stored: [Workspace], live: [LiveAgent], reserved: Set<String> = []) -> [Workspace] {
         let containerByAgent = Dictionary(live.map { ($0.id, $0.container) }, uniquingKeysWith: { first, _ in first })
+        let storedAgentIds = Set(stored.flatMap(\.agentIds))
+        var agentByPlacement: [SpawnPlacement: LiveAgent] = [:]
+        for agent in live where !storedAgentIds.contains(agent.id) {
+            guard let placement = agent.placement, agentByPlacement[placement] == nil else { continue }
+            agentByPlacement[placement] = agent
+        }
+        let placementWorkspaceIds = Set(agentByPlacement.keys.map(\.workspace))
 
         var claimed = Set<String>()
         var result: [Workspace] = []
@@ -485,6 +501,18 @@ nonisolated enum WorkspaceReconciler {
                 }
             }
 
+            if placementWorkspaceIds.contains(workspace.id) {
+                for (_, surface) in workspace.surfaces where surface.content == .empty {
+                    let placement = SpawnPlacement(workspace: workspace.id, surface: surface.id)
+                    guard let agent = agentByPlacement[placement], !claimed.contains(agent.id),
+                        workspace.agentIds.isEmpty || workspace.container == agent.container,
+                        !workspace.isPointGuard || agent.container == .projectRoot
+                    else { continue }
+                    workspace.setContent(.agent(agent.id), forSurface: surface.id)
+                    claimed.insert(agent.id)
+                }
+            }
+
             // A workspace exists to hold what the user opened. One left with only empty tabs
             // is a ghost row — unless one of those tabs is waiting for its agent.
             guard !workspace.isGhost || reserved.contains(workspace.id) else { continue }
@@ -510,9 +538,12 @@ nonisolated enum WorkspaceReconciler {
     /// Flatten a project's manifest into the ordered agent list the reconciler expects.
     /// Root agents first, then each worktree's agents — manifest order throughout.
     static func liveAgents(rootAgents: [AgentModel], worktrees: [WorktreeModel]) -> [LiveAgent] {
-        var live = rootAgents.map { LiveAgent(id: $0.id, container: .projectRoot) }
+        var live = rootAgents.map { LiveAgent(id: $0.id, container: .projectRoot, placement: $0.placement) }
         for worktree in worktrees {
-            live.append(contentsOf: worktree.agents.map { LiveAgent(id: $0.id, container: .worktree(worktree.id)) })
+            live.append(
+                contentsOf: worktree.agents.map {
+                    LiveAgent(id: $0.id, container: .worktree(worktree.id), placement: $0.placement)
+                })
         }
         return live
     }
