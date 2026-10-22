@@ -7,5 +7,5 @@ enum LaunchLog {
 }
 @main struct PurePointApp: App {
     init() { LaunchLog.logger.notice("SwiftUI App initialized") }
-    var body: some Scene { WindowGroup { ChatView().tint(.accentColor) } }
+    var body: some Scene { WindowGroup { ChatView().tint(Theme.accentText).preferredColorScheme(.dark) } }
 }

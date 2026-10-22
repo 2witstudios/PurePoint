@@ -80,6 +80,7 @@ impl Engine {
             plan_mode,
             no_trigger,
             trigger: trigger_param,
+            placement,
         } = params;
         let root_path = Path::new(&project_root);
 
@@ -526,6 +527,7 @@ impl Engine {
             no_trigger,
             bare_launch: no_auto,
             trigger_name: trigger_name.clone(),
+            placement,
         };
 
         let wt_id_for_manifest = worktree_id.clone();

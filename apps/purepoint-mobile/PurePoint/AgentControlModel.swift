@@ -8,6 +8,8 @@ import UserNotifications
     typealias Request = @MainActor (String, [String: Any]) async throws -> JSONValue
     @Published private(set) var workspaceManagement = false
     @Published private(set) var workspaceSupported = false
+    /// Whether the bridge can save a machine's project order.
+    @Published private(set) var projectOrderSupported = false
     @Published private(set) var permission: AgentTerminalPermission = .off
     @Published private(set) var machines: [AgentMachine] = []
     @Published private(set) var connected = false
@@ -34,7 +36,13 @@ import UserNotifications
     // Workspace grant changes must not invalidate an authorized terminal receipt.
     private var terminalPermissionRevision = 0
     private var refreshRevision = 0
+    /// Bumped by each project reorder; an inventory fetched across one keeps the order on screen.
+    private var projectOrderRevision = 0
+    /// Project reorders sent but not yet answered.
+    private var projectOrdersPending = 0
     private var pendingOpen: AgentPendingOpen?
+    // The agent a transport drop closed, reopened once the same host reconnects.
+    private var resumeScope: AgentScope?
     private var refreshTask: Task<Void, Never>?
     private var discovering = false
     private var inventoryInFlight = false
@@ -156,8 +164,8 @@ import UserNotifications
         if recoveries.count >= 50 {
             return "Saved prompt recovery is full. Copy or recover and dismiss a saved prompt before sending."
         }
-        if !connected { return "Connect to your Mac to control agents." }
-        if permission != .control { return "Terminal access is view only. Enable control on your Mac." }
+        if !connected { return "Connect to your computer to control agents." }
+        if permission != .control { return "Terminal access is view only. Enable control on the computer you paired with." }
         if streamId == nil { return "Open the terminal before sending." }
         guard let agent else { return "Agent status is unavailable. Refresh before sending a prompt." }
         if let reason = agent.promptBlockReason { return reason }
@@ -208,10 +216,12 @@ import UserNotifications
                 reason: "Connection changed. Delivery may be uncertain. Inspect the terminal before sending again.")
         }
         // Close through the originating transport before adopting another host.
+        let resume = selected ?? resumeScope
         closeScreen()
         let sameHost = self.host == host
+        resumeScope = sameHost ? resume : nil
         self.request = request; self.connected = connected
-        self.host = host; if !sameHost { machines = []; permission = .off }; workspaceManagement = false; workspaceSupported = false; permissionRevision += 1; terminalPermissionRevision += 1
+        self.host = host; if !sameHost { machines = []; permission = .off }; workspaceManagement = false; workspaceSupported = false; projectOrderSupported = false; permissionRevision += 1; terminalPermissionRevision += 1
         loading = false; error = nil; discovering = connected
         guard connected else { return }
         let token = generation
@@ -235,6 +245,7 @@ import UserNotifications
         if envelope.type == "permissions" {
             workspaceManagement = envelope.workspaceManagement ?? false
             workspaceSupported = (try? envelope.workspace?["management"].decode(Bool.self)) ?? false
+            projectOrderSupported = (try? envelope.workspace?["projectOrder"].decode(Bool.self)) ?? false
             applyPermission(AgentTerminalPermission(rawValue: envelope.terminals ?? "") ?? .off)
             return
         }
@@ -248,6 +259,7 @@ import UserNotifications
     private func applyWorkspacePermission(_ data: JSONValue) {
         workspaceManagement = (try? data["workspaceManagement"].decode(Bool.self)) ?? false
         workspaceSupported = (try? data["workspace"]["management"].decode(Bool.self)) ?? false
+        projectOrderSupported = (try? data["workspace"]["projectOrder"].decode(Bool.self)) ?? false
     }
     var canManage: Bool { connected && permission == .control && workspaceManagement && workspaceSupported }
     var bridgeIdentity: String { host }
@@ -265,6 +277,35 @@ import UserNotifications
         await refresh()
         guard token == generation, revision == permissionRevision, canManage else { throw AgentControlFailure(message: "Connection or permission changed while refreshing. Operation may already have committed; check status.") }
         return value
+    }
+    var canReorderProjects: Bool { canManage && projectOrderSupported }
+    /// Saves a machine's project order on that machine, so every device lists it the same way.
+    func reorderProjects(machine: String, projectIds: [String]) async throws {
+        guard canReorderProjects else { throw AgentControlFailure(message: "Reordering projects requires workspace management and an updated bridge.") }
+        projectOrderRevision += 1
+        projectOrdersPending += 1
+        defer { projectOrdersPending -= 1 }
+        applyProjectOrder(projectIds, machine: machine)
+        let receipt = try await workspaceRequest(
+            "workspace.reorderProjects",
+            fields: ["operationId": UUID().uuidString, "machine": machine, "projectIds": projectIds])
+        guard receipt.state == "succeeded" else {
+            throw AgentControlFailure(message: receipt.message ?? "Project order wasn't saved. Refresh and try again.")
+        }
+        // The machine's saved order, in case a refresh that predates the move was skipped.
+        if let saved = receipt.detail?.projectIds { applyProjectOrder(saved, machine: machine) }
+    }
+    private func applyProjectOrder(_ projectIds: [String], machine: String) {
+        guard let index = machines.firstIndex(where: { $0.id == machine }),
+              let projects = machines[index].registeredProjects else { return }
+        machines[index].registeredProjects = Self.ordered(projects, by: projectIds)
+    }
+    /// `projects` in the order of `ids`; projects not listed keep their order after them.
+    static func ordered(_ projects: [WorkspaceProject], by ids: [String]) -> [WorkspaceProject] {
+        projects.enumerated().sorted { left, right in
+            let l = ids.firstIndex(of: left.element.id) ?? Int.max, r = ids.firstIndex(of: right.element.id) ?? Int.max
+            return l != r ? l < r : left.offset < right.offset
+        }.map(\.element)
     }
     func refreshWorkspaceForReview(machine: String, project: String) async -> Bool {
         let token = generation, revision = permissionRevision
@@ -310,6 +351,7 @@ import UserNotifications
         let owningGeneration = generation
         defer { if generation == owningGeneration { inventoryInFlight = false } }
         refreshRevision += 1; let revision = refreshRevision; let token = generation
+        let orderRevision = projectOrderRevision
         loading = true
         do {
             let data = try await request("agents", [:])
@@ -319,6 +361,14 @@ import UserNotifications
             machines = inventory.machines.map { machine in
                 guard (!machine.online || machine.metadataStatus == "error"), let cached = prior.first(where: { $0.id == machine.id }) else { return machine }
                 return AgentMachine(id: machine.id, name: machine.name, online: machine.online, protocolVersion: machine.protocolVersion, screenMayBeInexact: machine.screenMayBeInexact, error: machine.error, complete: false, agents: cached.agents, registeredProjects: cached.registeredProjects, worktrees: cached.worktrees, metadataStatus: machine.metadataStatus ?? "offline", metadataError: machine.metadataError ?? machine.error)
+            }.map { machine in
+                // Fetched across a reorder: its project order may predate it, so keep the one on screen.
+                guard orderRevision != projectOrderRevision || projectOrdersPending > 0,
+                      let shown = prior.first(where: { $0.id == machine.id })?.registeredProjects?.map(\.id),
+                      let projects = machine.registeredProjects else { return machine }
+                var kept = machine
+                kept.registeredProjects = Self.ordered(projects, by: shown)
+                return kept
             }.sorted {
                 let left = $0.agents.contains { $0.phase == "dialog" },
                     right = $1.agents.contains { $0.phase == "dialog" }
@@ -326,6 +376,7 @@ import UserNotifications
             }
             if let data = try? JSONEncoder().encode(AgentInventory(machines: machines)) { defaults.set(data, forKey: inventoryCacheKey) }
             loading = false
+            resumeAfterReconnect()
             return true
         } catch {
             guard token == generation, revision == refreshRevision else { return false }
@@ -337,11 +388,12 @@ import UserNotifications
         }
     }
 
-    func open(machine: AgentMachine, agent: ControlledAgent, context token: Int) {
+    func open(machine: AgentMachine, agent: ControlledAgent, context token: Int, interactive: Bool = true) {
         guard token == generation, connected, permission != .off, machine.online, machine.metadataStatus != "error", let request else { return }
         closeScreen()
         let scope = AgentScope(host: host, machine: machine.id, agent: agent.id)
-        recordInteraction(scope)
+        // A lifecycle reopen is not a navigation choice, so it never touches Recents or hidden entries.
+        if interactive { recordInteraction(scope) }
         selected = scope; composer = composers[scope] ?? AgentComposer(text: drafts[scope.storageKey] ?? "")
         recoveries = savedRecoveries[scope.storageKey] ?? []
         screenMayBeInexact = machine.screenMayBeInexact
@@ -377,7 +429,18 @@ import UserNotifications
         }
     }
 
+    private func resumeAfterReconnect() {
+        guard let scope = resumeScope else { return }
+        resumeScope = nil
+        guard selected == nil, scope.host == host,
+            let machine = machines.first(where: { $0.id == scope.machine && $0.online && $0.metadataStatus != "error" }),
+            let agent = machine.agents.first(where: { $0.id == scope.agent })
+        else { return }
+        open(machine: machine, agent: agent, context: generation, interactive: false)
+    }
+
     func closeScreen() {
+        resumeScope = nil
         if let submission = composer.pending {
             if let selected {
                 settleRecovery(

@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct MessageStreamView: View {
@@ -57,3 +58,4 @@ struct MessageStreamView: View {
             .onAppear { animating = true }
     }
 }
+#endif

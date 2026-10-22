@@ -315,7 +315,47 @@ struct HealthProbeTests {
 
 struct DaemonProjectHostRequestTests {
     @Test func givenProtocolShouldBeCurrentVersion() {
-        #expect(DaemonProtocol.version == 12)
+        #expect(DaemonProtocol.version == 14)
+    }
+
+    @Test func givenReorderProjectsShouldSendTheWholeOrder() throws {
+        let object = try json(.reorderProjects(projectRoots: ["/b", "/a"]))
+        #expect(object["type"] as? String == "reorder_projects")
+        #expect(object["project_roots"] as? [String] == ["/b", "/a"])
+    }
+
+    @Test func givenProjectOrderReplyShouldParse() {
+        let response = DaemonClient.parse(Data(#"{"type":"project_order","project_roots":["/b","/a"]}"#.utf8))
+        guard case .projectOrder(let roots) = response else {
+            Issue.record("expected projectOrder, got \(response)")
+            return
+        }
+        #expect(roots == ["/b", "/a"])
+    }
+
+    @Test func givenRemoveProjectShouldNameTheRootAndWhetherToSuspendAgents() throws {
+        let object = try json(.removeProject(projectRoot: "/srv/app", suspendAgents: true))
+        #expect(object["type"] as? String == "remove_project")
+        #expect(object["project_root"] as? String == "/srv/app")
+        #expect(object["suspend_agents"] as? Bool == true)
+        #expect(try json(.subscribeProjects)["type"] as? String == "subscribe_projects")
+    }
+
+    @Test func givenProjectRegistryRepliesShouldDecodeRootsAndRemoval() {
+        guard case .projectsChanged(let projects) = decode(#"{"type":"projects_changed","projects":["/a","/b"]}"#)
+        else {
+            Issue.record("projects_changed did not decode")
+            return
+        }
+        #expect(projects == ["/a", "/b"])
+        guard
+            case .projectRemoved(let root, let removed, let suspended, let killed) = decode(
+                #"{"type":"project_removed","project_root":"/a","removed":true,"suspended":["ag-1"],"killed":["sh-2"]}"#)
+        else {
+            Issue.record("project_removed did not decode")
+            return
+        }
+        #expect(root == "/a" && removed && suspended == ["ag-1"] && killed == ["sh-2"])
     }
 
     @Test func givenInventoryShouldAskForEveryRegisteredProject() throws {
@@ -609,6 +649,25 @@ struct RemoteLayoutPersistenceTests {
         #expect(outcome == .written(modifiedMs: 30))
     }
 
+    @Test func givenDocumentCreatedSinceItWasReadAsMissingSaveShouldAdoptIt() {
+        let theirs = #"{"version":3,"workspaces":[]}"#
+        let host = FakeHost(reads: [file(theirs, modifiedMs: 20)])
+        let outcome = WorkspacePersistence.saveRemote(
+            Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: nil)
+        #expect(outcome == .conflict(Data(theirs.utf8), modifiedMs: 20))
+        #expect(host.writeCount == 0)
+    }
+
+    @Test func givenDocumentDeletedSinceReadSaveShouldWriteItAgain() {
+        let host = FakeHost(
+            reads: [.failure(.notFound("gone"))],
+            writes: [.success(HostFileStat(exists: true, isDirectory: false, size: 1, modifiedMs: 30))])
+        let outcome = WorkspacePersistence.saveRemote(
+            Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
+        #expect(host.writes.map(\.expectedModifiedMs) == [nil])
+        #expect(outcome == .written(modifiedMs: 30))
+    }
+
     @Test func givenDocumentChangedElsewhereSaveShouldAdoptItNotOverwrite() {
         // Another Mac wrote the layout after this app last read it (5 → 20).
         let theirs = #"{"version":3,"workspaces":[]}"#
@@ -803,7 +862,7 @@ struct RemoteLayoutConflictTests {
             changed.nextSurfaceId += 50
             return changed
         }
-        registry.adoptRemoteLayout(projectId, workspaces: theirs)
+        registry.adoptExternalLayout(projectId, workspaces: theirs)
         #expect(registry.workspaces(forProject: projectId) == theirs)
         registry.forgetProject(projectId)
     }

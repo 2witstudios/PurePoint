@@ -55,20 +55,85 @@ nonisolated struct DaemonEndpoint: Hashable, Sendable {
     }
 
     static var localSocketPath: String {
+        #if os(macOS)
         FileManager.default.homeDirectoryForCurrentUser.path + "/.pu/daemon.sock"
+        #else
+        // iOS has no local daemon; this path inside the app container never answers.
+        NSHomeDirectory() + "/.pu/daemon.sock"
+        #endif
     }
 
     static func machine(_ id: UUID) -> DaemonEndpoint {
         DaemonEndpoint(machineId: id, socketPath: MachinePaths.socketPath(machineId: id))
     }
 
-    func makeClient() -> DaemonClient { DaemonClient(socketPath: socketPath) }
+    /// How this endpoint is reached. With no provider installed (macOS) it is the Unix socket
+    /// at `socketPath`; a platform that reaches machines another way (the iPad, over SSH)
+    /// installs `transportProvider` and every client made from an endpoint uses it.
+    var transport: any DaemonTransport {
+        if let provided = (Self.transportOverride ?? Self.transportProvider)?(self) { return provided }
+        #if os(iOS)
+        // iOS has no Unix-socket daemon: a machine is always reached over its SSH session (the
+        // provider's transport, also when no provider is installed yet, as in unit tests), and
+        // the local endpoint never answers.
+        guard let machineId else { return UnreachableLocalTransport() }
+        return SSHExecTransport(machineId: machineId, sessions: SSHMachineSessions.shared)
+        #else
+        return UnixSocketTransport(socketPath: socketPath)
+        #endif
+    }
+
+    func makeClient() -> DaemonClient { DaemonClient(socketPath: socketPath, transport: transport) }
+
+    typealias TransportProvider = @Sendable (DaemonEndpoint) -> any DaemonTransport
+
+    /// A provider scoped to the current task and its children, consulted before
+    /// `transportProvider`. Tests use it so nothing outside the test observes their transport.
+    @TaskLocal static var transportOverride: TransportProvider?
+
+    /// The platform's transport hook. Nil on macOS.
+    static var transportProvider: TransportProvider? {
+        get { providerLock.withLock { installedProvider } }
+        set { providerLock.withLock { installedProvider = newValue } }
+    }
+
+    private static let providerLock = NSLock()
+    nonisolated(unsafe) private static var installedProvider: TransportProvider?
 }
+
+#if os(iOS)
+nonisolated extension DaemonEndpoint {
+    /// The endpoint a socket path names: a machine's when it is `MachinePaths.socketPath` for
+    /// that machine, otherwise the (unreachable) local one.
+    init(socketPath: String) {
+        let parts = socketPath.split(separator: "/")
+        if parts.count >= 2, parts.last == "daemon.sock", let id = UUID(uuidString: String(parts[parts.count - 2])),
+            MachinePaths.socketPath(machineId: id) == socketPath
+        {
+            self.init(machineId: id, socketPath: socketPath)
+        } else {
+            self.init(machineId: nil, socketPath: socketPath)
+        }
+    }
+}
+#endif
 
 /// Filesystem locations shared with the CLI (`crates/pu-core/src/paths.rs`).
 nonisolated enum MachinePaths {
+    #if os(macOS)
     static var puDirectory: String { FileManager.default.homeDirectoryForCurrentUser.path + "/.pu" }
+    #else
+    static var puDirectory: String { NSHomeDirectory() + "/.pu" }
+    #endif
+    #if os(macOS)
     static var registryPath: String { puDirectory + "/machines.json" }
+    #else
+    /// The iPad keeps its own registry in its container, not synced with any Mac (MACH-011).
+    static var registryPath: String {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appendingPathComponent("PurePoint/machines.json").path
+    }
+    #endif
     static var machinesDirectory: String { puDirectory + "/machines" }
 
     /// Machine ids are written lowercase, as the CLI's UUID formatter does, so both name the

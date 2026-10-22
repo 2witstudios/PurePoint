@@ -41,6 +41,7 @@ pub(crate) async fn init_and_spawn_command(command: Option<&str>) -> (Engine, St
             plan_mode: false,
             no_trigger: false,
             trigger: None,
+            placement: None,
         })
         .await;
 

@@ -196,6 +196,8 @@ pub struct AgentStatusReport {
     pub trigger_state: Option<crate::types::TriggerState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_total: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<crate::types::SpawnPlacement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,9 +232,6 @@ pub struct AgentConfigInfo {
     /// Machine-level launch args string from `~/.pu/agent-settings.yaml`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_launch_args: Option<String>,
-    /// Launch args forced by Codex YOLO for all projects, overriding the above.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy_launch_args: Option<String>,
     /// Preview of `command` plus the resolved launch args.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_command: Option<String>,

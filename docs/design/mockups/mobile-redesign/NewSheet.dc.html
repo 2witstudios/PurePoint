@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>New dialog</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+a{color:inherit;text-decoration:none}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.sec{font-size:11px;font-weight:650;letter-spacing:.04em;color:#A1A1AA;padding:14px 16px 6px}
+.grp{background:#222226;border-radius:12px;margin:0 12px;overflow:hidden}
+.opt{display:flex;align-items:center;gap:12px;min-height:54px;padding:0 14px;border-top:1px solid rgba(255,255,255,0.06);width:100%;box-sizing:border-box}
+.opt:first-child{border-top:0}
+.tile{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;flex-shrink:0}
+.sub{font-size:12.5px;color:#A1A1AA}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #121214; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, Inter, system-ui, sans-serif; font-size: 15px">
+  <section role="dialog" aria-label="New in pu/auth-hardening" style="position: absolute; left: 0; right: 0; bottom: 0; top: 214px; background: #18181B; border-radius: 14px 14px 0 0; display: flex; flex-direction: column">
+    <div style="width: 36px; height: 5px; border-radius: 3px; background: rgba(255,255,255,0.2); margin: 6px auto 0"></div>
+    <header style="display: flex; align-items: center; height: 52px; padding: 0 8px 0 16px; gap: 10px">
+      <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+        <h1 style="margin: 0; font-size: 17px; font-weight: 650">New</h1>
+        <span class="mono" style="font-size: 11.5px; color: #A1A1AA">jono-mbp · purepoint · pu/auth-hardening</span>
+      </div>
+      <a href="Main.dc.html" aria-label="Close" style="width: 44px; height: 44px; display: grid; place-items: center; color: #A1A1AA">
+        <span style="width: 30px; height: 30px; border-radius: 15px; background: #2A2A2F; display: grid; place-items: center"><svg class="ico" style="width: 13px; height: 13px; stroke-width: 2.2" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span>
+      </a>
+    </header>
+
+    <div class="sec">AGENT</div>
+    <div class="grp">
+      <a href="Agent.dc.html" class="opt">
+        <span class="tile" style="background: #FF7A1A; color: #18181B"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg></span>
+        <span style="flex: 1; font-weight: 600">Claude Code</span>
+      </a>
+      <a href="Agent.dc.html" class="opt">
+        <span class="tile" style="background: #2A2A2F; color: #ECECEE"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg></span>
+        <span style="flex: 1; font-weight: 600">Codex</span>
+      </a>
+      <a href="Agent.dc.html" class="opt">
+        <span class="tile" style="background: #2A2A2F; color: #ECECEE"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg></span>
+        <span style="flex: 1; font-weight: 600">OpenCode</span>
+      </a>
+    </div>
+
+    <div class="sec">PRESETS</div>
+    <div class="grp">
+      <a href="Agent.dc.html" class="opt">
+        <span class="tile" style="background: #2A2A2F; color: #A1A1AA"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3 8-8M20 12v7a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h11"/></svg></span>
+        <span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Review branch</span><span class="sub">Claude Code</span></span>
+      </a>
+      <a href="Agent.dc.html" class="opt">
+        <span class="tile" style="background: #2A2A2F; color: #A1A1AA"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3 8-8M20 12v7a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h11"/></svg></span>
+        <span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 600">Fix failing tests</span><span class="sub">Codex</span></span>
+      </a>
+    </div>
+
+    <div class="sec">OTHER</div>
+    <div class="grp">
+      <a href="Agent.dc.html" class="opt">
+        <span class="tile" style="background: #2A2A2F; color: #A1A1AA"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 5 5-5 5M12 18h7"/></svg></span>
+        <span style="flex: 1; font-weight: 600">Terminal</span>
+      </a>
+    </div>
+    <p style="margin: 12px 28px 0; font-size: 12.5px; line-height: 1.45; color: #A1A1AA">Opened from a project row, this starts at the project root and adds New worktree, which asks only for a name.</p>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

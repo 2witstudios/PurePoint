@@ -28,7 +28,7 @@ try {
   );
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.contractVersion, 1);
-  assert.equal(manifest.piVersion, "1.1.0");
+  assert.equal(manifest.piVersion, "1.3.0");
   const node = path.resolve(base, manifest.paths.node),
     entry = path.resolve(base, manifest.paths.entry),
     pu = path.resolve(base, manifest.paths.pu),

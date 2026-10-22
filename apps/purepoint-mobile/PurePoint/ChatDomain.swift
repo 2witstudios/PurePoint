@@ -6,6 +6,11 @@ struct SavedMachine: Codable, Identifiable, Equatable, Sendable {
     var endpoint: String
     var name: String
     let stateKey: String // retained through re-pair/address changes, including legacy drafts
+    // Display-only host description from the pinned `/pair/verify` response. Stored raw and
+    // re-validated on read, so an unknown kind from a newer app never invalidates the list.
+    var hostKind: String? = nil
+    var hostLabel: String? = nil
+    var host: HostIdentity { HostIdentity(kind: HostIdentity.kind(hostKind), label: HostIdentity.label(hostLabel)) }
     static func normalizedName(_ name: String) -> String {
         String(name.filter { !$0.isNewline && !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) }
             .trimmingCharacters(in: .whitespacesAndNewlines).prefix(60))
@@ -26,15 +31,62 @@ struct MachineRegistry: Codable, Sendable {
         let machine = SavedMachine(id: "legacy:" + endpoint, endpoint: endpoint, name: defaultName(endpoint), stateKey: endpoint)
         return Self(machines: [machine], selectedId: machine.id)
     }
-    static func defaultName(_ endpoint: String) -> String { String((URL(string: endpoint)?.host ?? "Mac").prefix(60)) }
+    static func defaultName(_ endpoint: String) -> String { String((URL(string: endpoint)?.host ?? "Computer").prefix(60)) }
     mutating func remember(hostId: String, endpoint: String) -> SavedMachine {
         // A verified identity supersedes a provisional legacy entry at this address.
         let existing = machines.first { $0.id == hostId } ?? machines.first { $0.id == "legacy:" + endpoint }
-        let machine = SavedMachine(id: hostId, endpoint: endpoint, name: existing?.name ?? Self.defaultName(endpoint), stateKey: existing?.stateKey ?? hostId)
+        var machine = SavedMachine(id: hostId, endpoint: endpoint, name: existing?.name ?? Self.defaultName(endpoint), stateKey: existing?.stateKey ?? hostId)
+        machine.hostKind = existing?.hostKind; machine.hostLabel = existing?.hostLabel
         machines.removeAll { $0.id == hostId || $0.id == "legacy:" + endpoint }
         machines.append(machine)
         selectedId = machine.id
         return machine
+    }
+    /// Records the verified host's display description, keyed only by hostId. Absent fields
+    /// (older bridges) change nothing. The label becomes the name until the user renames it.
+    mutating func describe(hostId: String, as identity: HostIdentity) -> Bool {
+        guard let index = machines.firstIndex(where: { $0.id == hostId }) else { return false }
+        var machine = machines[index]
+        if let kind = identity.kind { machine.hostKind = kind.rawValue }
+        if let label = identity.label {
+            if machine.name == Self.defaultName(machine.endpoint) || machine.name == machine.hostLabel { machine.name = String(label.prefix(60)) }
+            machine.hostLabel = label
+        }
+        guard machine != machines[index] else { return false }
+        machines[index] = machine
+        return true
+    }
+}
+
+/// What a computer says about itself after its pin and this phone's credential verify.
+/// Display only: identity is the hostId, pin and credential, never these fields.
+enum HostKind: String, Sendable { case mac, linux }
+struct HostIdentity: Equatable, Sendable {
+    var kind: HostKind? = nil
+    var label: String? = nil
+    static func kind(_ raw: String?) -> HostKind? { raw.flatMap { HostKind(rawValue: $0) } }
+    /// A short hostname: 1-63 ASCII letters, digits or hyphens.
+    static func label(_ raw: String?) -> String? {
+        guard let raw, (1...63).contains(raw.utf8.count),
+              raw.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 }) else { return nil }
+        return raw
+    }
+    /// Unknown kinds, invalid labels and non-string values are treated as absent.
+    static func fromVerify(_ data: Data) -> HostIdentity {
+        guard data.count <= 64 * 1024, let body = try? JSONDecoder().decode(JSONValue.self, from: data) else { return HostIdentity() }
+        return HostIdentity(kind: kind(body["hostKind"].text), label: label(body["hostLabel"].text))
+    }
+}
+enum HostCopy {
+    static func symbol(_ kind: HostKind?) -> String { kind == .linux ? "server.rack" : "desktopcomputer" }
+    /// How to create a new pairing code on this computer. Bridges without `hostKind` are Mac
+    /// bridges, but a first connection may fail before any description arrives, so stay neutral.
+    static func repairHint(kind: HostKind?, label: String?) -> String {
+        switch kind {
+        case .some(.linux): return "Run `pu phone pair` on \(label ?? "that computer"), then scan or paste the new code."
+        case .some(.mac): return "Open Connect phone in PurePoint on your Mac, then scan the new QR code."
+        case .none: return "Create a new pairing code on that computer (Connect phone on a Mac, or `pu phone pair` on Linux), then pair again."
+        }
     }
 }
 
@@ -154,7 +206,37 @@ enum ConnectionAddress {
         return url
     }
 }
+/// Where enrollment text came from. Both sources end in `PairingCode.parse`.
+enum PairingSource: Sendable { case scanned, pasted }
+enum PairingInputFailure: Error, Equatable, Sendable {
+    case oversized, missingPrefix, invalid
+    var message: String {
+        switch self {
+        case .oversized, .missingPrefix: return "Paste the whole code that starts with purepoint-pair:, as printed by `pu phone pair --text`."
+        case .invalid: return "This code is expired, already used or unsupported. Create a new pairing code and try again."
+        }
+    }
+}
 struct PairingCode: Decodable, Sendable {
+    static let pastePrefix = "purepoint-pair:"
+    static let maxPasteBytes = 4096
+    /// The single enrollment entry point. A paste is the QR JSON behind an exact prefix;
+    /// only surrounding whitespace is trimmed. Both then get the same pin, expiry and
+    /// endpoint allow-list checks.
+    static func read(_ input: String, from source: PairingSource, now: Date = Date()) -> Result<PairingCode, PairingInputFailure> {
+        let json: String
+        switch source {
+        case .scanned: json = input
+        case .pasted:
+            guard input.utf8.count <= maxPasteBytes else { return .failure(.oversized) }
+            let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.utf8.starts(with: pastePrefix.utf8) else { return .failure(.missingPrefix) }
+            json = String(decoding: trimmed.utf8.dropFirst(pastePrefix.utf8.count), as: UTF8.self)
+            guard json.utf8.first == UInt8(ascii: "{") else { return .failure(.invalid) }
+        }
+        guard let code = parse(json, now: now) else { return .failure(.invalid) }
+        return .success(code)
+    }
     let type: String
     let version: Int
     let endpoint: String
@@ -258,7 +340,7 @@ enum JSONValue: Codable, Sendable {
     func decode<T: Decodable>(_ type: T.Type) throws -> T { try JSONDecoder().decode(type, from: JSONEncoder().encode(self)) }
 }
 struct WireEnvelope: Decodable, Sendable { let type: String; var id: String?; var ok: Bool?; var data: JSONValue?; var error: String?; var text: String?; var streamId: String?; var cols: Int?; var rows: Int?; var reason: String?; var terminals: String?; var workspaceManagement: Bool?; var workspace: JSONValue?; var chat: String? }
-/// Point Guard chat access the Mac derives from this phone's grants: View or Control reads,
+/// Point Guard chat access the host derives from this phone's grants: View or Control reads,
 /// Control with Workspace management sends. The bridge enforces it; the app mirrors it.
 enum ChatGrant: String, Sendable {
     case off, read, send
@@ -271,8 +353,8 @@ enum ChatGrant: String, Sendable {
     var explanation: String? {
         switch self {
         case .send: return nil
-        case .read: return "Point Guard chat is read-only on this phone. Sending needs Agents and terminals: Control and Workspace management. Change this on your Mac."
-        case .off: return "Point Guard chat needs Agents and terminals: View or Control. Change this on your Mac."
+        case .read: return "Point Guard chat is read-only on this phone. Sending needs Agents and terminals: Control and Workspace management. Change this on the computer you paired with."
+        case .off: return "Point Guard chat needs Agents and terminals: View or Control. Change this on the computer you paired with."
         }
     }
 }
@@ -345,6 +427,8 @@ enum MobileRPCTiming {
         case "workspace.createWorktree": return 100_000_000_000
         case "workspace.rename": return 100_000_000_000
         case "workspace.stop": return 100_000_000_000
+        case "workspace.removeProject": return 100_000_000_000
+        case "workspace.reorderProjects": return 100_000_000_000
         default: return 35_000_000_000
         }
     }

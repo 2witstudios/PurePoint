@@ -3,7 +3,7 @@ import ImageIO
 import PDFKit
 import UniformTypeIdentifiers
 
-/// Uses the same attachment preparation limits as the iOS composer.
+/// Uses the same attachment preparation limits as the iOS composer, and backs the iPad composer (IPAD-8.3).
 nonisolated enum PiAttachmentImport {
     static func file(_ url: URL) throws -> PiComposerAttachment {
         let access = url.startAccessingSecurityScopedResource()

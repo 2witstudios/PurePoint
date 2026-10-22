@@ -11,6 +11,7 @@ struct PaneCellView: View {
     let isFocused: Bool
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
+    @Environment(\.titlebarClearance) private var titlebarClearance
 
     private var workspace: Workspace? { registry.workspace(id: workspaceId) }
 
@@ -23,6 +24,13 @@ struct PaneCellView: View {
     }
 
     var body: some View {
+        cell
+            // Only the top-left pane's strip sits under the traffic lights.
+            .environment(\.titlebarClearance, workspace?.root.firstLeafId == leafId ? titlebarClearance : .none)
+    }
+
+    @ViewBuilder
+    private var cell: some View {
         // The point guard chat draws the tab bar beside its conversation rail, so the rail's
         // header and the tab strip share one row.
         if activeTab?.content == .pointGuard {

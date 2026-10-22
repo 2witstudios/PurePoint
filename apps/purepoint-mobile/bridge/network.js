@@ -38,8 +38,8 @@ function chatGate(granted, op) {
   if (chatAllowed(granted, needed)) return;
   throw new Error(
     granted === "read"
-      ? "Point Guard chat is read-only on this device. Sending needs Agents and terminals: Control and Workspace management. Change this on your Mac."
-      : "Point Guard chat needs Agents and terminals: View or Control on this device. Change this on your Mac.",
+      ? "Point Guard chat is read-only on this device. Sending needs Agents and terminals: Control and Workspace management. Change this on the host this device is paired with."
+      : "Point Guard chat needs Agents and terminals: View or Control on this device. Change this on the host this device is paired with.",
   );
 }
 function authenticated(header, token) {
@@ -58,6 +58,8 @@ export async function serve(
     tls = null,
     daemons = undefined,
     terminalQueueLimit = undefined,
+    hostInfo = undefined,
+    allowPeer = undefined,
   },
 ) {
   if (!allowedHost(host))
@@ -116,7 +118,16 @@ export async function serve(
       const identity = principal(req.headers.authorization);
       respond(
         identity ? 200 : 401,
-        identity ? { version: 1, hostId: trust.hostId, ...identity } : null,
+        identity
+          ? {
+              version: 1,
+              hostId: trust.hostId,
+              ...(hostInfo
+                ? { hostKind: hostInfo.hostKind, hostLabel: hostInfo.hostLabel }
+                : {}),
+              ...identity,
+            }
+          : null,
       );
       return;
     }
@@ -155,7 +166,7 @@ export async function serve(
     } catch {
       if (!res.headersSent && !res.destroyed)
         respond(401, {
-          error: "Enrollment unavailable. Scan a new Mac QR code.",
+          error: "Enrollment unavailable. Create a new pairing code on the host.",
         });
     } finally {
       req.setTimeout(0);
@@ -165,6 +176,17 @@ export async function serve(
   const server = tls
     ? https.createServer(tls, handler)
     : http.createServer(handler);
+  // Pre-authentication limits: bounded sockets and absolute header/request
+  // deadlines, so unauthenticated peers cannot hold the listener.
+  server.maxConnections = 64;
+  server.headersTimeout = 10000;
+  server.requestTimeout = 10000;
+  server.keepAliveTimeout = 5000;
+  if (allowPeer)
+    // Raw TCP accept, before any TLS handshake or request parsing.
+    server.on("connection", (/** @type {import("node:net").Socket} */ socket) => {
+      if (!allowPeer(socket.remoteAddress ?? "")) socket.destroy();
+    });
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: 1024 * 1024,
@@ -182,6 +204,13 @@ export async function serve(
         const clientId = req.headers["x-pointguard-client-id"];
         if (clientId !== identity.clientId) code = 403;
         else if (wss.clients.size >= 32) code = 503;
+        else if (
+          identity.deviceId &&
+          [...wss.clients].filter(
+            (ws) => identities.get(ws)?.deviceId === identity.deviceId,
+          ).length >= 4
+        )
+          code = 503;
         else code = 101;
       }
     }

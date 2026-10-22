@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Home states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.lbl{font-size:11px;font-weight:650;letter-spacing:.04em;color:#7C7C85;padding:14px 16px 6px}
+.sec{font-size:11px;font-weight:650;letter-spacing:.04em;color:#A1A1AA;padding:12px 12px 4px}
+.trow{display:flex;align-items:center;gap:8px;height:40px;padding:0 12px}
+.note{display:flex;align-items:flex-start;gap:8px;margin:2px 8px 6px;padding:9px 12px;border-radius:10px;font-size:13px;line-height:1.4}
+.dot{width:7px;height:7px;border-radius:4px;flex-shrink:0}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #18181B; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, Inter, system-ui, sans-serif; font-size: 14px; display: flex; flex-direction: column">
+  <div style="height: 54px; flex-shrink: 0"></div>
+
+  <div class="lbl">BRIDGE DISCONNECTED</div>
+  <div style="padding: 0 8px">
+    <div class="trow" style="height: 44px; padding: 0 10px">
+      <img src="/_blob/bd0b706e9a0d4e080c883a84280dd95d" alt="" style="width: 22px; height: 22px; opacity: 0.5">
+      <span style="font-size: 16px; font-weight: 650; flex: 1">Point Guard</span>
+      <span style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: #FFB340"><span class="dot" style="background: #FF9F0A; width: 6px; height: 6px"></span>Reconnecting</span>
+    </div>
+    <div class="note" style="background: rgba(255,159,10,0.12)">
+      <svg class="ico" style="width: 15px; height: 15px; color: #FFB340; margin-top: 1px" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 8.5a15 15 0 0 1 20 0M5 12a10 10 0 0 1 14 0M8.5 15.5a5 5 0 0 1 7 0M3 3l18 18"/></svg>
+      <span style="flex: 1">Bridge disconnected. Agents below are cached and can't be opened.</span>
+      <button style="color: #FF8A3D; font-weight: 600">Retry</button>
+    </div>
+    <div class="sec">MACHINES</div>
+    <div class="trow" style="opacity: 0.5"><span class="dot" style="background: #6A6A72"></span><span style="flex: 1; font-weight: 600">jono-mbp</span><span style="font-size: 11.5px; color: #A1A1AA">Unavailable</span></div>
+    <div class="trow" style="padding-left: 28px; opacity: 0.5; font-weight: 650">purepoint</div>
+  </div>
+
+  <div style="height: 1px; background: rgba(255,255,255,0.06); margin: 14px 0 0"></div>
+  <div class="lbl">MACHINE OFFLINE · METADATA INCOMPLETE</div>
+  <div style="padding: 0 8px">
+    <div class="trow"><span class="dot" style="background: #30D158"></span><span style="flex: 1; font-weight: 600">build-box</span><span style="font-size: 11.5px; color: #A1A1AA">Online</span></div>
+    <div class="note" style="background: rgba(255,159,10,0.10); margin-left: 28px">
+      <svg class="ico" style="width: 15px; height: 15px; color: #FFB340; margin-top: 1px" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 20h20zM12 10v4M12 17h.01"/></svg>
+      <span style="flex: 1; color: #ECECEE">Project metadata incomplete. Refresh to retry.</span>
+    </div>
+    <div class="trow"><span class="dot" style="background: #FF453A"></span><span style="flex: 1; font-weight: 600">studio-mac</span><span style="font-size: 11.5px; color: #A1A1AA">Offline</span></div>
+    <div style="padding: 0 12px 0 28px; font-size: 13px; color: #A1A1AA; line-height: 1.4">Not reachable over Tailscale since 09:12.</div>
+  </div>
+
+  <div style="height: 1px; background: rgba(255,255,255,0.06); margin: 18px 0 0"></div>
+  <div class="lbl">TERMINAL ACCESS OFF</div>
+  <section style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 18px 40px 0; text-align: center">
+    <div style="width: 56px; height: 56px; border-radius: 28px; display: grid; place-items: center; background: #1F1F23; border: 1px solid rgba(255,255,255,0.09); color: #A1A1AA">
+      <svg class="ico" style="width: 22px; height: 22px" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+    </div>
+    <p style="margin: 0; font-size: 14px; line-height: 1.45; color: #A1A1AA">Agents and terminals are off for this phone. Enable View or Control in Connect phone on your Mac.</p>
+  </section>
+  <p style="margin: 0; padding: 0 40px 40px; font-size: 12.5px; line-height: 1.4; color: #7C7C85; text-align: center">With no machines yet: "No machines. Register a project with pu on your Mac." Loading shows a spinner in place of the tree.</p>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

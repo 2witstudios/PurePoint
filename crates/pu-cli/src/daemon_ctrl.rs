@@ -532,13 +532,24 @@ mod tests {
         .unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut child = daemon_command(
+        let mut command = daemon_command(
             &script,
             Path::new("/nonexistent.sock"),
             std::process::Stdio::null(),
-        )
-        .spawn()
-        .unwrap();
+        );
+        // On Linux a just-written script can be briefly "text file busy" while
+        // another test thread's fork still holds its write descriptor.
+        let mut spawned = command.spawn();
+        for _ in 0..100 {
+            match &spawned {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    spawned = command.spawn();
+                }
+                _ => break,
+            }
+        }
+        let mut child = spawned.unwrap();
         child.wait().unwrap();
         let report = std::fs::read_to_string(&out).unwrap();
         let ids: Vec<&str> = report.split_whitespace().collect();

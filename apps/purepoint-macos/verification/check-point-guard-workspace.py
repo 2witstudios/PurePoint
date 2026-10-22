@@ -31,7 +31,8 @@ let package = Package(
         "State/AppState.swift", "Services/WorkspaceService.swift", "Services/DaemonProtocol.swift",
         "Views/PaneGrid/WorkspacePersistence.swift", "State/WorkspaceRegistry.swift",
         "Views/Chat/PointGuardView.swift", "Theme/Theme.swift",
-        "Models/ProjectKey.swift", "Models/Machine.swift"
+        "Models/ProjectKey.swift", "Models/Machine.swift",
+        "Models/AgentSignalSnapshot.swift", "Models/AgentSignalRouting.swift", "Models/AgentSignalPolicy.swift"
     ]:
         shutil.copyfile(source / name, sources / Path(name).name)
 
@@ -49,8 +50,18 @@ let package = Package(
     (sources / "FileTabStoreStub.swift").write_text('''import Foundation
 @MainActor final class FileTabStore {
     struct Key: Hashable { let workspaceId: String; let surfaceId: Int }
-    func retain(only keys: Set<Key>) {}
-    func existingSession(workspaceId: String, surfaceId: Int) -> FileTabSession? { nil }
+    private var sessions: [Key: FileTabSession] = [:]
+    func retain(only keys: Set<Key>) { sessions = sessions.filter { keys.contains($0.key) } }
+    func existingSession(workspaceId: String, surfaceId: Int) -> FileTabSession? {
+        sessions[Key(workspaceId: workspaceId, surfaceId: surfaceId)]
+    }
+    func session(workspaceId: String, surfaceId: Int, initialPath: String?) -> FileTabSession {
+        let key = Key(workspaceId: workspaceId, surfaceId: surfaceId)
+        if let existing = sessions[key] { return existing }
+        let session = FileTabSession()
+        sessions[key] = session
+        return session
+    }
 }
 @MainActor final class FileTabSession {
     struct File { let name: String }
@@ -61,7 +72,7 @@ let package = Package(
 ''')
     for name in [
         "PointGuardWorkspaceTests.swift", "PointGuardRoutingTests.swift", "PaneTabStackTests.swift",
-        "WorkspaceReconcilerTests.swift", "WorkspaceModelTests.swift"
+        "WorkspaceReconcilerTests.swift", "WorkspaceModelTests.swift", "WorkspaceRegistryTests.swift"
     ]:
         shutil.copyfile(app / "purepoint-macosTests" / name, tests / name)
     # Include the production persistence suite that also runs in the app's CI target.

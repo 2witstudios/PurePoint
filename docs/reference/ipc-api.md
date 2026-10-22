@@ -8,7 +8,7 @@ The PurePoint daemon communicates with clients (CLI, macOS app) via NDJSON over 
 |---|---|
 | Socket path | `~/.pu/daemon.sock` (mode 0600; the daemon keeps `~/.pu` at 0700) |
 | Access | Only processes running as the daemon's user: every accepted connection's peer uid must equal the daemon's effective uid, or it is closed |
-| Protocol version | 11 |
+| Protocol version | 13 |
 | Framing | Newline-delimited JSON (one JSON object per line) |
 | Max message size | 1 MB (1,048,576 bytes); a longer line gets one `FRAME_TOO_LARGE` error and the connection is closed |
 | First request | Must arrive within 30 seconds of connecting, or the connection is closed |
@@ -44,6 +44,7 @@ Responses use the same `"type"` field convention. Error responses have `"type": 
 | `NOT_FOUND` | Template, agent def, swarm def, schedule, or trigger not found |
 | `NOT_INITIALIZED` | Project not initialized (run `pu init`) |
 | `ALREADY_INITIALIZED` | Project already initialized |
+| `PROJECT_HAS_LIVE_AGENTS` | `remove_project` without `suspend_agents` while the project has live agents |
 | `DAEMON_NOT_RUNNING` | Daemon is not running |
 | `DAEMON_CONNECTION_FAILED` | Connection to daemon failed |
 | `PROTOCOL_MISMATCH` | Client/daemon protocol version mismatch |
@@ -74,7 +75,19 @@ Inventory returns `type: inventory`, observation time, optional project scope (n
 
 ResolveAgent returns `type: agent_resolved`, agent_id, project_root and worktree_id. Legacy Status (with agent_id), Kill (single agent), Suspend (single agent), Resume, Rename and AssignTrigger accept an empty project_root for daemon ownership resolution. Explicit roots constrain ownership. Bulk requests require a root. Duplicate durable IDs return AMBIGUOUS_AGENT; a live session owned by another project returns AGENT_OWNERSHIP_CONFLICT; an incomplete durable inventory returns INVENTORY_INCOMPLETE when a known live owner cannot resolve the ID. Standalone shells support status/logs/input/attach/kill and reject resumable project operations with UNSUPPORTED_AGENT_OPERATION.
 
-Production registry: `<socket>.projects.json`, loaded on startup and atomically updated after successful initialization or validated use. `/`, `$HOME` and ancestors of `$HOME` are never registered, even when `~/.pu/manifest.json` makes `$HOME` look initialized; such entries left by older daemons are removed when the registry loads. Requests naming such a root fail with `project_root_not_allowed`, except `status`, `subscribe_status`, `read`, `channel_read` and `kill`, which stay available so agents an older version recorded there can be seen and stopped. Roots are canonical, registration survives restart, and startup does not resume agents. Health returns registered roots and counts only session handles without observed exits.
+Production registry: `<socket>.projects.json`, loaded on startup and atomically updated by `init` (add) and `remove_project` (remove) — nothing else adds a project, so a removed project stays removed even while other clients still use it. A registered root whose folder still exists but has no `.pu/manifest.json` (removed by an older client) is dropped in the background when the daemon starts (inventory itself never changes the registry); a root whose folder is missing stays, reported unavailable, since it may be on an unmounted volume. `/`, `$HOME` and ancestors of `$HOME` are never registered, even when `~/.pu/manifest.json` makes `$HOME` look initialized; such entries left by older daemons are removed when the registry loads. Requests naming such a root fail with `project_root_not_allowed`, except `status`, `subscribe_status`, `read`, `channel_read` and `kill`, which stay available so agents an older version recorded there can be seen and stopped. Roots are canonical, registration survives restart, and startup does not resume agents. Health returns registered roots and counts only session handles without observed exits.
+
+The registry is ordered, and that order is the one every client shows for the machine. New projects are appended; `inventory` (projects) and Health list roots in registry order. Registries written by older daemons, which kept roots sorted by path, load in that order.
+
+### Reorder projects
+
+Set the order of the registered projects (protocol 14). A change is pushed to `subscribe_projects` streams.
+
+**Request**: `{"type": "reorder_projects", "project_roots": ["/b", "/a"]}`
+
+**Response**: `{"type": "project_order", "project_roots": ["/b", "/a", "/c"]}`
+
+The listed roots move to the front in the given order. Registered roots not listed follow in their current order, and unknown roots are ignored, so a client with a stale list can reorder projects but never drop one. Roots are canonicalized like registration. The new order is written atomically to the registry before the reply.
 
 ### Health
 
@@ -88,7 +101,7 @@ Check daemon liveness and protocol version.
   "type": "health_report",
   "pid": 12345,
   "uptime_seconds": 3600,
-  "protocol_version": 11,
+  "protocol_version": 14,
   "projects": ["/path/to/project"],
   "agent_count": 3
 }
@@ -96,11 +109,21 @@ Check daemon liveness and protocol version.
 
 ### Init
 
-Register a project and create `.pu/manifest.json`.
+Add a project: create `.pu/manifest.json` if needed and register the root. This is the only request that registers a project.
 
 **Request**: `{"type": "init", "project_root": "/path/to/project"}`
 
 **Response**: `{"type": "init_result", "created": true}`
+
+### RemoveProject
+
+Forget a project on this daemon, for every client. Its files and `.pu/` are kept (suspending agents only updates the manifest), so a later `init` brings it back with its worktrees and agents. Live agents refuse the removal with `PROJECT_HAS_LIVE_AGENTS` unless `suspend_agents` is true (default false), which suspends them so they can be resumed once the project is added again. An unregistered root answers `removed: false`.
+
+**Request**: `{"type": "remove_project", "project_root": "/path/to/project", "suspend_agents": true}`
+
+**Response**: `{"type": "project_removed", "project_root": "/path/to/project", "removed": true, "suspended": ["ag-abc"], "killed": []}`
+
+`killed` lists live sessions in the folder that the manifest did not record; they are stopped and cannot be resumed. A daemon loading its registry drops, in the background, registered folders that exist without a manifest; `subscribe_projects` sends its first list only after that.
 
 ### Shutdown
 
@@ -141,9 +164,8 @@ Read agent configuration for a project.
 `launch_args` is the project value as a list (`null` when unset).
 `project_launch_args` and `machine_launch_args` are the project and
 machine-level values in their string form, omitted when unset.
-`policy_launch_args` is present when Codex YOLO for all projects rewrites the
-args, and then overrides both. `resolved_launch_args` is what spawn and resume
-append (policy, else project, else machine, else none), and `resolved_command`
+`resolved_launch_args` is what spawn and resume
+append (project, else machine, else none), and `resolved_command`
 previews the command line. The three string
 fields were added additively; older clients ignore them.
 
@@ -165,13 +187,18 @@ Read or update the machine settings in `~/.pu/agent-settings.yaml`.
 
 **Request**: `{"type": "update_global_agent_settings", "launch_args": {"claude": "--dangerously-skip-permissions"}}`
 
-All fields are optional and omitted ones keep their stored value: `codex_yolo`
-(bool), `agent_status_tracking` (bool), and `launch_args` (agent type →
+All fields are optional and omitted ones keep their stored value:
+`agent_status_tracking` (bool) and `launch_args` (agent type →
 launch args string; a blank string removes that agent's entry, unknown agent
 types and unbalanced quotes are rejected without saving).
 
+A `codex_yolo` field sent by older clients is ignored; Codex full access is now
+a launch arg (`--dangerously-bypass-approvals-and-sandbox`).
+
 **Response**: `{"type": "global_agent_settings_report", "codex_yolo": false, "agent_status_tracking": true, "launch_args": {"claude": "--dangerously-skip-permissions"}}`
 
+`codex_yolo` is deprecated and always `false`. It is still sent so protocol-12
+apps that require it can decode the report; clients should ignore it.
 `launch_args` defaults to `{}`. A daemon that omits it predates protocol v11
 and does not save machine-level launch args.
 
@@ -204,11 +231,12 @@ Spawn a new agent, optionally in a new worktree.
   "extra_args": null,
   "plan_mode": false,
   "no_trigger": false,
-  "trigger": null
+  "trigger": null,
+  "placement": {"workspace": "ws-ag-abc", "surface": 2}
 }
 ```
 
-`no_auto: true` launches the agent's bare command, ignoring project and machine-level launch args; `extra_args` still apply. The `trigger` field optionally binds a trigger by name to the spawned agent.
+`no_auto: true` launches the agent's bare command, ignoring project and machine-level launch args; `extra_args` still apply. The `trigger` field optionally binds a trigger by name to the spawned agent. `placement` (optional) names the app tab the agent was spawned for; the daemon only records it on the agent's manifest entry and status report, so every app showing the project puts the agent in that tab rather than giving it a workspace of its own.
 
 **Response**:
 ```json
@@ -388,6 +416,16 @@ Subscribe to workspace status changes.
 **Response**: `{"type": "status_subscribed"}`
 
 Then streams: `{"type": "status_event", "worktrees": [...], "agents": [...]}`
+
+### SubscribeProjects
+
+Follow the registered projects. The full list of roots, in registry order, is sent once on subscribing and again after every `init` that adds a project, every removal and every `reorder_projects` that changes the order, so every client shows the same projects without polling. Any request line ends the stream.
+
+**Request**: `{"type": "subscribe_projects"}`
+
+**Response**: `{"type": "projects_subscribed"}`
+
+Then streams: `{"type": "projects_changed", "projects": ["/path/a", "/path/b"]}`
 
 ## Grid commands
 

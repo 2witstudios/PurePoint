@@ -34,6 +34,7 @@ jobs:
       packaging: ${{ steps.paths.outputs.packaging }}
       release_archive: ${{ steps.paths.outputs.release_archive }}
       universal: ${{ steps.paths.outputs.universal }}
+      linux_phone: ${{ steps.paths.outputs.linux_phone }}
       runtime_targets: ${{ steps.paths.outputs.runtime_targets }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -409,6 +410,154 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
 
+  # Linux phone host (LPH): `pu phone` unit tests, then the x64 bridge payload
+  # packaged, installed by install.sh into a throwaway HOME, and launched in a
+  # clean environment with a pinned-TLS enrollment, revocation and restart.
+  # The bridge's own tests already run on Linux in mobile-bridge.
+  runtime-linux:
+    name: Linux phone access payload (x64)
+    needs: changes
+    if: needs.changes.outputs.linux_phone == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # Alpine 3.22, pinned by digest. The digest is checked on pull, so any
+      # mirror that serves it is equally trusted.
+      ALPINE_DIGEST: sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.89"
+      - name: Set isolated Rust output
+        run: printf 'CARGO_TARGET_DIR=%s/linux-phone-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: pu phone unit tests
+        run: cargo test --locked -p pu-cli phone
+      - name: Build pu, pu-engine and the lock helper
+        run: cargo build --locked -p pu-cli -p pu-engine
+      - name: Package the x64 payload
+        run: |
+          PU_VERSION=$(python3 apps/purepoint-mobile/runtime/package-runtime.py --print-pu-version)
+          python3 apps/purepoint-mobile/runtime/package-runtime.py --layout dir \
+            --target linux-x64 \
+            --out "$RUNNER_TEMP/phone" \
+            --lock-helper "$CARGO_TARGET_DIR/debug/pu-point-guard-lock" \
+            --pu-version "$PU_VERSION" \
+            --cache "$RUNNER_TEMP/node-cache"
+          {
+            echo "PU_VERSION=$PU_VERSION"
+            echo "PHONE_NAME=purepoint-pointguard-${PU_VERSION}-x86_64-linux-gnu"
+          } >> "$GITHUB_ENV"
+      - name: Launch relocated payload in a clean environment
+        run: |
+          "$RUNNER_TEMP/phone/$PHONE_NAME/bin/node" apps/purepoint-mobile/runtime/prove-linux-runtime.mjs \
+            "$RUNNER_TEMP/phone/$PHONE_NAME" "$CARGO_TARGET_DIR/debug/pu"
+      - name: Install with install.sh into a throwaway HOME and launch in place
+        run: |
+          # Same layout as a release tarball; install.sh only copies pu and pu-engine.
+          NAME="purepoint-ci-x86_64-linux"
+          mkdir -p "$RUNNER_TEMP/pu-archive/$NAME"
+          cp "$CARGO_TARGET_DIR/debug/pu" "$CARGO_TARGET_DIR/debug/pu-engine" "$RUNNER_TEMP/pu-archive/$NAME/"
+          tar -C "$RUNNER_TEMP/pu-archive" -czf "$RUNNER_TEMP/$NAME.tar.gz" "$NAME"
+          echo "PU_TARBALL=$RUNNER_TEMP/$NAME.tar.gz" >> "$GITHUB_ENV"
+          SMOKE_HOME="$RUNNER_TEMP/smoke-home"
+          mkdir -m 700 "$SMOKE_HOME"
+          run_install() {
+            env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin PU_ARCHIVE="$RUNNER_TEMP/$NAME.tar.gz" \
+              PU_PHONE_ARCHIVE="$RUNNER_TEMP/phone/$PHONE_NAME.tar.gz" sh scripts/install.sh
+          }
+          run_install
+          INSTALLED="$SMOKE_HOME/.pu/pointguard/$PU_VERSION"
+          "$INSTALLED/bin/node" apps/purepoint-mobile/runtime/prove-linux-runtime.mjs \
+            "$INSTALLED" "$SMOKE_HOME/.pu/bin/pu" --in-place
+          # A second install never modifies the existing version directory.
+          BEFORE=$(stat -c '%i %Y' "$INSTALLED")
+          run_install | grep -F "already installed"
+          [ "$(stat -c '%i %Y' "$INSTALLED")" = "$BEFORE" ]
+      # The runner is an ephemeral VM with systemd as PID 1, so this step uses
+      # its real HOME and user manager to prove the unit pu phone writes.
+      - name: Run phone access as a systemd user service
+        run: |
+          env -i HOME="$HOME" PATH=/usr/bin:/bin PU_ARCHIVE="$PU_TARBALL" \
+            PU_PHONE_ARCHIVE="$RUNNER_TEMP/phone/$PHONE_NAME.tar.gz" sh scripts/install.sh
+          sudo loginctl enable-linger "$USER"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR
+          for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/bus" ] && break; sleep 0.2; done
+          PU="$HOME/.pu/bin/pu"
+          UNIT_FILE="$HOME/.config/systemd/user/pu-pointguard.service"
+          ready() {
+            for _ in $(seq 60); do
+              if "$PU" phone status --json > "$RUNNER_TEMP/status.json" &&
+                [ "$(jq -r '.pointGuard.phase // empty' "$RUNNER_TEMP/status.json")" = ready ]; then
+                return 0
+              fi
+              sleep 1
+            done
+            cat "$RUNNER_TEMP/status.json"
+            return 1
+          }
+          "$PU" phone install --now
+          ready
+          grep -qxF 'NoNewPrivileges=yes' "$UNIT_FILE"
+          grep -qxF 'UMask=0077' "$UNIT_FILE"
+          [ "$(stat -c %a "$UNIT_FILE")" = 644 ]
+          # Owner admin is a private Unix socket, not a TCP port.
+          STATE="$HOME/.local/state/purepoint/point-guard"
+          [ "$(stat -c %a "$STATE/admin")" = 700 ]
+          [ "$(stat -c %a "$STATE/admin/admin.sock")" = 600 ]
+          "$PU" phone devices | grep -F "No paired devices"
+          HOST=$(jq -r .pointGuard.hostId "$RUNNER_TEMP/status.json")
+          # The bridge's environment excludes inherited loader and Node options.
+          PID=$(systemctl --user show -p MainPID --value pu-pointguard.service)
+          if tr '\0' '\n' < "/proc/$PID/environ" | grep -E '^(NODE_OPTIONS|LD_PRELOAD|PU_ENGINE_PATH)='; then exit 1; fi
+          "$PU" phone restart
+          ready
+          [ "$(jq -r .pointGuard.hostId "$RUNNER_TEMP/status.json")" = "$HOST" ]
+          # An idle stop exits 0, so Restart=on-failure never resurrects it.
+          "$PU" phone stop
+          sleep 8
+          [ "$(systemctl --user is-active pu-pointguard.service || true)" = inactive ]
+          "$PU" phone uninstall
+          [ ! -e "$UNIT_FILE" ]
+          # Device trust and host identity outlive the service.
+          [ -f "$STATE/trust/trust.json" ]
+      - name: Point Guard service journal
+        if: failure()
+        run: XDG_RUNTIME_DIR="/run/user/$(id -u)" journalctl --user -u pu-pointguard.service --no-pager | tail -200 || true
+      - name: Pull the pinned Alpine image
+        run: |
+          for attempt in 1 2 3; do
+            for registry in public.ecr.aws/docker/library mirror.gcr.io/library docker.io/library; do
+              if docker pull --quiet "$registry/alpine@$ALPINE_DIGEST"; then
+                echo "ALPINE_IMAGE=$registry/alpine@$ALPINE_DIGEST" >> "$GITHUB_ENV"
+                exit 0
+              fi
+            done
+            sleep $((attempt * 20))
+          done
+          exit 1
+      - name: Refuse phone access on musl and keep pu installed
+        run: |
+          set +e
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            -v "$PWD/scripts/install.sh:/install.sh:ro" \
+            -v "$PU_TARBALL:/pu.tar.gz:ro" \
+            -v "$RUNNER_TEMP/phone/$PHONE_NAME.tar.gz:/phone.tar.gz:ro" \
+            -e HOME=/tmp -e PU_ARCHIVE=/pu.tar.gz -e PU_PHONE_ARCHIVE=/phone.tar.gz \
+            "$ALPINE_IMAGE" sh -c 'sh /install.sh; code=$?; test -x /tmp/.pu/bin/pu && test -x /tmp/.pu/bin/pu-engine && test ! -e /tmp/.pu/pointguard && exit $code' \
+            > "$RUNNER_TEMP/musl.log" 2>&1
+          CODE=$?
+          set -e
+          cat "$RUNNER_TEMP/musl.log"
+          [ "$CODE" -eq 3 ]
+          grep -F "glibc ≥ 2.28 required for phone access" "$RUNNER_TEMP/musl.log"
+
   release-archive:
     needs: changes
     if: needs.changes.outputs.release_archive == 'true'
@@ -417,7 +566,7 @@ jobs:
   build-and-test:
     name: Build & Test
     if: always()
-    needs: [changes, macos, release-archive, mobile-bridge, mobile-swift, runtime-package, runtime-universal, runtime-rust]
+    needs: [changes, macos, release-archive, mobile-bridge, mobile-swift, runtime-package, runtime-universal, runtime-rust, runtime-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

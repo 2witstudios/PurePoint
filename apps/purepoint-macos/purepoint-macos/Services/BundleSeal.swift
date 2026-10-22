@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Security
 
@@ -48,3 +49,4 @@ enum BundleSeal {
         #endif
     }
 }
+#endif

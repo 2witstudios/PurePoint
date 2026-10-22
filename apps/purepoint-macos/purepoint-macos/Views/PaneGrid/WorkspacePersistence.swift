@@ -142,6 +142,40 @@ nonisolated enum WorkspacePersistence {
         try? data.write(to: url, options: .atomic)
     }
 
+    /// Write a local project's layout unless the document on disk changed since this app last
+    /// read or wrote it (`expectedModifiedMs`, nil when there was no document). Another Mac
+    /// reaching this one over SSH writes the same file; its change is returned as a conflict
+    /// for the caller to adopt instead of being overwritten. A document deleted meanwhile has
+    /// nothing to adopt, so it is written again.
+    static func saveLocal(_ data: Data, projectRoot: String, expectedModifiedMs: Int64?) -> RemoteSaveOutcome {
+        let host = LocalProjectHost.shared
+        let path = filePath(projectRoot: projectRoot)
+        guard let stat = try? host.stat(path: path) else { return .skipped }
+        let onDisk = stat.exists ? stat.modifiedMs : nil
+        if let onDisk, onDisk != expectedModifiedMs {
+            guard let current = try? host.read(path: path, maxBytes: maxRemoteLayoutBytes), !current.truncated,
+                !isNewerThanSupported(data: current.data)
+            else { return .skipped }
+            return .conflict(current.data, modifiedMs: current.modifiedMs)
+        }
+        guard !isNewerThanSupported(projectRoot: projectRoot) else { return .skipped }
+        do {
+            return .written(
+                modifiedMs: try host.write(
+                    path: path, data: data, expectedModifiedMs: onDisk, createDirectories: true
+                ).modifiedMs)
+        } catch {
+            return .skipped
+        }
+    }
+
+    /// Modification time of a local project's layout document, nil when there is none.
+    static func localModifiedMs(projectRoot: String) -> Int64? {
+        guard let stat = try? LocalProjectHost.shared.stat(path: filePath(projectRoot: projectRoot)), stat.exists
+        else { return nil }
+        return stat.modifiedMs
+    }
+
     /// The encoded layout document. Shared by local saves and saves through a remote host.
     static func documentData(_ workspaces: [Workspace], activeWorkspaceId: String?) -> Data? {
         let document = PersistedWorkspaceDocument(
@@ -202,7 +236,7 @@ nonisolated enum WorkspacePersistence {
 
     /// Save a remote project's layout through its host, never downgrading a newer document.
     /// The write is conditional on the modification time of the document this app last read
-    /// or wrote (`expectedModifiedMs`), else of the one just read. When the document changed
+    /// or wrote (`expectedModifiedMs`, nil when there was none). When the document changed
     /// meanwhile (another Mac, or `pu grid` on the machine) nothing is written: the outcome
     /// carries that document so the caller adopts it instead of reverting it. Nothing is
     /// written either when the current document cannot be read (anything but a missing file).
@@ -216,7 +250,8 @@ nonisolated enum WorkspacePersistence {
         do {
             let existing = try host.read(path: path, maxBytes: maxRemoteLayoutBytes)
             if existing.truncated || isNewerThanSupported(data: existing.data) { return .skipped }
-            if let expectedModifiedMs, existing.modifiedMs != expectedModifiedMs {
+            // A document this app has not seen (none when it last read) is someone else's.
+            if existing.modifiedMs != expectedModifiedMs {
                 return .conflict(existing.data, modifiedMs: existing.modifiedMs)
             }
             onDisk = existing.modifiedMs
@@ -227,8 +262,10 @@ nonisolated enum WorkspacePersistence {
         }
         do {
             return .written(
+                // `onDisk` equals `expectedModifiedMs` when both are known. A document deleted
+                // since it was read has nothing to adopt, so it is written again.
                 modifiedMs: try host.write(
-                    path: path, data: data, expectedModifiedMs: expectedModifiedMs ?? onDisk, createDirectories: true
+                    path: path, data: data, expectedModifiedMs: onDisk, createDirectories: true
                 ).modifiedMs)
         } catch HostError.conflict {
             // Changed between the read and the write: adopt what is there now.
@@ -441,7 +478,7 @@ nonisolated enum RemoteLayoutError: LocalizedError {
     }
 }
 
-/// What a remote layout save did.
+/// What a conditional layout save (remote, or local via `saveLocal`) did.
 nonisolated enum RemoteSaveOutcome: Equatable, Sendable {
     case written(modifiedMs: Int64)
     /// The machine's document changed since this app last read or wrote it; it was not
@@ -488,18 +525,22 @@ nonisolated final class RemoteLayoutSaver: @unchecked Sendable {
         queue.async { self.knownModifiedMs = modifiedMs }
     }
 
-    func save(_ workspaces: [Workspace], activeWorkspaceId: String?) {
+    /// Queue a write of `workspaces`; `onWritten` runs (off the main thread) once it lands.
+    func save(
+        _ workspaces: [Workspace], activeWorkspaceId: String?, onWritten: (@Sendable () -> Void)? = nil
+    ) {
         guard let data = WorkspacePersistence.documentData(workspaces, activeWorkspaceId: activeWorkspaceId) else { return }
-        enqueue(data)
+        enqueue(data, onWritten: onWritten)
     }
 
-    func enqueue(_ data: Data) {
+    func enqueue(_ data: Data, onWritten: (@Sendable () -> Void)? = nil) {
         let group = self.group
         group.enter()
         queue.async {
             switch self.write(data, self.knownModifiedMs) {
             case .written(let modified):
                 self.knownModifiedMs = modified
+                onWritten?()
             case .conflict(let document, let modified):
                 // The stamp advances only once the document is adopted (`loaded`).
                 self.conflictLock.lock()

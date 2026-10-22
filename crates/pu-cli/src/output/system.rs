@@ -24,6 +24,32 @@ pub(crate) fn print_init_result(created: bool) {
     }
 }
 
+pub(crate) fn print_project_removed(
+    project_root: &str,
+    removed: bool,
+    suspended: &[String],
+    killed: &[String],
+) {
+    if !removed {
+        println!("{project_root} was not a registered project");
+        return;
+    }
+    println!("{} {project_root}", "Removed".green());
+    if !suspended.is_empty() {
+        println!(
+            "  Suspended {} agent(s); they can be resumed once the project is added again",
+            suspended.len()
+        );
+    }
+    if !killed.is_empty() {
+        println!(
+            "  Stopped {} session(s) the project did not list",
+            killed.len()
+        );
+    }
+    println!("  Project files and .pu/ were kept (suspending agents only updates the manifest)");
+}
+
 pub(crate) fn print_config_report(default_agent: &str, agents: &[AgentConfigInfo]) {
     println!("{}", "Agent Configuration".bold());
     println!("  Default agent: {}", default_agent.green());
@@ -40,15 +66,10 @@ pub(crate) fn print_config_report(default_agent: &str, agents: &[AgentConfigInfo
 
 /// Effective launch args and where they come from, in precedence order.
 fn launch_args_label(a: &AgentConfigInfo) -> String {
-    match (
-        &a.policy_launch_args,
-        &a.project_launch_args,
-        &a.machine_launch_args,
-    ) {
-        (Some(args), _, _) => format!("{args} (Codex YOLO for all projects)"),
-        (None, Some(args), _) => format!("{args} (project)"),
-        (None, None, Some(args)) => format!("{args} (all projects)"),
-        (None, None, None) => "none".dimmed().to_string(),
+    match (&a.project_launch_args, &a.machine_launch_args) {
+        (Some(args), _) => format!("{args} (project)"),
+        (None, Some(args)) => format!("{args} (all projects)"),
+        (None, None) => "none".dimmed().to_string(),
     }
 }
 
@@ -64,7 +85,7 @@ pub(crate) fn print_shutting_down() {
 mod tests {
     use super::*;
 
-    fn info(project: Option<&str>, machine: Option<&str>, policy: Option<&str>) -> AgentConfigInfo {
+    fn info(project: Option<&str>, machine: Option<&str>) -> AgentConfigInfo {
         AgentConfigInfo {
             id: None,
             available: None,
@@ -75,32 +96,18 @@ mod tests {
             interactive: true,
             project_launch_args: project.map(str::to_owned),
             machine_launch_args: machine.map(str::to_owned),
-            policy_launch_args: policy.map(str::to_owned),
             resolved_command: None,
         }
     }
 
     #[test]
-    fn given_codex_yolo_should_label_args_as_yolo_not_project() {
-        let label = launch_args_label(&info(
-            Some("--search"),
-            None,
-            Some("--search --dangerously-bypass-approvals-and-sandbox --no-daemon"),
-        ));
-        assert_eq!(
-            label,
-            "--search --dangerously-bypass-approvals-and-sandbox --no-daemon (Codex YOLO for all projects)"
-        );
-    }
-
-    #[test]
     fn given_project_or_machine_args_should_label_their_source() {
         assert_eq!(
-            launch_args_label(&info(Some("--model o3"), Some("--search"), None)),
+            launch_args_label(&info(Some("--model o3"), Some("--search"))),
             "--model o3 (project)"
         );
         assert_eq!(
-            launch_args_label(&info(None, Some("--search"), None)),
+            launch_args_label(&info(None, Some("--search"))),
             "--search (all projects)"
         );
     }

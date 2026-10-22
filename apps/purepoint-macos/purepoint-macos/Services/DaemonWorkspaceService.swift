@@ -1,7 +1,7 @@
 import Foundation
 
 nonisolated struct DaemonWorkspaceService: WorkspaceService {
-    var client = DaemonClient()
+    var client = DaemonEndpoint.local.makeClient()
 
     func manifestPath(projectRoot: String) -> String {
         (projectRoot as NSString)
@@ -25,7 +25,8 @@ nonisolated struct DaemonWorkspaceService: WorkspaceService {
                     startedAt: report.startedAt ?? "",
                     sessionId: report.sessionId,
                     suspended: report.suspended,
-                    signal: report.signal.flatMap { $0.identity.worktree_id == nil ? $0 : nil }
+                    signal: report.signal.flatMap { $0.identity.worktree_id == nil ? $0 : nil },
+                    placement: report.placement
                 )
             }
             return WorkspaceSnapshot(worktrees: worktreeModels, rootAgents: rootAgents)

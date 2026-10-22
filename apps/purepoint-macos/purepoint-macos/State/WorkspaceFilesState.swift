@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Foundation
 import Observation
 
@@ -48,9 +52,16 @@ final class WorkspaceFilesState {
     func observe() async {
         defer { fileTree.stopWatching() }
         while !Task.isCancelled {
+            #if os(macOS)
             // Remote polling is a daemon round trip over SSH: skip it while the app is in the
             // background (like DiffState), and poll less often.
             if host.isLocal || NSApplication.shared.isActive { await refresh() }
+            #else
+            // Every iPad host is remote: paused in the background, refreshed on return.
+            await AppActivity.shared.untilForeground()
+            if Task.isCancelled { return }
+            await refresh()
+            #endif
             do { try await Task.sleep(for: .seconds(host.isLocal ? 2 : 5)) } catch { return }
         }
     }

@@ -138,6 +138,11 @@ struct WorktreeDetailView: View {
             .buttonStyle(.borderless)
             .help("Refresh")
         }
+        #if os(iOS)
+        // An iPad window can be narrower than the Mac's minimum (a half-screen split): the
+        // labels truncate rather than wrap a letter or two per line.
+        .lineLimit(1)
+        #endif
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }

@@ -691,7 +691,6 @@ mod resume_command_tests {
                 interactive: true,
                 launch_args: Some(vec![]),
                 machine_launch_args: None,
-                policy_launch_args: None,
             };
             // when / then
             assert!(engine.build_resume_command(kind, &config, None).is_err());
@@ -741,7 +740,6 @@ mod resume_command_tests {
                 interactive: true,
                 launch_args: Some(vec!["--first".into(), "shared".into()]),
                 machine_launch_args: None,
-                policy_launch_args: None,
             };
 
             // when
@@ -822,6 +820,7 @@ mod bare_launch_resume_tests {
                 plan_mode: false,
                 no_trigger: true,
                 trigger: None,
+                placement: None,
             })
             .await
         {

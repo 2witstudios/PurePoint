@@ -6,7 +6,7 @@ struct TriggerDetailView: View {
     @Environment(AppState.self) private var appState
 
     private var projectRoots: [String] {
-        appState.projects.map(\.projectRoot)
+        appState.libraryProjectRoots
     }
 
     var body: some View {

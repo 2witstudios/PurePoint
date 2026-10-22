@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import Foundation
 
 /// Sends a file to an agent's daemon so the agent can read it by path, even when
@@ -70,6 +72,7 @@ nonisolated enum AttachmentUpload {
         return try Data(contentsOf: url, options: .mappedIfSafe)
     }
 
+    #if os(macOS)
     /// Whether a key event's modifiers are Command alone. Caps Lock, Fn and
     /// other non-shortcut flags are ignored.
     static func isCommandOnly(_ flags: NSEvent.ModifierFlags) -> Bool {
@@ -87,6 +90,7 @@ nonisolated enum AttachmentUpload {
         else { return nil }
         return bitmap.representation(using: .png, properties: [:])
     }
+    #endif
 
     /// A readable, unique-enough name for a pasted image.
     static func pastedImageName(at date: Date = Date()) -> String {

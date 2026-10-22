@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent terminal</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.sm{width:14px;height:14px}
+.pill{font-size:10px;font-weight:600;padding:1px 5px;border-radius:4px;white-space:nowrap;line-height:15px}
+.trunc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.term p{margin:0;white-space:pre-wrap}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #18181B; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; font-size: 13px; display: flex; flex-direction: column">
+
+  <div style="height: 54px; flex-shrink: 0; background: #121214"></div>
+
+  <header style="display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 4px; flex-shrink: 0; background: #121214">
+    <a href="Main.dc.html" aria-label="Back to sidebar" style="width: 44px; height: 44px; display: grid; place-items: center; color: #FF8A3D">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg>
+    </a>
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center">
+      <span style="display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 600">
+        <span style="width: 7px; height: 7px; border-radius: 4px; background: #FF9F0A"></span>fix-auth
+        <span class="pill" style="background: rgba(255,159,10,0.16); color: #FFB340">Permission</span>
+      </span>
+      <span class="mono trunc" style="font-size: 10.5px; color: #A1A1AA; max-width: 250px">jono-mbp · purepoint · pu/auth-hardening</span>
+    </div>
+    <button aria-label="Agent options" style="width: 44px; height: 44px; display: grid; place-items: center; color: #ECECEE">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>
+    </button>
+  </header>
+
+  <nav aria-label="Agents in this worktree" style="display: flex; align-items: stretch; height: 34px; background: #121214; flex-shrink: 0; border-bottom: 1px solid rgba(255,255,255,0.05)">
+    <button style="position: relative; display: flex; align-items: center; gap: 6px; padding: 0 12px; background: #18181B; font-size: 12px; font-weight: 600">
+      <span style="position: absolute; left: 0; right: 0; top: 0; height: 2px; background: #FF7A1A"></span>
+      <svg class="ico" style="width: 12px; height: 12px; color: #FF9F0A" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>
+      fix-auth
+    </button>
+    <button style="display: flex; align-items: center; gap: 6px; padding: 0 12px; font-size: 12px; color: #A8A8B0">
+      <svg class="ico" style="width: 12px; height: 12px; color: #0A84FF" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>
+      review-auth
+    </button>
+    <button style="display: flex; align-items: center; gap: 6px; padding: 0 12px; font-size: 12px; color: #A8A8B0">
+      <svg class="ico" style="width: 12px; height: 12px" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 5 5-5 5M12 18h7"/></svg>
+      shell
+    </button>
+    <span style="flex: 1"></span>
+    <button aria-label="New tab in this worktree" style="width: 40px; display: grid; place-items: center; color: #A1A1AA">
+      <svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg>
+    </button>
+  </nav>
+
+  <section aria-label="Terminal" class="mono term" style="flex: 1; min-height: 0; position: relative; padding: 10px 10px 0; font-size: 11px; line-height: 15.5px; color: #ECECEE; overflow: hidden">
+    <span style="position: absolute; top: 8px; right: 8px; font-size: 10px; color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.08); border-radius: 9px; padding: 1px 7px">52×38</span>
+    <p><span style="color: #B887DB">●</span> I'll tighten the TLS pin check so a</p>
+    <p>  rotated cert triggers re-pair instead of a</p>
+    <p>  silent retry.</p>
+    <p> </p>
+    <p><span style="color: #6EAD78">●</span> Update(crates/pu-engine/src/tls.rs)</p>
+    <p><span style="color: #85858D">  ⎿  Updated with 18 additions, 4 removals</span></p>
+    <p><span style="color: #85858D">     142  </span><span style="color: #8CD98C">+   if !pin.matches(&amp;leaf) {</span></p>
+    <p><span style="color: #85858D">     143  </span><span style="color: #8CD98C">+       return Err(TrustError::Rotated);</span></p>
+    <p><span style="color: #85858D">     144  </span><span style="color: #8CD98C">+   }</span></p>
+    <p><span style="color: #85858D">     145  </span><span style="color: #E68C8C">-   warn!("pin mismatch, retrying");</span></p>
+    <p> </p>
+    <p><span style="color: #6EAD78">●</span> Update(crates/pu-engine/tests/trust.rs)</p>
+    <p><span style="color: #85858D">  ⎿  Updated with 31 additions</span></p>
+    <p> </p>
+    <p><span style="color: #B887DB">●</span> Now running the engine tests with the</p>
+    <p>  TLS feature enabled.</p>
+    <p> </p>
+    <div style="border: 1px solid #C9AB66; border-radius: 6px; padding: 6px 8px; margin-right: 2px">
+    <p style="color: #C9AB66">Bash command</p>
+    <p>  cargo test -p pu-engine --features tls</p>
+    <p> </p>
+    <p>Do you want to proceed?</p>
+    <p><span style="color: #6E9BE6">❯ 1. Yes</span></p>
+    <p>  2. Yes, and don't ask again this session</p>
+    <p>  3. No, and tell Claude what to do (esc)</p>
+    </div>
+  </section>
+
+
+  <footer style="flex-shrink: 0; background: #121214; border-top: 1px solid rgba(255,255,255,0.06); padding: 6px 8px 30px; display: flex; flex-direction: column; gap: 6px">
+    <div role="toolbar" aria-label="Terminal keys" style="display: flex; gap: 5px">
+      <sc-for list="{{keys}}" as="k" hint-placeholder-count="8">
+        <button class="mono" style="flex: 1; height: 34px; border-radius: 7px; background: #26262A; font-size: 11.5px; font-weight: 500; color: #ECECEE" aria-label="{{k.label}}">{{k.face}}</button>
+      </sc-for>
+    </div>
+    <div style="display: flex; align-items: flex-end; gap: 6px">
+      <label style="flex: 1; display: flex; align-items: center; min-height: 40px; padding: 0 12px; border-radius: 20px; background: #222226; border: 1px solid rgba(255,255,255,0.07)">
+        <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Message fix-auth</span>
+        <input placeholder="Message fix-auth" style="flex: 1; min-width: 0; background: none; border: 0; color: #ECECEE; font: 14px -apple-system, system-ui, sans-serif; outline: none">
+      </label>
+      <button aria-label="Send prompt" style="width: 40px; height: 40px; border-radius: 20px; background: #303034; display: grid; place-items: center; color: #85858D">
+        <svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+      </button>
+    </div>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      keys: [
+        { face: '⏎', label: 'Enter' }, { face: '↑', label: 'Up' }, { face: '↓', label: 'Down' },
+        { face: 'y', label: 'y' }, { face: 'n', label: 'n' }, { face: 'esc', label: 'Escape' },
+        { face: '^C', label: 'Interrupt' }, { face: 'tab', label: 'Tab' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

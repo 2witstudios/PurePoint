@@ -134,6 +134,7 @@ mod tests {
             plan_mode,
             no_trigger: false,
             trigger: None,
+            placement: None,
         };
         assert_eq!(timeout_for(&spawn("review", false)), DELIVERY_TIMEOUT);
         assert_eq!(timeout_for(&spawn("  ", true)), DELIVERY_TIMEOUT);

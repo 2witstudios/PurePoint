@@ -22,6 +22,18 @@ just test-app     # run Swift tests
 | swift-format | any | `brew install swift-format` (optional) |
 | cargo-deny | any | `cargo install cargo-deny` |
 
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `crates/` | Rust workspace: `pu-core` (shared types), `pu-engine` (daemon), `pu-cli` (`pu` command) |
+| `apps/purepoint-macos/` | macOS app (SwiftUI/AppKit) |
+| `apps/purepoint-mobile/` | iPhone/iPad app and the Point Guard bridge runtime |
+| `apps/shared/` | Swift code shared by the macOS and mobile apps (chat Markdown rendering) |
+| `docs/` | User guide, specs, architecture and process ([index](docs/README.md)) |
+| `scripts/` | Install and developer scripts |
+| `vendor/` | Patched third-party crates ([PATCHES.md](vendor/PATCHES.md)) |
+
 ## Guides
 
 | Guide | What it covers |

@@ -11,7 +11,7 @@ through `pu send`. No producer PR; the parent owns the umbrella PR and acceptanc
 
 ## Independent parent-plan feedback
 
-Read the parent's `tasks/pointguard-soul-skills-delivery.md`, CLAUDE.md, spec-system,
+Read the parent's delivery plan, CLAUDE.md, spec-system,
 PGSET and distribution/desktop/module dependencies before implementation. Sent
 actionable feedback to ag-3sz6gpfv using `pu --project <project-root> send`:
 

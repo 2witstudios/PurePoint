@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::{AgentStatus, WorktreeEntry};
 use indexmap::IndexMap;
 
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -89,10 +89,26 @@ pub enum Request {
         #[serde(default)]
         project_root: Option<String>,
     },
+    /// Set the registered projects' order, which every client shows. Registered
+    /// roots left out follow in their current order; unknown roots are ignored.
+    ReorderProjects {
+        project_roots: Vec<String>,
+    },
     Health,
     Init {
         project_root: String,
     },
+    /// Forget a registered project on this daemon. Its files and `.pu/` are kept
+    /// (suspending agents only updates the manifest), so a later `Init` brings
+    /// the project back as it was.
+    RemoveProject {
+        project_root: String,
+        /// Suspend the project's live agents instead of refusing the removal.
+        #[serde(default)]
+        suspend_agents: bool,
+    },
+    /// Stream the registered project roots: once now, then on every change.
+    SubscribeProjects,
     Spawn {
         project_root: String,
         prompt: String,
@@ -120,6 +136,9 @@ pub enum Request {
         no_trigger: bool,
         #[serde(default)]
         trigger: Option<String>,
+        /// The app tab this agent is for; recorded on its manifest entry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<crate::types::SpawnPlacement>,
     },
     Status {
         project_root: String,
@@ -338,8 +357,6 @@ pub enum Request {
     /// Fields left out keep their stored value.
     UpdateGlobalAgentSettings {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        codex_yolo: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_status_tracking: Option<bool>,
         /// Machine-level launch args string per agent type; a blank string
         /// removes that agent's entry. Agents left out keep their stored value.
@@ -408,6 +425,11 @@ pub enum Request {
         include_hidden: bool,
         #[serde(default = "default_fs_list_max_entries")]
         max_entries: usize,
+        /// Folder browsing for choosing a project root (the iPad's Open Project): lists
+        /// only the subdirectories of any directory the daemon user can read, never
+        /// files, non-recursively. `~` names the daemon user's home.
+        #[serde(default)]
+        directories_only: bool,
     },
     FsStat {
         path: String,
@@ -495,6 +517,10 @@ pub enum Response {
         project_root: Option<String>,
         worktree_id: Option<String>,
     },
+    /// The registered projects in their new order.
+    ProjectOrder {
+        project_roots: Vec<String>,
+    },
     HealthReport {
         pid: u32,
         uptime_seconds: u64,
@@ -504,6 +530,20 @@ pub enum Response {
     },
     InitResult {
         created: bool,
+    },
+    ProjectRemoved {
+        project_root: String,
+        /// False when the root was not registered.
+        removed: bool,
+        /// Agents suspended so they can be resumed once the project is added again.
+        suspended: Vec<String>,
+        /// Live sessions the manifest did not list, which cannot be resumed.
+        #[serde(default)]
+        killed: Vec<String>,
+    },
+    ProjectsSubscribed,
+    ProjectsChanged {
+        projects: Vec<String>,
     },
     SpawnResult {
         worktree_id: Option<String>,
@@ -648,6 +688,10 @@ pub enum Response {
         created_at: DateTime<Utc>,
     },
     GlobalAgentSettingsReport {
+        /// Deprecated and always `false`: Codex YOLO was removed. Still sent so
+        /// protocol-12 apps that require the field can decode the report; drop it
+        /// with the next protocol version bump.
+        #[serde(default)]
         codex_yolo: bool,
         #[serde(default = "crate::serde_defaults::default_true")]
         agent_status_tracking: bool,

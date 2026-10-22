@@ -41,7 +41,12 @@ struct PointGuardView: View {
         }
         .onAppear(perform: activateWorkspace)
         .onChange(of: projectRoot) { _, _ in activateWorkspace() }
+        // The iPad connects the chat to a paired Mac rather than starting a host (IPAD-8.1).
+        #if os(macOS)
         .task { appState.pointGuardService.start(chat: appState.pointGuardChat) }
+        #else
+        .task { appState.pointGuardChat.connect() }
+        #endif
         .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
             // The workspace owns this shared setting once, even when a terminal
             // or file sibling has focus. Background chat tabs don't handle it.

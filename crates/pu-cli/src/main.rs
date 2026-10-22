@@ -4,6 +4,7 @@ mod daemon_ctrl;
 mod error;
 mod machine_target;
 mod output;
+mod phone;
 mod service;
 mod signal_helper;
 mod skill;
@@ -103,10 +104,10 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// List projects known to the daemon
+    /// List, add or remove the projects the daemon serves
     Projects {
         #[command(subcommand)]
-        action: InventoryAction,
+        action: ProjectsAction,
     },
     /// List agent instances (saved definitions use `pu agent`)
     Agents {
@@ -194,6 +195,11 @@ enum Commands {
     Daemon {
         #[command(subcommand)]
         action: commands::daemon::DaemonAction,
+    },
+    /// Pair phones directly with this Linux host and manage them
+    Phone {
+        #[command(subcommand)]
+        action: commands::phone::PhoneAction,
     },
     /// Check daemon health
     Health {
@@ -580,13 +586,41 @@ enum TabAction {
 
 #[derive(Subcommand)]
 enum InventoryAction {
-    /// List all registered projects by default; --project narrows the scope
+    /// List across all registered projects by default; --project narrows the scope
     List {
         #[arg(long, conflicts_with = "project")]
         global: bool,
         /// Filter agent instances by observed state (agents list only)
         #[arg(long, value_parser = ["running", "suspended", "broken", "unknown"])]
         state: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectsAction {
+    /// List all registered projects by default; --project narrows the scope
+    List {
+        #[arg(long, conflicts_with = "project")]
+        global: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add a folder as a project, initializing it if needed (same as `pu init`)
+    Add {
+        /// Project folder (default: --project, then the current directory)
+        path: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a project from this daemon on every device; its files are kept
+    Remove {
+        /// Project folder (default: --project, then the current directory)
+        path: Option<String>,
+        /// Suspend the project's running agents instead of refusing
+        #[arg(long)]
+        suspend_agents: bool,
         #[arg(long)]
         json: bool,
     },
@@ -789,8 +823,17 @@ async fn async_main() {
         }
     };
 
+    // The proxy's stdout is a daemon byte stream and its stdin read never
+    // returns on its own; skip side work and exit as soon as it finishes.
+    let proxy = matches!(
+        cli.command,
+        Commands::Daemon {
+            action: commands::daemon::DaemonAction::Proxy
+        }
+    );
+
     // Background plugin freshness check (non-blocking)
-    if !custom_socket {
+    if !custom_socket && !proxy {
         std::thread::spawn(skill::ensure_plugin_current);
     }
 
@@ -845,14 +888,7 @@ async fn async_main() {
                 commands::status::run(&socket, agent, json).await
             }
         }
-        Commands::Projects { action } => {
-            commands::inventory::run_list(
-                &socket,
-                pu_core::protocol::InventoryKind::Projects,
-                action,
-            )
-            .await
-        }
+        Commands::Projects { action } => commands::projects::run(&socket, action).await,
         Commands::Agents { action } => {
             commands::inventory::run_list(&socket, pu_core::protocol::InventoryKind::Agents, action)
                 .await
@@ -887,6 +923,7 @@ async fn async_main() {
         } => commands::logs::run(&socket, &agent_id, tail, json).await,
         Commands::Health { json } => commands::health::run(&socket, json).await,
         Commands::Daemon { action } => commands::daemon::run(&socket, custom_socket, action).await,
+        Commands::Phone { action } => commands::phone::run(action).await,
         Commands::Prompt { action } => match action {
             PromptAction::List { json } => commands::prompt::run_list(&socket, json).await,
             PromptAction::Show { name, json } => {
@@ -1102,6 +1139,10 @@ async fn async_main() {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
+    if proxy {
+        // A pending blocking stdin read would hold up runtime shutdown.
+        std::process::exit(0);
+    }
 }
 
 /// Commands that read or write files on this computer cannot run on a machine.
@@ -1157,6 +1198,16 @@ mod tests {
         for args in [
             vec!["pu", "status", "--global", "--json"],
             vec!["pu", "projects", "list", "--json"],
+            vec!["pu", "projects", "add", "--json"],
+            vec!["pu", "projects", "add", "/project"],
+            vec![
+                "pu",
+                "projects",
+                "remove",
+                "/project",
+                "--suspend-agents",
+                "--json",
+            ],
             vec!["pu", "agents", "list", "--state", "running", "--json"],
             vec!["pu", "worktrees", "list", "--global", "--json"],
         ] {

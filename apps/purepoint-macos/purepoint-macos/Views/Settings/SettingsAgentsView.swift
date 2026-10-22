@@ -10,17 +10,6 @@ struct SettingsAgentsView: View {
         VStack(alignment: .leading, spacing: 16) {
             GroupBox {
                 VStack(alignment: .leading, spacing: 8) {
-                    Toggle("YOLO for all projects", isOn: Binding(
-                        get: { state.codexYolo },
-                        set: { enabled in
-                            Task { await state.updateGlobalSettings(codexYolo: enabled, projectRoot: appState.activeLocalProjectRoot) }
-                        }
-                    ))
-                    .toggleStyle(.switch)
-                    .disabled(!state.globalSettingsLoaded || state.isSavingGlobalSettings)
-                    Text("Codex gets full access with no command approvals in every project on this Mac. Applies to new and resumed sessions; restart running agents to apply it.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
                     Toggle("Agent status tracking", isOn: Binding(
                         get: { state.agentStatusTracking },
                         set: { enabled in
@@ -42,7 +31,7 @@ struct SettingsAgentsView: View {
                         LaunchArgsRow(
                             command: state.agentConfig(named: agent)?.command ?? agent,
                             stored: state.machineLaunchArgs[agent] ?? "",
-                            placeholder: launchArgsPlaceholder
+                            placeholder: launchArgsPlaceholder(for: agent)
                         ) { text in
                             Task {
                                 await state.updateMachineLaunchArgs(
@@ -57,7 +46,12 @@ struct SettingsAgentsView: View {
                     }
                 }
             } label: {
+                #if os(macOS)
                 Label("Machine Settings", systemImage: "desktopcomputer")
+                #else
+                // Names the machine whose daemon these settings change (IPAD-012).
+                Label("Machine Settings — \(appState.libraryMachine?.machine.name ?? "No machine")", systemImage: "desktopcomputer")
+                #endif
             }
             .groupBoxStyle(SettingsGroupBoxStyle())
             if let projectRoot = appState.activeLocalProjectRoot {
@@ -70,7 +64,12 @@ struct SettingsAgentsView: View {
                 )
             }
         }
+        #if os(macOS)
         .task { await state.loadGlobalSettings() }
+        #else
+        // Reloads when the library machine changes (IPAD-012).
+        .task(id: appState.libraryScopeId) { await state.loadGlobalSettings() }
+        #endif
     }
 }
 
@@ -102,35 +101,26 @@ struct SettingsAgentsContentView: View {
                             .foregroundStyle(.secondary)
                         ForEach(launchArgsAgents, id: \.self) { agent in
                             if let payload = state.agentConfig(named: agent) {
-                                if agent == "codex" && state.codexYolo {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Codex: YOLO is enabled for all projects. Turn it off above to use this project's launch args.")
+                                VStack(alignment: .leading, spacing: 2) {
+                                    LaunchArgsRow(
+                                        command: payload.command,
+                                        stored: payload.projectLaunchArgs
+                                            ?? payload.launchArgs?.joined(separator: " ") ?? "",
+                                        placeholder: payload.projectLaunchArgs == ""
+                                            ? "" : payload.machineLaunchArgs ?? launchArgsPlaceholder(for: agent)
+                                    ) { text in
+                                        Task {
+                                            await state.updateLaunchArgs(
+                                                projectRoot: projectRoot, agentName: agent,
+                                                launchArgs: text.trimmingCharacters(in: .whitespaces).isEmpty ? nil : text)
+                                        }
+                                    }
+                                    if payload.projectLaunchArgs == "" {
+                                        Text("Set to empty in .pu/config.yaml: launches the bare command, ignoring the launch args for all projects.")
                                             .font(.system(size: 11))
-                                            .foregroundStyle(.secondary)
-                                        resolvedCommandView(payload)
+                                            .foregroundStyle(.tertiary)
                                     }
-                                } else {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        LaunchArgsRow(
-                                            command: payload.command,
-                                            stored: payload.projectLaunchArgs
-                                                ?? payload.launchArgs?.joined(separator: " ") ?? "",
-                                            placeholder: payload.projectLaunchArgs == ""
-                                                ? "" : payload.machineLaunchArgs ?? launchArgsPlaceholder
-                                        ) { text in
-                                            Task {
-                                                await state.updateLaunchArgs(
-                                                    projectRoot: projectRoot, agentName: agent,
-                                                    launchArgs: text.trimmingCharacters(in: .whitespaces).isEmpty ? nil : text)
-                                            }
-                                        }
-                                        if payload.projectLaunchArgs == "" {
-                                            Text("Set to empty in .pu/config.yaml: launches the bare command, ignoring the launch args for all projects.")
-                                                .font(.system(size: 11))
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                        resolvedCommandView(payload)
-                                    }
+                                    resolvedCommandView(payload)
                                 }
                             }
                         }
@@ -153,7 +143,15 @@ struct SettingsAgentsContentView: View {
 /// base commands; extra args are a free-form string the user owns.
 private let launchArgsAgents = ["claude", "codex", "opencode"]
 
-private let launchArgsPlaceholder = "--model opus"
+/// An example flag each CLI accepts, shown when the field is empty.
+private func launchArgsPlaceholder(for agent: String) -> String {
+    switch agent {
+    case "claude": "--model opus"
+    case "codex": "--search"
+    case "opencode": "--auto"
+    default: ""
+    }
+}
 
 /// One agent's launch args: the read-only base command and a free-form text field.
 struct LaunchArgsRow: View {

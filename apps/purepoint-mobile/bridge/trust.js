@@ -134,6 +134,11 @@ export async function openTrustStore({
     }
     assertHeld();
     validate(state, tls.certificateSHA256);
+    // Revoked devices are forgotten; legacy revokedAt entries leave disk on the next write.
+    state = {
+      ...state,
+      devices: state.devices.filter((d) => d.revokedAt == null),
+    };
     /** @type {EventEmitter & Record<string, any>} */
     const trust = new EventEmitter();
     const enrollments = new Map();
@@ -218,6 +223,7 @@ export async function openTrustStore({
           enrollmentId,
           status: entry.status,
           expiresAt: entry.expiresAt,
+          ...(entry.deviceId ? { deviceId: entry.deviceId } : {}),
         };
       },
       revokeEnrollment(enrollmentId) {
@@ -270,7 +276,7 @@ export async function openTrustStore({
           );
           if (!entry || entry.status !== "pending" || entry.expiresAt <= now())
             throw new Error(
-              "Enrollment expired, revoked or already used. Scan a new Mac QR code.",
+              "Enrollment expired, revoked or already used. Create a new pairing code on the host.",
             );
           if (state.devices.length >= 256)
             throw new Error(
@@ -290,13 +296,18 @@ export async function openTrustStore({
                 name: name.trim(),
                 createdAt: now(),
                 credentialHash: digest(credential),
+                terminals: "control",
+                workspaceManagement: true,
               },
             ],
           };
           await publish(file, next, assertHeld);
           assertHeld();
           state = next;
-          permissionFences.set(deviceId, "off");
+          // Reported to the owner only once the device is durable.
+          entry.deviceId = deviceId;
+          permissionFences.set(deviceId, "control");
+          managementFences.set(deviceId, true);
           return {
             version: 1,
             hostId: state.hostId,
@@ -314,6 +325,33 @@ export async function openTrustStore({
           terminals:
             permissionFences.get(device.deviceId) ?? device.terminals ?? "off",
         }));
+      },
+      renameDevice(deviceId, name) {
+        if (
+          typeof name !== "string" ||
+          !name.length ||
+          name.length > 80 ||
+          /[\x00-\x1f\x7f]/.test(name)
+        )
+          return Promise.reject(new Error("Invalid device name"));
+        return serialized(async () => {
+          if (
+            !state.devices.some(
+              (d) => d.deviceId === deviceId && d.revokedAt == null,
+            )
+          )
+            throw new Error("Unknown paired device");
+          const next = {
+            ...state,
+            devices: state.devices.map((d) =>
+              d.deviceId === deviceId ? { ...d, name } : d,
+            ),
+          };
+          await publish(file, next, assertHeld);
+          assertHeld();
+          state = next;
+          return {};
+        });
       },
       setWorkspaceManagement(deviceId, workspaceManagement) {
         if (typeof workspaceManagement !== "boolean")
@@ -416,19 +454,13 @@ export async function openTrustStore({
         revocations.add(deviceId);
         state = {
           ...state,
-          devices: state.devices.map((d) =>
-            d.deviceId === deviceId ? { ...d, revokedAt: now() } : d,
-          ),
+          devices: state.devices.filter((d) => d.deviceId !== deviceId),
         };
         trust.emit("revoked", deviceId);
         return serialized(async () => {
-          if (!state.devices.some((d) => d.deviceId === deviceId))
-            throw new Error("Unknown paired device.");
           const next = {
             ...state,
-            devices: state.devices.map((d) =>
-              d.deviceId === deviceId ? { ...d, revokedAt: now() } : d,
-            ),
+            devices: state.devices.filter((d) => d.deviceId !== deviceId),
           };
           await publish(file, next, assertHeld);
           assertHeld();

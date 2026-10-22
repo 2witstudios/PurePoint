@@ -8,7 +8,6 @@ final class AgentConfigState {
     var defaultAgent: String = "claude"
     var isLoading = false
     var error: String?
-    var codexYolo = false
     var agentStatusTracking = true
     /// Machine-level ("all projects") launch args string per agent type.
     var machineLaunchArgs: [String: String] = [:]
@@ -19,25 +18,29 @@ final class AgentConfigState {
     @ObservationIgnored private let ensureDaemon: () async throws -> Void
     @ObservationIgnored private let sendRequest: (DaemonRequest) async throws -> DaemonResponse
 
+    #if os(macOS)
     init(
         ensureDaemon: @escaping () async throws -> Void = { try await DaemonLifecycle.ensureDaemon() },
         sendRequest: ((DaemonRequest) async throws -> DaemonResponse)? = nil
     ) {
         self.ensureDaemon = ensureDaemon
-        let client = DaemonClient()
+        let client = DaemonEndpoint.local.makeClient()
         self.sendRequest = sendRequest ?? { try await client.send($0) }
     }
+    #else
+    /// iOS has no local daemon to start. `AppState` builds one per machine on that machine's
+    /// client (IPAD-012); these defaults report that no daemon is running.
+    init(
+        ensureDaemon: @escaping () async throws -> Void = { throw DaemonClientError.notRunning },
+        sendRequest: ((DaemonRequest) async throws -> DaemonResponse)? = nil
+    ) {
+        self.ensureDaemon = ensureDaemon
+        self.sendRequest = sendRequest ?? { _ in throw DaemonClientError.notRunning }
+    }
+    #endif
 
     func loadGlobalSettings() async {
         await sendGlobalSettings(.getGlobalAgentSettings)
-    }
-
-    func updateGlobalSettings(codexYolo: Bool, projectRoot: String?) async {
-        guard !isSavingGlobalSettings else { return }
-        isSavingGlobalSettings = true
-        await sendGlobalSettings(.updateGlobalAgentSettings(codexYolo: codexYolo))
-        if let projectRoot { await load(projectRoot: projectRoot) }
-        isSavingGlobalSettings = false
     }
 
     /// Save the machine-level launch args for one agent type; a blank string removes them.
@@ -61,13 +64,12 @@ final class AgentConfigState {
         do {
             try await ensureDaemon()
             switch try await sendRequest(request) {
-            case .globalAgentSettingsReport(let yolo, let tracking, let launchArgs):
-                codexYolo = yolo
+            case .globalAgentSettingsReport(let tracking, let launchArgs):
                 agentStatusTracking = tracking
                 globalSettingsLoaded = true
                 if let launchArgs {
                     machineLaunchArgs = launchArgs
-                } else if case .updateGlobalAgentSettings(_, _, .some) = request {
+                } else if case .updateGlobalAgentSettings(_, .some) = request {
                     globalError = Self.oldDaemonMessage("save launch args for all projects")
                 }
             case .error(_, let message):

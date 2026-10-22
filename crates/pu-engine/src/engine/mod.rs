@@ -57,6 +57,8 @@ pub(super) struct SpawnParams {
     no_trigger: bool,
     /// Name of trigger to bind (from --trigger flag)
     trigger: Option<String>,
+    /// The app tab the agent is for, stored on its manifest entry.
+    placement: Option<pu_core::types::SpawnPlacement>,
 }
 
 pub(super) struct SaveTriggerParams {
@@ -89,8 +91,13 @@ pub struct Engine {
     grid_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<GridCommand>>>>,
     /// Per-project broadcast channels for status push updates.
     status_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
-    /// Projects that have been initialized or used — scheduler scans these.
-    registered_projects: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Projects added with `Init` and not removed since — scheduler scans these —
+    /// in the order clients show them.
+    registered_projects: Arc<std::sync::Mutex<Vec<String>>>,
+    /// Signalled whenever a project is added, removed or reordered in the registry.
+    projects_changed: tokio::sync::broadcast::Sender<()>,
+    /// False from loading a registry until its removed projects are dropped.
+    registry_ready: tokio::sync::watch::Sender<bool>,
     /// Agents with a resume in progress, so two resumes of one agent can never
     /// both spawn `claude --resume` on the same transcript.
     resuming: Arc<std::sync::Mutex<HashSet<String>>>,
@@ -134,7 +141,6 @@ fn config_to_report(
                 interactive: ac.interactive,
                 project_launch_args: ac.launch_args.as_deref().map(format_launch_args),
                 machine_launch_args: ac.machine_launch_args.as_deref().map(format_launch_args),
-                policy_launch_args: ac.policy_launch_args.as_deref().map(format_launch_args),
                 resolved_command: Some(resolved_command),
             }
         })
@@ -204,7 +210,9 @@ impl Engine {
             reaped_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
             grid_channels: Arc::new(Mutex::new(HashMap::new())),
             status_channels: Arc::new(Mutex::new(HashMap::new())),
-            registered_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            registered_projects: Arc::new(std::sync::Mutex::new(Vec::new())),
+            projects_changed: tokio::sync::broadcast::channel(16).0,
+            registry_ready: tokio::sync::watch::Sender::new(true),
             resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
             shutdown_killed: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
@@ -297,11 +305,7 @@ impl Engine {
     pub fn registered_projects(&self) -> Vec<String> {
         self.registered_projects
             .lock()
-            .map(|p| {
-                let mut roots: Vec<_> = p.iter().cloned().collect();
-                roots.sort();
-                roots
-            })
+            .map(|p| p.clone())
             .unwrap_or_default()
     }
 
@@ -409,6 +413,12 @@ impl Engine {
                 kind,
                 state,
             } => Response::Inventory(self.inventory(project_root, kind, state).await),
+            Request::ReorderProjects { project_roots } => {
+                match self.reorder_projects(project_roots).await {
+                    Ok(project_roots) => Response::ProjectOrder { project_roots },
+                    Err(response) => response,
+                }
+            }
             Request::ResolveAgent {
                 agent_id,
                 project_root,
@@ -436,6 +446,14 @@ impl Engine {
                 }
                 response
             }
+            Request::RemoveProject {
+                project_root,
+                suspend_agents,
+            } => {
+                self.handle_remove_project(&project_root, suspend_agents)
+                    .await
+            }
+            Request::SubscribeProjects => Response::ProjectsSubscribed,
             Request::Rename {
                 project_root,
                 agent_id,
@@ -452,12 +470,10 @@ impl Engine {
             Request::GetConfig { project_root } => self.handle_get_config(&project_root).await,
             Request::GetGlobalAgentSettings => self.handle_global_agent_settings(None).await,
             Request::UpdateGlobalAgentSettings {
-                codex_yolo,
                 launch_args,
                 agent_status_tracking,
             } => {
                 self.handle_global_agent_settings(Some(config::GlobalAgentSettingsUpdate {
-                    codex_yolo,
                     agent_status_tracking,
                     launch_args: launch_args.unwrap_or_default(),
                 }))
@@ -491,6 +507,7 @@ impl Engine {
                 plan_mode,
                 no_trigger,
                 trigger,
+                placement,
             } => {
                 self.handle_spawn(SpawnParams {
                     project_root,
@@ -506,6 +523,7 @@ impl Engine {
                     plan_mode,
                     no_trigger,
                     trigger,
+                    placement,
                 })
                 .await
             }
@@ -913,7 +931,7 @@ impl Engine {
             };
             match result {
                 Ok(settings) => Response::GlobalAgentSettingsReport {
-                    codex_yolo: settings.codex_yolo,
+                    codex_yolo: false,
                     agent_status_tracking: settings.agent_status_tracking,
                     launch_args: settings
                         .launch_args
@@ -1084,6 +1102,7 @@ mod tests {
                 plan_mode: false,
                 no_trigger: false,
                 trigger: None,
+                placement: None,
             })
             .await;
 
@@ -1110,6 +1129,65 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn given_spawn_with_placement_should_record_it_on_manifest_and_status() {
+        let tmp = TempDir::new().unwrap();
+        let project_root = tmp.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let pr = project_root.to_string_lossy().to_string();
+        let placement = pu_core::types::SpawnPlacement {
+            workspace: "ws-ag-1".into(),
+            surface: 4,
+        };
+
+        let engine = Engine::new();
+        engine
+            .handle_request(Request::Init {
+                project_root: pr.clone(),
+            })
+            .await;
+        let resp = engine
+            .handle_request(Request::Spawn {
+                project_root: pr.clone(),
+                prompt: String::new(),
+                agent: "terminal".into(),
+                name: None,
+                base: None,
+                root: true,
+                worktree: None,
+                command: None,
+                no_auto: false,
+                extra_args: vec![],
+                plan_mode: false,
+                no_trigger: true,
+                trigger: None,
+                placement: Some(placement.clone()),
+            })
+            .await;
+        let agent_id = match resp {
+            Response::SpawnResult { agent_id, .. } => agent_id,
+            other => panic!("expected SpawnResult, got {other:?}"),
+        };
+
+        let m = pu_core::manifest::read_manifest(&project_root).unwrap();
+        let Some(pu_core::types::AgentLocation::Root(agent)) = m.find_agent(&agent_id) else {
+            panic!("agent missing from manifest");
+        };
+        assert_eq!(agent.placement, Some(placement.clone()));
+
+        let status = engine
+            .handle_request(Request::Status {
+                project_root: pr,
+                agent_id: Some(agent_id.clone()),
+            })
+            .await;
+        match status {
+            Response::AgentStatus(report) => assert_eq!(report.placement, Some(placement)),
+            other => panic!("expected AgentStatus, got {other:?}"),
+        }
+        engine.kill_agents(&[agent_id]).await;
     }
 
     #[test]
@@ -1162,20 +1240,16 @@ mod tests {
             interactive: true,
             launch_args,
             machine_launch_args: None,
-            policy_launch_args: None,
         }
     }
 
     #[test]
-    fn given_yolo_policy_should_report_project_launch_args_unchanged() {
-        // given — Codex YOLO rewrote the project's args into the policy slot
+    fn given_project_and_machine_launch_args_should_report_both_and_resolve_project() {
+        // given
         let mut cfg = pu_core::types::Config::default();
         let codex = cfg.agents.get_mut("codex").unwrap();
         codex.launch_args = Some(vec!["--search".into()]);
-        codex.policy_launch_args = Some(vec![
-            "--search".into(),
-            "--dangerously-bypass-approvals-and-sandbox".into(),
-        ]);
+        codex.machine_launch_args = Some(vec!["--sandbox".into(), "read-only".into()]);
 
         // when
         let Response::ConfigReport { agents, .. } = config_to_report(&cfg, Path::new("/"), &[])
@@ -1187,13 +1261,10 @@ mod tests {
         let codex = agents.iter().find(|a| a.name == "codex").unwrap();
         assert_eq!(codex.project_launch_args.as_deref(), Some("--search"));
         assert_eq!(
-            codex.policy_launch_args.as_deref(),
-            Some("--search --dangerously-bypass-approvals-and-sandbox")
+            codex.machine_launch_args.as_deref(),
+            Some("--sandbox read-only")
         );
-        assert_eq!(
-            codex.resolved_launch_args,
-            vec!["--search", "--dangerously-bypass-approvals-and-sandbox"]
-        );
+        assert_eq!(codex.resolved_launch_args, vec!["--search"]);
     }
 
     #[test]
@@ -1445,7 +1516,6 @@ mod tests {
             interactive: true,
             launch_args: None,
             machine_launch_args: None,
-            policy_launch_args: None,
         }
     }
 
@@ -1500,7 +1570,6 @@ mod workspace_catalog_tests {
             interactive: true,
             launch_args: None,
             machine_launch_args: None,
-            policy_launch_args: None,
         }
     }
 

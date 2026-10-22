@@ -11,12 +11,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-std"] }
 clap = { version = "4", features = ["derive"] }
 owo-colors = "4"
 shell-words = "1"
 which = "8"
 libc = "0.2"
+qrcode = { version = "0.14", default-features = false }
 
 [[bin]]
 name = "pu"

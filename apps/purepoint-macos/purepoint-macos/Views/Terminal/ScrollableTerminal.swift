@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftTerm
 
@@ -26,6 +27,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     private var scrollMonitor: Any?
     private var mouseMonitor: Any?
     private var pasteMonitor: Any?
+    private var hoverMonitor: Any?
     private var dragAutoscrollTimer: DispatchSourceTimer?
     private var lastDragEvent: NSEvent?
     /// True only between a mouse-down that hit this terminal and the matching mouse-up,
@@ -76,6 +78,15 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
             return event
         }
 
+        // SwiftTerm reports a buttonless hover in SGR mode as a left-button release
+        // (`CSI <32;x;y m`), so any-event TUIs like Claude Code click wherever the
+        // pointer passes. Its mouseMoved also ignores allowMouseReporting. The
+        // protocol is private, so a correct report can't be sent; drop hovers instead.
+        hoverMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+            guard let self, self.isHoverReport(event) else { return event }
+            return nil
+        }
+
         // SwiftTerm's paste only handles text; an image on the clipboard is uploaded instead.
         pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.handlePasteImage(event) else { return event }
@@ -121,6 +132,10 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         if let mouseMonitor {
             NSEvent.removeMonitor(mouseMonitor)
             self.mouseMonitor = nil
+        }
+        if let hoverMonitor {
+            NSEvent.removeMonitor(hoverMonitor)
+            self.hoverMonitor = nil
         }
         if let scrollMonitor {
             NSEvent.removeMonitor(scrollMonitor)
@@ -403,6 +418,18 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         return false
     }
 
+    /// A pointer move over this terminal that SwiftTerm would report to the app.
+    /// Cached panes stay in the window hidden, so a hidden terminal must not claim
+    /// hovers over the visible one. Bounds, not hit-testing: SwiftTerm's tracking
+    /// area still reports moves under views that overlap the terminal.
+    private func isHoverReport(_ event: NSEvent) -> Bool {
+        guard event.window === terminalView.window,
+            !terminalView.isHiddenOrHasHiddenAncestor,
+            terminalView.getTerminal().mouseMode.sendMotionEvent()
+        else { return false }
+        return terminalView.bounds.contains(terminalView.convert(event.locationInWindow, from: nil))
+    }
+
     private func updateDragAutoscroll(for event: NSEvent) {
         let point = terminalView.convert(event.locationInWindow, from: nil)
         let outside = point.y < 0 || point.y > terminalView.bounds.height
@@ -534,3 +561,4 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         }
     }
 }
+#endif

@@ -1,3 +1,4 @@
+#if os(macOS)
 import Combine
 import Foundation
 
@@ -17,6 +18,8 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     @Published private(set) var auth: PiJSONValue = .null
     @Published private(set) var enrollment: PiJSONValue = .null
     @Published private(set) var devices: [PiJSONValue] = []
+    /// Devices with an access change or revoke in flight; their row stays disabled until it lands.
+    @Published private(set) var deviceUpdates: Set<String> = []
     @Published private(set) var restartRequired = false
     @Published private(set) var hasPendingAuthCleanup = false
     @Published private(set) var hasPendingEnrollmentCleanup = false
@@ -317,10 +320,6 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
             if enrollmentStatus == "consumed" { await refresh() }
         } catch { self.error = error.localizedDescription }
     }
-    func rotateDevice(_ id: String) async {
-        do { _ = try await request("devices.rotate", fields: ["deviceId": .string(id)]); await refresh() }
-        catch { self.error = error.localizedDescription }
-    }
     @discardableResult func retryEnrollmentCleanup() async -> Bool {
         let lifetime = runtimeGeneration
         for id in pendingEnrollmentCleanup.sorted() {
@@ -344,17 +343,30 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         enrollment = .null; enrollmentStatus = ""
         _ = await retryEnrollmentCleanup()
     }
-    func setTerminalPermission(_ id: String, permission: String) async {
-        do { _ = try await request("devices.terminals", fields: ["deviceId": .string(id), "terminals": .string(permission)]); await refresh() }
-        catch { self.error = error.localizedDescription }
-    }
-
-    func setWorkspaceManagement(_ id: String, allowed: Bool) async {
-        do { _ = try await request("devices.workspaceManagement", fields: ["deviceId": .string(id), "workspaceManagement": .bool(allowed)]); await refresh() }
-        catch { self.error = error.localizedDescription }
+    /// Moves a device to `level` from its stored grants. One change per device at a time.
+    func setAccess(_ id: String, to level: PointGuardPhoneAccess.Level) async {
+        guard !deviceUpdates.contains(id),
+              let device = devices.first(where: { $0["deviceId"].text == id }) else { return }
+        deviceUpdates.insert(id)
+        defer { deviceUpdates.remove(id) }
+        let stored: Bool = { if case .bool(let allowed) = device["workspaceManagement"] { return allowed }; return false }()
+        do {
+            for step in PointGuardPhoneAccess.steps(terminals: device["terminals"].text ?? "off", workspaceManagement: stored, to: level) {
+                switch step {
+                case .workspaceManagement(let allowed):
+                    _ = try await request("devices.workspaceManagement", fields: ["deviceId": .string(id), "workspaceManagement": .bool(allowed)])
+                case .terminals(let terminals):
+                    _ = try await request("devices.terminals", fields: ["deviceId": .string(id), "terminals": .string(terminals)])
+                }
+            }
+        } catch { self.error = error.localizedDescription }
+        await refresh()
     }
 
     func revokeDevice(_ id: String) async {
+        guard !deviceUpdates.contains(id) else { return }
+        deviceUpdates.insert(id)
+        defer { deviceUpdates.remove(id) }
         do { _ = try await request("devices.revoke", fields: ["deviceId": .string(id)]); await refresh() }
         catch { self.error = error.localizedDescription }
     }
@@ -447,6 +459,47 @@ private extension PiJSONValue {
 /// What a paired device's grants allow, including Point Guard chat, which follows them:
 /// Point Guard has a shell and the `pu` CLI, so sending to it is full control.
 enum PointGuardPhoneAccess {
+    /// The device grants as one choice. New devices pair with full access.
+    enum Level: String, CaseIterable, Identifiable {
+        case full, terminals, view, off
+        var id: String { rawValue }
+        init(terminals: String, workspaceManagement: Bool) {
+            switch terminals {
+            case "control": self = workspaceManagement ? .full : .terminals
+            case "view": self = .view
+            default: self = .off
+            }
+        }
+        var terminals: String {
+            switch self {
+            case .full, .terminals: return "control"
+            case .view: return "view"
+            case .off: return "off"
+            }
+        }
+        var workspaceManagement: Bool { self == .full }
+        var title: String {
+            switch self {
+            case .full: return "Full access"
+            case .terminals: return "Terminals only"
+            case .view: return "View only"
+            case .off: return "No access"
+            }
+        }
+    }
+    enum Step: Equatable { case workspaceManagement(Bool), terminals(String) }
+
+    /// The grant writes that move a device's stored grants to `level`. Works from the raw stored
+    /// values, so a legacy management grant hidden under View or Off is still cleared. Workspace
+    /// management requires Control, so it is dropped before terminals change and added after.
+    static func steps(terminals: String, workspaceManagement: Bool, to level: Level) -> [Step] {
+        var steps: [Step] = []
+        if workspaceManagement && !level.workspaceManagement { steps.append(.workspaceManagement(false)) }
+        if terminals != level.terminals { steps.append(.terminals(level.terminals)) }
+        if !workspaceManagement && level.workspaceManagement { steps.append(.workspaceManagement(true)) }
+        return steps
+    }
+
     static func summary(terminals: String, workspaceManagement: Bool) -> String {
         switch terminals {
         case "control" where workspaceManagement:
@@ -460,3 +513,4 @@ enum PointGuardPhoneAccess {
         }
     }
 }
+#endif

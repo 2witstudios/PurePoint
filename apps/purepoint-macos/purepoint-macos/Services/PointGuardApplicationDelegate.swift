@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 /// Quit and update wait for the exact owned runtime; busy work needs a deliberate choice.
@@ -47,3 +48,4 @@ import AppKit
         return .terminateLater
     }
 }
+#endif

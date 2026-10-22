@@ -48,7 +48,7 @@ struct AgentTerminalView: UIViewRepresentable {
     func makeUIView(context: Context) -> UIScrollView {
         let scroll = AnchoredScrollView()
         scroll.minimumZoomScale = 0.5; scroll.maximumZoomScale = 3
-        scroll.backgroundColor = .black; scroll.delegate = context.coordinator
+        scroll.backgroundColor = Theme.terminalBackground; scroll.delegate = context.coordinator
         scroll.alwaysBounceHorizontal = true; scroll.isDirectionalLockEnabled = true
         scroll.contentInsetAdjustmentBehavior = .never
         scroll.accessibilityLabel = "Agent terminal. Tap to hide the keyboard. Pinch to zoom, double-tap to fit width."
@@ -120,7 +120,7 @@ struct AgentTerminalView: UIViewRepresentable {
                 let view = ReadOnlyAgentTerminal(frame: CGRect(x: 0, y: 0, width: 800, height: 480), font: terminalFont)
                 view.terminalDelegate = self; view.allowMouseReporting = false
                 view.disableBuiltInSelection()
-                view.nativeBackgroundColor = .black; view.nativeForegroundColor = .white
+                view.nativeBackgroundColor = Theme.terminalBackground; view.nativeForegroundColor = .white
                 terminal = view; scroll.addSubview(view)
                 let pan = UIPanGestureRecognizer(target: self, action: #selector(scrollAgent(_:)))
                 pan.maximumNumberOfTouches = 1

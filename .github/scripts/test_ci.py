@@ -56,6 +56,28 @@ class RoutingTests(unittest.TestCase):
                 self.assertFalse(flags["universal"])
                 self.assertEqual([t["runner"] for t in flags["runtime_targets"]], ["macos-26"])
 
+    def test_linux_phone_payload_routing(self):
+        for paths, expected in (
+            (["README.md"], False),
+            (["apps/purepoint-mobile/PurePoint/ChatModel.swift"], False),
+            (["apps/purepoint-mobile/bridge/core.test.js"], False),
+            (["crates/pu-engine/src/engine.rs"], False),
+            (["apps/purepoint-mobile/bridge/core.js"], True),
+            (["apps/purepoint-mobile/runtime/package-runtime.py"], True),
+            (["apps/purepoint-mobile/runtime/prove-linux-runtime.mjs"], True),
+            (["apps/purepoint-mobile/runtime/node-release.json"], True),
+            (["apps/purepoint-mobile/package-lock.json"], True),
+            (["scripts/install.sh"], True),
+            (["crates/pu-cli/src/phone.rs"], True),
+            (["crates/pu-cli/src/commands/phone.rs"], True),
+            (["Cargo.lock"], True),
+            ([".github/workflows/release.yml"], True),
+            ([".github/workflows/macos.yml"], True),
+        ):
+            with self.subTest(paths=paths):
+                self.assertIs(components(paths)["linux_phone"], expected)
+        self.assertTrue(components([], full=True)["linux_phone"])
+
     def test_crates_only_pull_request_skips_packaging_and_ios(self):
         flags = components(["crates/pu-engine/src/engine.rs", "crates/pu-core/src/protocol.rs"])
         self.assertFalse(flags["packaging"])
@@ -148,7 +170,7 @@ class GateTests(unittest.TestCase):
     def test_every_routed_job_is_gated(self):
         self.assertEqual({job for job, _ in CHECKS}, {
             "macos", "release-archive", "mobile-bridge", "mobile-swift",
-            "runtime-package", "runtime-universal", "runtime-rust",
+            "runtime-package", "runtime-universal", "runtime-rust", "runtime-linux",
         })
 
     def test_only_unaffected_jobs_may_skip(self):

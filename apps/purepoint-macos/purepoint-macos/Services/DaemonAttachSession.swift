@@ -1,17 +1,15 @@
-import AppKit
 import Foundation
-import Network
 import SwiftTerm
 
 /// Manages a single attach connection per terminal view.
 /// Connects to the daemon, streams Output messages, and feeds bytes to the terminal.
-/// Actor isolation serializes all writes to the NWConnection, preventing garbled JSON.
+/// Actor isolation serializes all writes to the daemon stream, preventing garbled JSON.
 actor DaemonAttachSession {
     let agentId: String
     private let clientId = "mac:" + UUID().uuidString
     private var desiredSize: (Int, Int)?
-    private weak var terminalView: TerminalView?
-    private var connection: NWConnection?
+    private weak var terminalView: PlatformTerminalView?
+    private var connection: (any DaemonByteStream)?
     private var stopped = false
     private(set) var isAgentGone = false
     /// True once the daemon closed an attached stream on its own, which it does
@@ -33,12 +31,12 @@ actor DaemonAttachSession {
 
     init(
         agentId: String,
-        terminalView: TerminalView,
+        terminalView: PlatformTerminalView,
         resetBeforeReplay: Bool = false,
         localCols: Int = 120, localRows: Int = 40,
         onFirstOutput: (() -> Void)? = nil,
         onOutput: (@MainActor @Sendable () -> Void)? = nil,
-        client: DaemonClient = DaemonClient()
+        client: DaemonClient = DaemonEndpoint.local.makeClient()
     ) {
         self.desiredSize = (localCols, localRows)
         self.client = client
@@ -76,6 +74,15 @@ actor DaemonAttachSession {
                 isAgentGone = true
                 break
             } catch {
+                #if os(iOS)
+                // A suspended app loses its SSH streams: reconnect when it returns to the foreground,
+                // without spending retries while it is in the background.
+                if await AppActivity.shared.isInBackground {
+                    await AppActivity.shared.untilForeground()
+                    retries = 0
+                    continue
+                }
+                #endif
                 // Connection lost — attempt reconnect with backoff
                 retries += 1
                 print("[DaemonAttach \(agentId.prefix(8))] retry \(retries): \(error.localizedDescription)")
@@ -101,7 +108,7 @@ actor DaemonAttachSession {
     /// `timeout` for a reconnect when the attach connection is down.
     func deliverInput(_ data: Data, timeout: Duration = .seconds(5)) async -> Bool {
         let deadline = ContinuousClock.now + timeout
-        var failed: NWConnection?
+        var failed: (any DaemonByteStream)?
         while !stopped, !isAgentGone, !didStreamEnd {
             // Retry only on a new connection: a failed one stays set until replaced.
             if let conn = connection, conn !== failed {
@@ -139,7 +146,7 @@ actor DaemonAttachSession {
     /// Stop the attach session.
     func stop() {
         stopped = true
-        connection?.cancel()
+        connection?.close()
         connection = nil
     }
 
@@ -151,7 +158,12 @@ actor DaemonAttachSession {
         let tv = self.terminalView
 
         let (conn, reader) = try await client.connect()
-        self.connection?.cancel()
+        // `stop()` may have run while connecting; it could not close this stream.
+        guard !stopped else {
+            conn.close()
+            throw CancellationError()
+        }
+        self.connection?.close()
         self.connection = conn
 
         // Send attach request
@@ -175,7 +187,7 @@ actor DaemonAttachSession {
 
         let focused = await MainActor.run {
             guard let tv else { return false }
-            return tv.window?.firstResponder === tv
+            return tv.hasKeyboardFocus
         }
         if focused { await claimSize() }
 
@@ -201,7 +213,7 @@ actor DaemonAttachSession {
                 termRows = rows
                 await MainActor.run {
                     guard let tv else { return }
-                    (tv.superview as? ScrollableTerminal)?.applyReportedSize(cols: cols, rows: rows)
+                    tv.applyReportedPtySize(cols: cols, rows: rows)
                 }
             case .output(_, let data):
                 guard !data.isEmpty else { continue }

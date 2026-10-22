@@ -122,6 +122,33 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "contents": "read", "id-token": "write", "attestations": "write", "artifact-metadata": "write",
         })
 
+
+    def test_phone_payloads_are_signed_attested_and_gate_publishing(self):
+        self.assertIn("linux-phone", self.jobs["sign-linux"]["needs"])
+        self.assertIn("linux-phone", self.jobs["attest"]["needs"])
+        self.assertIn("linux-phone", self.jobs["publish"]["needs"])
+        npm_sbom = [step for step in steps(self.jobs["attest"]) if step.get("name") == "Attest Point Guard npm SBOM"]
+        self.assertIn("dist/purepoint-pointguard-*.tar.gz", npm_sbom[0]["with"]["subject-path"])
+
+    def test_linux_build_ships_the_lock_helper_and_phone_payload_is_proven(self):
+        self.assertIn("pu-point-guard-lock", run_text(self.jobs["linux"]))
+        phone = self.jobs["linux-phone"]
+        self.assertEqual(phone["permissions"], {"contents": "read"})
+        self.assertEqual(set(phone["needs"]), {"version", "linux"})
+        self.assertEqual(
+            {(leg["arch"], leg["node_target"], leg["runner"]) for leg in phone["strategy"]["matrix"]["include"]},
+            {("x86_64", "linux-x64", "ubuntu-latest"), ("aarch64", "linux-arm64", "ubuntu-24.04-arm")},
+        )
+        text = run_text(phone)
+        self.assertIn("--layout dir", text)
+        self.assertIn('--lock-helper "$PU_DIR/pu-point-guard-lock"', text)
+        self.assertIn("sha256sum -c", text)
+        self.assertIn("prove-linux-runtime.mjs", text)
+        self.assertIn("env -i HOME=", text)
+        self.assertIn("--in-place", text)
+        # No ${{ }} expression is expanded inside a run script.
+        for step in steps(phone):
+            self.assertNotIn("${{", step.get("run", ""))
     def test_write_token_reaches_only_the_steps_that_publish(self):
         publish = self.jobs["publish"]
         self.assertNotIn("GH_TOKEN", publish.get("env", {}))

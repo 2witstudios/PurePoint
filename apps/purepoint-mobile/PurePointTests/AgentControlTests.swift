@@ -19,6 +19,20 @@ final class AgentControlTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testGivenAProjectOrderShouldListThoseProjectsFirstAndKeepTheRest() throws {
+        let projects = try ["/a", "/b", "/c", "/d"].map { id in
+            try JSONDecoder().decode(
+                WorkspaceProject.self, from: Data(#"{"id":"\#(id)","name":"n","available":true,"error":null}"#.utf8))
+        }
+        let ordered = AgentControlModel.ordered(projects, by: ["/c", "/gone", "/a"])
+        XCTAssertEqual(ordered.map(\.id), ["/c", "/a", "/b", "/d"])
+        let receipt = try JSONDecoder().decode(
+            WorkspaceOperation.self,
+            from: Data(#"{"operationId":"op-0001","state":"succeeded","detail":{"projectIds":["/c","/a"]}}"#.utf8))
+        XCTAssertEqual(receipt.detail?.projectIds, ["/c", "/a"])
+    }
+
     func testGivenUnknownScreenAwarePhaseShouldBlockPromptWhileLegacyStaysUnconfirmed() throws {
         for phase in ["null", "\"unknown\""] {
             let wire =
@@ -83,6 +97,12 @@ extension AgentControlTests {
 
     @MainActor func testGivenEveryPromptResultShouldKeepDraftsAndReconnectMustNeverResend() async throws {
         try await AgentControlScenarios.allPromptOutcomesAndNoResend()
+    }
+    @MainActor func testGivenTransportDropShouldReopenSameAgentOnlyOnSameHostUnlessClosed() async throws {
+        try await AgentControlScenarios.reconnectReopensDroppedAgentOnlyOnSameHost()
+    }
+    @MainActor func testGivenDroppedAgentMissingAfterReconnectShouldStayClosed() async throws {
+        try await AgentControlScenarios.reconnectSkipsDroppedAgentMissingFromInventory()
     }
     @MainActor func testGivenEventsBeforeOpenReceiptAndResetShouldRenderOnlyCurrentSnapshot() async throws {
         try await AgentControlScenarios.eventsBeforeReceiptAndReset()

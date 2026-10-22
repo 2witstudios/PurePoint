@@ -13,7 +13,11 @@ mac = root.parent.parent / 'purepoint-macos/purepoint-macos'
 files = [root / 'ChatMarkdown.swift', root / 'ChatMarkdownView.swift', root / 'ChatBubble.swift', root / 'DesktopChatPreview.swift',
          mac / 'Views/Chat/PiPointGuardChatView.swift', mac / 'Models/PiChatDomain.swift',
          mac / 'State/PiChatModel.swift', mac / 'Services/PiPairingSecret.swift',
-         mac / 'Services/PiAttachmentImport.swift', mac / 'Theme/PurePointTheme.swift']
+         mac / 'Services/PiAttachmentImport.swift', mac / 'Theme/PurePointTheme.swift',
+         mac / 'Views/Chat/PointGuardCourtView.swift', mac / 'Models/PointGuardPlays.swift',
+         mac / 'Theme/Theme.swift', mac / 'Views/Chat/PiTranscriptScrollCoordinator.swift',
+         mac / 'Views/Chat/MarkdownTextView.swift', mac / 'Views/Chat/CodeBlockView.swift',
+         mac / 'Views/Chat/PointGuardConversationLayout.swift', mac / 'Views/PresentedControlDefaults.swift']
 env = dict(os.environ, DEVELOPER_DIR='/Applications/Xcode.app/Contents/Developer')
 sdk = subprocess.check_output(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], env=env, text=True).strip()
 platform_developer = Path(sdk).parents[1]

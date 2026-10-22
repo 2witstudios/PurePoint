@@ -21,6 +21,11 @@ final class MachineState: Identifiable {
     /// anything that has to tell the two apart — the sidebar replaying which rows are closed
     /// — reads this instead.
     private(set) var hasLoadedProjects = false
+    #if os(iOS)
+    /// The host key the last connect refused: one to confirm on first use, or one that
+    /// differs from the pin (IPAD-009). Nil once a connect passes the host-key check.
+    private(set) var hostKeyRefusal: SSHTrustError?
+    #endif
 
     /// Whether this machine answers for the rows it shows: its daemon is running and has
     /// reported its list at least once. A machine that is connecting, offline, or whose
@@ -36,13 +41,19 @@ final class MachineState: Identifiable {
     @ObservationIgnored private var connection: MachineConnection!
     @ObservationIgnored private var connectionGeneration = 0
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    /// Pushes the daemon's project list on every add or remove; the poll is the fallback.
+    @ObservationIgnored private var projectsSubscription: DaemonProjectsSubscription?
     @ObservationIgnored private var hiddenRoots: Set<String>
     /// Closing the forward after pending layout saves were flushed; a reconnect waits for it.
     @ObservationIgnored private var disconnectTask: Task<Void, Never>?
     @ObservationIgnored private var isUserDisconnecting = false
 
-    /// How often the project list is re-read while the daemon is up.
+    /// How often the project list is re-read while the daemon is up, in case a pushed
+    /// change was missed.
     private static let refreshInterval: Duration = .seconds(30)
+    /// Bumped by each local move, so a project list fetched before it can't undo it.
+    @ObservationIgnored private var orderRevision = 0
+    @ObservationIgnored private lazy var orderSaver = ProjectOrderSaver(endpoint: endpoint)
 
     var endpoint: DaemonEndpoint { .machine(machine.id) }
     var isConnectedOrConnecting: Bool { state != .disconnected }
@@ -74,6 +85,22 @@ final class MachineState: Identifiable {
     @MainActor
     private static func makeConnection(for state: MachineState, generation: Int) -> MachineConnection {
         let owner = WeakMachineState()
+        #if os(iOS)
+        let connection = MachineConnection(
+            machine: state.machine,
+            onTrust: { refusal in
+                Task { @MainActor in
+                    guard owner.value?.connectionGeneration == generation else { return }
+                    owner.value?.applyHostKeyRefusal(refusal)
+                }
+            },
+            onState: { newState in
+                Task { @MainActor in
+                    guard owner.value?.connectionGeneration == generation else { return }
+                    owner.value?.apply(newState)
+                }
+            })
+        #else
         let connection = MachineConnection(machine: state.machine) { newState in
             Task { @MainActor in
                 // Ignore callbacks from a superseded connection.
@@ -81,12 +108,20 @@ final class MachineState: Identifiable {
                 owner.value?.apply(newState)
             }
         }
+        #endif
         owner.value = state
         return connection
     }
 
     var statusText: String {
-        switch state {
+        #if os(iOS)
+        switch hostKeyRefusal {
+        case .hostKeyChanged?: return "Host key changed"
+        case .hostKeyUnconfirmed?: return "Confirm host key"
+        case nil: break
+        }
+        #endif
+        return switch state {
         case .disconnected: "Disconnected"
         case .connecting: "Connecting…"
         case .connected(.running):
@@ -118,8 +153,7 @@ final class MachineState: Identifiable {
     func disconnect(remember: Bool = false, keepUnsaved: Bool = false) {
         if remember { Self.setUserDisconnected(machine.id, true) }
         isUserDisconnecting = true
-        refreshTask?.cancel()
-        refreshTask = nil
+        stopRefreshing()
         let savers = removeAllProjects(keepingUnsaved: keepUnsaved)
         state = .disconnected
         let connection = self.connection!
@@ -137,8 +171,7 @@ final class MachineState: Identifiable {
     /// Quit: write pending layout saves synchronously (bounded), then close the forward.
     func disconnectForTermination(deadline: DispatchTime) {
         isUserDisconnecting = true
-        refreshTask?.cancel()
-        refreshTask = nil
+        stopRefreshing()
         for saver in removeAllProjects(keepingUnsaved: false) { saver.flush(until: deadline) }
         state = .disconnected
         let connection = self.connection!
@@ -196,6 +229,64 @@ final class MachineState: Identifiable {
         }
     }
 
+    #if os(iOS)
+    // MARK: - Host key (IPAD-009)
+
+    private func applyHostKeyRefusal(_ refusal: SSHTrustError?) {
+        hostKeyRefusal = refusal
+        #if DEBUG
+        if case .hostKeyUnconfirmed? = refusal, DebugLaunchArguments.current.trustHostKey {
+            confirmHostKey()
+        }
+        #endif
+    }
+
+    /// The user confirmed the host key the machine presented on first use: pin it and connect.
+    func confirmHostKey() {
+        guard case .hostKeyUnconfirmed(let key)? = hostKeyRefusal else { return }
+        do {
+            try HostKeyPinStore.shared.pin(key, machineId: machine.id)
+        } catch {
+            actionError = "Could not trust the host key of \(machine.name): \(error.localizedDescription)"
+            return
+        }
+        hostKeyRefusal = nil
+        reconnectNow()
+    }
+
+    /// Reset Host Key: forget the pin so the next connection asks for confirmation again. Only
+    /// a deliberate user action calls this; a changed key never clears its pin by itself.
+    func resetHostKey() {
+        do {
+            try HostKeyPinStore.shared.reset(machineId: machine.id)
+        } catch {
+            actionError = "Could not reset the host key of \(machine.name): \(error.localizedDescription)"
+            return
+        }
+        hostKeyRefusal = nil
+        reconnectNow()
+    }
+
+    /// Connect again at once (a trusted or reset host key, an imported identity).
+    func reconnectNow() {
+        Self.setUserDisconnected(machine.id, false)
+        isUserDisconnecting = false
+        let connection = self.connection!
+        let pending = disconnectTask
+        Task {
+            await pending?.value
+            await connection.reconnectNow()
+        }
+    }
+
+    /// Back from the background: check the SSH connection still answers, and replace it if
+    /// not (`MachineConnection.checkAfterForeground`).
+    func checkAfterForeground() {
+        let connection = self.connection!
+        Task { await connection.checkAfterForeground() }
+    }
+    #endif
+
     private func apply(_ newState: MachineConnectionState) {
         // Reports still in flight from a connection the user closed must not reopen it.
         if isUserDisconnecting, newState != .disconnected { return }
@@ -204,8 +295,7 @@ final class MachineState: Identifiable {
         if newState.isDaemonRunning {
             if !wasRunning { startRefreshing() }
         } else {
-            refreshTask?.cancel()
-            refreshTask = nil
+            stopRefreshing()
             // An incompatible daemon gets no further requests; a stopped one (after several
             // failed probes) has nothing to stream. Projects come back with the daemon. While
             // only the SSH link is down (connecting/offline) they stay, as do projects with
@@ -218,18 +308,40 @@ final class MachineState: Identifiable {
     // MARK: - Projects
 
     private func startRefreshing() {
-        refreshTask?.cancel()
+        stopRefreshing()
+        let subscription = DaemonProjectsSubscription(client: endpoint.makeClient())
+        projectsSubscription = subscription
+        Task {
+            await subscription.start { [weak self] roots in
+                guard let self, self.projectsSubscription === subscription, self.state.isDaemonRunning else { return }
+                self.setProjects(roots: roots)
+            }
+        }
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
+                #if os(iOS)
+                // Paused in the background; the return to the foreground refreshes at once.
+                await AppActivity.shared.untilForeground()
+                if Task.isCancelled { return }
+                #endif
                 await self?.refreshProjects()
                 do { try await Task.sleep(for: Self.refreshInterval) } catch { return }
             }
         }
     }
 
+    private func stopRefreshing() {
+        refreshTask?.cancel()
+        refreshTask = nil
+        let subscription = projectsSubscription
+        projectsSubscription = nil
+        Task { await subscription?.stop() }
+    }
+
     /// Discover the daemon's registered projects (`inventory`, kind projects, all roots).
     func refreshProjects() async {
         let client = endpoint.makeClient()
+        let revision = orderRevision
         let response: DaemonResponse
         do {
             response = try await client.send(.inventory(kind: "projects"))
@@ -243,6 +355,8 @@ final class MachineState: Identifiable {
         switch response {
         case .inventory(let report):
             actionError = nil
+            // Listed before a move this app made: the next refresh brings the saved order.
+            guard revision == orderRevision else { return }
             setProjects(roots: report.projects.map(\.projectRoot))
         case .error(_, let message):
             actionError = "Could not list projects on \(machine.name): \(message)"
@@ -252,7 +366,11 @@ final class MachineState: Identifiable {
     }
 
     private func setProjects(roots: [String]) {
-        let visible = roots.filter { !hiddenRoots.contains($0) }
+        var visible = roots.filter { !hiddenRoots.contains($0) }
+        if orderSaver.pending > 0 {
+            // The list may predate a move still being saved: keep the order on screen.
+            visible = ProjectOrder.sorted(visible, by: projects.map(\.projectRoot), root: { $0 })
+        }
         let wanted = Set(visible)
         var kept: [ProjectState] = []
         for project in projects where !wanted.contains(project.projectRoot) {
@@ -287,6 +405,22 @@ final class MachineState: Identifiable {
         }
     }
 
+    /// Move a project to `index` among this machine's projects and save the order on the
+    /// machine, so every device lists its projects the same way.
+    func moveProject(root: String, to index: Int) {
+        guard let next = ProjectOrder.moving(root, to: index, in: projects) else { return }
+        projects = next
+        orderRevision += 1
+        orderSaver.save(next.map(\.projectRoot)) { [weak self] in
+            guard let self else { return }
+            Task {
+                // Show the order the machine kept.
+                await self.refreshProjects()
+                self.actionError = "Could not save the project order on \(self.machine.name)."
+            }
+        }
+    }
+
     private func makeProject(root: String) -> ProjectState {
         let endpoint = self.endpoint
         let client = endpoint.makeClient()
@@ -297,7 +431,8 @@ final class MachineState: Identifiable {
         return project
     }
 
-    /// Remove a project from this app only. Nothing on the machine is deleted or stopped.
+    /// Hide a project on this device only. Nothing on the machine is deleted or stopped, and
+    /// other devices still show it; `removeProject` removes it from the machine instead.
     /// Pending layout saves are written, not dropped. Callers confirm discarding unsaved file
     /// tabs first.
     func hideProject(root: String) {
@@ -308,6 +443,13 @@ final class MachineState: Identifiable {
             forget(project)
             projects.removeAll { $0 === project }
         }
+    }
+
+    /// Show a hidden project again; it reappears with the next project refresh.
+    func unhideProject(root: String) {
+        guard hiddenRoots.remove(root) != nil else { return }
+        hiddenCountRevision += 1
+        UserDefaults.standard.set(Array(hiddenRoots), forKey: Self.hiddenKey(machine.id))
     }
 
     /// Drop every project, returning the savers whose queued layout writes should be flushed

@@ -572,6 +572,8 @@ test("authenticated WebSocket fences inventory/input on immediate trust downgrad
       },
     };
   };
+  await trust.setWorkspaceManagement(enrolled.deviceId, false);
+  await trust.setTerminals(enrolled.deviceId, "off");
   const a = await open(),
     b = await open();
   t.after(() => {

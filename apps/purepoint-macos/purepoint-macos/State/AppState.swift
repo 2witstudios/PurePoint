@@ -1,4 +1,9 @@
+#if os(macOS)
 import AppKit
+#else
+import SwiftUI
+import UIKit
+#endif
 import CryptoKit
 import Foundation
 import Observation
@@ -37,11 +42,33 @@ final class AppState {
 
     /// The active project when it is local. Library screens (agent definitions, schedules,
     /// triggers, agent settings) talk to the local daemon only.
+    #if os(macOS)
     var activeLocalProjectRoot: String? {
         guard let activeProjectRoot, !ProjectKey(id: activeProjectRoot).isRemote else {
             return projects.first?.projectRoot
         }
         return activeProjectRoot
+    }
+    #else
+    /// On iPad the library screens talk to the library machine's daemon (IPAD-012), so this is
+    /// the active project's root on that machine, or that machine's first project.
+    var activeLocalProjectRoot: String? {
+        guard let machine = libraryMachine else { return nil }
+        if let activeProjectRoot {
+            let key = ProjectKey(id: activeProjectRoot)
+            if key.machineId == machine.machine.id { return key.root }
+        }
+        return machine.projects.first?.projectRoot
+    }
+    #endif
+
+    /// The project roots the library screens list and create in.
+    var libraryProjectRoots: [String] {
+        #if os(macOS)
+        projects.map(\.projectRoot)
+        #else
+        libraryMachine?.projects.map(\.projectRoot) ?? []
+        #endif
     }
     // ContentView starts on Dashboard before its first selection-change callback.
     var activeSidebarSelection: SidebarSelection? = .nav(.dashboard)
@@ -56,12 +83,23 @@ final class AppState {
     var pendingFocusAgentId: String?
 
     @ObservationIgnored lazy var pointGuardChat = PiChatModel()
+    #if os(macOS)
     @ObservationIgnored lazy var pointGuardService = PointGuardServiceModel()
+    #endif
 
+    #if os(macOS)
     var agentsHubState = AgentsHubState()
     var agentConfigState = AgentConfigState()
     var scheduleState = ScheduleState()
     var triggersState = TriggersState()
+    #else
+    /// The machine the library screens use when the selection names none (IPAD-012).
+    var pickedLibraryMachineId: UUID?
+    /// Each machine's library states, made when its library is first shown
+    /// (`AppState+LibraryScope+iOS.swift`).
+    @ObservationIgnored var libraryStatesByMachine: [UUID: LibraryStates] = [:]
+    @ObservationIgnored lazy var noMachineLibraryStates = LibraryStates(endpoint: nil)
+    #endif
 
     weak var registry: WorkspaceRegistry?
 
@@ -70,17 +108,46 @@ final class AppState {
 
     @ObservationIgnored private let service: any WorkspaceService
     @ObservationIgnored private let startProject: @MainActor (ProjectState) -> Void
+    /// Whether `restoreProjects()` follows the local daemon's project list (off in tests).
+    @ObservationIgnored private let followsLocalDaemon: Bool
+    #if os(macOS)
     @ObservationIgnored private var binaryWatcher: ManifestWatcher?
+    #endif
     @ObservationIgnored private var machineRegistryWatcher: MachineRegistryWatcher?
+    #if os(macOS)
+    /// Follows the local daemon's registered projects, which decide this Mac's sidebar.
+    @ObservationIgnored private var localProjectsSubscription: DaemonProjectsSubscription?
+    /// The local daemon's projects as last reported, to tell a removal from a project
+    /// whose `init` has not reached the daemon yet; nil until the first report.
+    @ObservationIgnored private var lastLocalProjects: Set<String>?
+    /// Each opened root's canonical path, resolved once rather than on every report.
+    @ObservationIgnored private var canonicalRoots: [String: String] = [:]
+    /// The local daemon's project order as last reported.
+    @ObservationIgnored private var localProjectOrder: [String] = []
+    @ObservationIgnored private lazy var localOrderSaver = ProjectOrderSaver(endpoint: .local)
+    #endif
+    /// Point Guard folders the user also opened as sidebar projects. Other Point Guard
+    /// folders stay out of the sidebar even though the daemon has them registered.
+    @ObservationIgnored private var shownPointGuardFolders = Set<String>()
+    /// Whether the first local project list reopens last session's sidebar, whose agents
+    /// this app suspended on quit and resumes. Projects that join later keep theirs paused.
+    @ObservationIgnored private var resumesOnFirstLocalList = false
 
+    /// The sidebar list from before the daemon owned it; read once, then deleted.
     private static let openProjectsKey = "PurePointOpenProjects"
+    private static let shownPointGuardFoldersKey = "PurePointShownPointGuardFolders"
 
     init(
         service: any WorkspaceService = DaemonWorkspaceService(),
-        startProject: @escaping @MainActor (ProjectState) -> Void = { $0.startWatching() }
+        startProject: @escaping @MainActor (ProjectState) -> Void = { $0.startWatching() },
+        followsLocalDaemon: Bool = true
     ) {
         self.service = service
         self.startProject = startProject
+        self.followsLocalDaemon = followsLocalDaemon
+        #if os(iOS)
+        installLifecycleHooks()
+        #endif
     }
 
     var isLoaded: Bool { !projects.isEmpty }
@@ -183,19 +250,25 @@ final class AppState {
 
     // MARK: - Project Management
 
-    func openProject(_ root: String) {
+    /// Open a project on this Mac. iOS has no local machine: every iPad project is
+    /// machine-backed and arrives through its `MachineState`, so a local root never opens.
+    func openProject(_ root: String, resumingSuspendedAgents: Bool = true) {
+        #if os(macOS)
         guard !projects.contains(where: { $0.projectRoot == root }) else { return }
 
         let project = pointGuardProjects.removeValue(forKey: root)
             ?? ProjectState(projectRoot: root, service: service, registry: registry)
         project.appState = self
+        if !resumingSuspendedAgents { project.keepsSuspendedAgentsOnNextOpen = true }
         projects.append(project)
+        if pointGuardFolders.contains(root) { shownPointGuardFolders.insert(root) }
         startProject(project)
         initializeActiveProjectIfNeeded(root: root)
 
         startBinaryWatcherIfNeeded()
 
         persistOpenProjects()
+        #endif
     }
 
     /// Returns true when the root is no longer managed and its local files can be discarded.
@@ -211,10 +284,9 @@ final class AppState {
         }
         guard let index = projects.firstIndex(where: { $0.projectRoot == root }) else { return false }
         let project = projects.remove(at: index)
-        if root == pointGuardRoot || pointGuardFolders.contains(root)
-            || registry?.workspacesByProject[root]?.contains(where: \.isPointGuard) == true
-        {
+        if isPointGuardFolder(root) {
             pointGuardFolders.insert(root)
+            shownPointGuardFolders.remove(root)
             pointGuardProjects[root] = project
         } else {
             project.stopWatching()
@@ -225,6 +297,33 @@ final class AppState {
         }
         persistOpenProjects()
         return projectState(forRoot: root) == nil
+    }
+
+    /// Whether Point Guard uses this local folder, so it must stay registered and followed
+    /// even when it is not in the sidebar.
+    func isPointGuardFolder(_ root: String) -> Bool {
+        root == pointGuardRoot || pointGuardFolders.contains(root)
+            || registry?.workspacesByProject[root]?.contains(where: \.isPointGuard) == true
+    }
+
+    /// Remove a project for every device that shows it: its machine's daemon forgets it
+    /// (`remove_project`), suspending its running agents and keeping its files, and each
+    /// device's sidebar follows. A local folder Point Guard still uses only leaves this
+    /// Mac's sidebar, since Point Guard needs it registered.
+    func removeProject(_ project: ProjectState) async throws {
+        if project.isRemote {
+            guard let machine = machine(for: project) else { return }
+            try await machine.removeProject(root: project.key.root, suspendAgents: true)
+            if activeProjectRoot == project.projectId { activeProjectRoot = projects.first?.projectRoot }
+            return
+        }
+        let root = project.projectRoot
+        if !isPointGuardFolder(root) {
+            // The daemon registered the canonical path; a symlinked one may name a deleted folder.
+            try await DaemonEndpoint.local.makeClient().removeProject(
+                root: Self.canonicalPath(root), suspendAgents: true, daemonName: "The daemon")
+        }
+        closeProject(root)
     }
 
     /// Whether a path is too broad to open as a project: `/`, `$HOME`, or an ancestor
@@ -246,24 +345,174 @@ final class AppState {
         return false
     }
 
+    // MARK: - Project Order
+
+    /// The projects listed beside `project`: the local ones, or its machine's.
+    func siblingProjects(of project: ProjectState) -> [ProjectState] {
+        guard let machineId = project.key.machineId else { return projects }
+        return machines.first { $0.machine.id == machineId }?.projects ?? []
+    }
+
+    /// Move a project to `index` among its siblings. The order is saved on the machine that
+    /// owns the project, so every device lists it the same way.
+    func moveProject(_ project: ProjectState, to index: Int) {
+        if let machine = machine(for: project) {
+            machine.moveProject(root: project.projectRoot, to: index)
+            return
+        }
+        #if os(macOS)
+        guard let next = ProjectOrder.moving(project.projectRoot, to: index, in: projects) else { return }
+        projects = next
+        // On success the daemon pushes the new order to every device following it.
+        localOrderSaver.save(next.map(\.projectRoot)) { [weak self] in
+            guard let self else { return }
+            self.daemonError = "Could not save the project order."
+            self.sortLocalProjects(by: self.localProjectOrder)
+        }
+        #endif
+    }
+
+    /// Open the projects this Mac shows. With a root (`--project-root`) only that one; otherwise
+    /// the local daemon's registered projects, followed from then on, so a project added or
+    /// removed on any device, or with `pu projects`, is added or removed here too.
     func restoreProjects(projectRoot: String? = nil) {
+        // The list saved before the daemon owned it is opened once, which registers each
+        // project with the daemon, and then deleted.
         let paths = projectRoot.map { [$0] }
             ?? UserDefaults.standard.stringArray(forKey: Self.openProjectsKey) ?? []
-        // Opening projects persists current state, so snapshot both saved lists first.
+        // Opening projects persists current state, so snapshot the saved lists first.
         let savedPointGuardFolders = UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") ?? []
         pointGuardFolders.formUnion(savedPointGuardFolders)
+        shownPointGuardFolders.formUnion(
+            UserDefaults.standard.stringArray(forKey: Self.shownPointGuardFoldersKey) ?? [])
+        var notImported: [String] = []
         for path in paths {
-            guard projectRoot != nil || FileManager.default.fileExists(atPath: path) else { continue }
+            guard projectRoot != nil || FileManager.default.fileExists(atPath: path) else {
+                // On a volume that is not mounted yet: try again next launch.
+                notImported.append(path)
+                continue
+            }
             guard !isTooBroadProjectRoot(path) else { continue }
             openProject(path)
+        }
+        // The first list reopens last session's sidebar, unless that came from the legacy list.
+        resumesOnFirstLocalList = paths.count == notImported.count
+        if projectRoot == nil {
+            if notImported.isEmpty {
+                UserDefaults.standard.removeObject(forKey: Self.openProjectsKey)
+            } else {
+                UserDefaults.standard.set(notImported, forKey: Self.openProjectsKey)
+            }
         }
         for root in savedPointGuardFolders {
             guard FileManager.default.fileExists(atPath: root) else { continue }
             guard !isTooBroadProjectRoot(root) else { continue }
             ensurePointGuardProject(root: root)
         }
+        #if os(macOS)
+        if projectRoot == nil, followsLocalDaemon { followLocalProjects() }
+        #endif
         // Workspace layouts load lazily in WorkspaceRegistry.reconcile, on the first
         // manifest read for each project.
+    }
+
+    #if os(macOS)
+    private func followLocalProjects() {
+        guard localProjectsSubscription == nil else { return }
+        let subscription = DaemonProjectsSubscription(client: DaemonEndpoint.local.makeClient())
+        localProjectsSubscription = subscription
+        Task { [weak self] in
+            // The daemon holds the project list, so it runs even before any project opens.
+            try? await DaemonLifecycle.ensureDaemon()
+            await subscription.start { [weak self] roots in self?.applyLocalProjects(roots) }
+        }
+    }
+    #endif
+
+    /// Match the sidebar to the local daemon's projects. A project that left the list was
+    /// removed (on another device, or with `pu projects remove`) and closes here; one that
+    /// joined opens, unless it is a Point Guard folder the user has not opened.
+    func applyLocalProjects(_ roots: [String]) {
+        #if os(macOS)
+        let registered = Set(roots)
+        // The daemon reports canonical roots; a project may have been opened by another path.
+        let canonical = Dictionary(
+            projects.map { (canonicalRoot(of: $0.projectRoot), $0.projectRoot) }, uniquingKeysWith: { first, _ in first })
+        let pointGuard = Dictionary(
+            pointGuardProjects.map { (canonicalRoot(of: $0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
+        for root in (lastLocalProjects ?? []).subtracting(registered) {
+            if let owner = canonical[root].flatMap({ projectState(forRoot: $0) }) ?? pointGuard[root],
+                isPointGuardFolder(owner.projectRoot)
+            {
+                // Removed elsewhere, but Point Guard works in this folder: register it again,
+                // leaving the agents the removal suspended paused.
+                owner.keepsSuspendedAgentsOnNextOpen = true
+                startProject(owner)
+            } else if let open = canonical[root] {
+                closeProject(open)
+            }
+        }
+        let resuming = resumesOnFirstLocalList
+        resumesOnFirstLocalList = false
+        for root in roots where canonical[root] == nil {
+            // A Point Guard folder the user has not opened stays out of the sidebar.
+            if let owner = pointGuard[root], !shownPointGuardFolders.contains(owner.projectRoot) { continue }
+            guard FileManager.default.fileExists(atPath: root), !isTooBroadProjectRoot(root) else { continue }
+            openProject(root, resumingSuspendedAgents: resuming)
+        }
+        // The daemon's list is in its saved order, which every device shows, unless it may
+        // predate a move this Mac is still saving.
+        localProjectOrder = roots
+        if localOrderSaver.pending == 0 { sortLocalProjects(by: roots) }
+        lastLocalProjects = registered
+        #endif
+    }
+
+    #if os(macOS)
+    private func sortLocalProjects(by roots: [String]) {
+        let ordered = ProjectOrder.sorted(projects, by: roots, root: { self.canonicalRoot(of: $0.projectRoot) })
+        if ordered.map(\.projectRoot) != projects.map(\.projectRoot) { projects = ordered }
+    }
+    #endif
+
+    #if os(macOS)
+    private func canonicalRoot(of root: String) -> String {
+        if let known = canonicalRoots[root] { return known }
+        guard let resolved = Self.resolvedPath(root) else {
+            // Not resolvable yet (an unmounted volume): try again on the next report.
+            return root
+        }
+        canonicalRoots[root] = resolved
+        return resolved
+    }
+    #endif
+
+    /// Until the local daemon first reports its projects, a saved workspace selection may
+    /// belong to one that has not opened yet.
+    private var awaitingLocalProjects: Bool {
+        #if os(macOS)
+        localProjectsSubscription != nil && lastLocalProjects == nil
+        #else
+        false
+        #endif
+    }
+
+    /// The machine a remote project lives on; nil for a local one.
+    func machine(for project: ProjectState) -> MachineState? {
+        machines.first { $0.machine.id == project.key.machineId }
+    }
+
+    /// The path with symlinks resolved, as the daemon's `canonicalize` reports it (unlike
+    /// `URL.resolvingSymlinksInPath`, which drops `/private`).
+    nonisolated static func canonicalPath(_ path: String) -> String {
+        resolvedPath(path) ?? path
+    }
+
+    /// The path with symlinks resolved, or nil when it does not resolve (yet).
+    nonisolated private static func resolvedPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     // MARK: - Machines
@@ -284,7 +533,7 @@ final class AppState {
         do {
             registered = try MachineRegistryStore.load()
         } catch {
-            daemonError = "Could not read machines from ~/.pu/machines.json: \(error.localizedDescription)"
+            daemonError = "Could not read machines from \(MachineRegistryStore.displayPath): \(error.localizedDescription)"
             return
         }
         for machine in registered {
@@ -320,10 +569,10 @@ final class AppState {
     /// The registry update takes a file lock shared with `pu machine`, so it runs off the
     /// main thread.
     @discardableResult
-    func addMachine(name: String, sshHost: String) async throws -> MachineState {
+    func addMachine(name: String, sshHost: String, id: UUID = UUID()) async throws -> MachineState {
         let machine = try await Task.detached {
             try MachineRegistryStore.update { machines in
-                try MachineRegistryStore.add(name: name, sshHost: sshHost, to: &machines)
+                try MachineRegistryStore.add(name: name, sshHost: sshHost, id: id, to: &machines)
             }
         }.value
         // The watcher may have reloaded between the registry write and this resume, adding
@@ -346,13 +595,17 @@ final class AppState {
         machines.removeAll { $0 === state }
         let id = state.machine.id
         let name = state.machine.name
+        #if os(iOS)
+        // A removed machine's host key is trusted no longer (REQ-IPAD-026).
+        try? HostKeyPinStore.shared.reset(machineId: id)
+        #endif
         Task {
             do {
                 try await Task.detached {
                     try MachineRegistryStore.update { machines in machines.removeAll { $0.id == id } }
                 }.value
             } catch {
-                daemonError = "Could not remove \(name) from ~/.pu/machines.json: \(error.localizedDescription)"
+                daemonError = "Could not remove \(name) from \(MachineRegistryStore.displayPath): \(error.localizedDescription)"
             }
         }
         if let active = activeProjectRoot, ProjectKey(id: active).machineId == id {
@@ -400,7 +653,9 @@ final class AppState {
 
     private func ensurePointGuardProject(root: String) {
         pointGuardFolders.insert(root)
-        UserDefaults.standard.set(Array(pointGuardFolders), forKey: "PurePointPointGuardFolders")
+        if projects.contains(where: { $0.projectRoot == root }) { shownPointGuardFolders.insert(root) }
+        persistOpenProjects()
+        #if os(macOS)
         guard projectState(forRoot: root) == nil else { return }
         let project = ProjectState(projectRoot: root, service: service, registry: registry)
         project.appState = self
@@ -409,6 +664,7 @@ final class AppState {
         guard !isTooBroadProjectRoot(root) else { return }
         startProject(project)
         startBinaryWatcherIfNeeded()
+        #endif
     }
 
     @discardableResult
@@ -501,6 +757,7 @@ final class AppState {
 
     // MARK: - Lifecycle
 
+    #if os(macOS)
     /// Synchronously suspend all agents and shut down daemon.
     /// Must complete before the process exits — uses DispatchSemaphore to block.
     func shutdownWithSuspend() {
@@ -527,7 +784,7 @@ final class AppState {
         let projectRoots = localManagedProjects.map(\.projectRoot)
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
-            let client = DaemonClient()
+            let client = DaemonEndpoint.local.makeClient()
             // Only an instance that owns the daemon stops anything. A second app
             // instance attached to a shared daemon must leave the owner's agents
             // running: suspending them would strand them, since that daemon stays
@@ -545,6 +802,47 @@ final class AppState {
         // Timeout after 5s — don't hang indefinitely if daemon is unresponsive
         _ = semaphore.wait(timeout: .now() + 5.0)
     }
+    #endif
+
+    #if os(iOS)
+    /// The iPad's replacement for the Mac's `NSApplication` activity and termination hooks:
+    /// the scene phase the iPad App forwards. Installed when the App creates its state, which
+    /// is also before launch-time notification responses arrive, as the Mac's application
+    /// delegate installs the notification delegate.
+    private func installLifecycleHooks() {
+        _ = AgentSignalNotifications.shared
+        AppLifecycleHooks.scenePhaseChanged = { [weak self] phase in
+            self?.scenePhaseChanged(phase)
+        }
+    }
+
+    /// Background: pause polling (pollers wait on `AppActivity`) and save what a quit would
+    /// save, since iOS may end a suspended app without notice. Foreground again: refresh state
+    /// and resume the daemon streams.
+    func scenePhaseChanged(_ phase: ScenePhase) {
+        let returned = AppActivity.shared.apply(phase)
+        if phase == .background {
+            persistSelectedAgent()
+            registry?.saveAll()
+        } else if returned {
+            refreshAfterBackground()
+        }
+    }
+
+    private func refreshAfterBackground() {
+        for machine in machines {
+            machine.checkAfterForeground()
+        }
+        for machine in machines where machine.state.isDaemonRunning {
+            Task { await machine.refreshProjects() }
+        }
+        for project in managedProjects {
+            project.resumeStreams()
+        }
+        signalNotifications.refreshBadge()
+        updateAgentSignals()
+    }
+    #endif
 
     // MARK: - Selection Persistence
 
@@ -576,7 +874,9 @@ final class AppState {
             return pendingId
         }
         // An unreachable machine may never load its layouts; it must not hold the selection.
-        if localManagedProjects.allSatisfy({ registry.workspacesByProject[$0.projectId] != nil }) {
+        if !awaitingLocalProjects,
+            localManagedProjects.allSatisfy({ registry.workspacesByProject[$0.projectId] != nil })
+        {
             pendingSelectWorkspaceId = nil
         }
         return nil
@@ -584,12 +884,14 @@ final class AppState {
 
     // MARK: - Private
 
+    /// The daemon keeps which projects exist; this Mac only keeps which Point Guard folders
+    /// it shows.
     private func persistOpenProjects() {
-        let paths = projects.map(\.projectRoot)
-        UserDefaults.standard.set(paths, forKey: Self.openProjectsKey)
+        UserDefaults.standard.set(Array(shownPointGuardFolders), forKey: Self.shownPointGuardFoldersKey)
         UserDefaults.standard.set(Array(pointGuardFolders), forKey: "PurePointPointGuardFolders")
     }
 
+    #if os(macOS)
     private func startBinaryWatcherIfNeeded() {
         guard binaryWatcher == nil, let binPath = DaemonLifecycle.findBinary() else { return }
         binaryWatcher = ManifestWatcher(path: binPath) { [weak self] in
@@ -611,6 +913,7 @@ final class AppState {
             }
         }
     }
+    #endif
 }
 
 extension AppState {
@@ -634,7 +937,12 @@ extension AppState {
         if let projectId = registry.projectRoot(forWorkspace: workspaceId), ProjectKey(id: projectId).isRemote {
             return UnavailableProjectHost()
         }
+        #if os(macOS)
         return LocalProjectHost.shared
+        #else
+        // No local machine: a workspace without a project has no files to reach.
+        return UnavailableProjectHost()
+        #endif
     }
 
     /// The daemon owning an agent, so terminals attach to the right machine.

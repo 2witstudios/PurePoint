@@ -4,6 +4,7 @@ use clap::Subcommand;
 use pu_core::protocol::{Request, Response};
 
 use crate::client;
+use crate::commands::daemon_proxy;
 use crate::daemon_ctrl;
 use crate::error::CliError;
 use crate::service::{self, Manager};
@@ -25,6 +26,9 @@ pub enum DaemonAction {
     },
     /// Remove the user service installed by `pu daemon install`
     Uninstall,
+    /// Relay stdin/stdout to the daemon socket for SSH clients; never starts
+    /// the daemon
+    Proxy,
 }
 
 pub async fn run(socket: &Path, custom_socket: bool, action: DaemonAction) -> Result<(), CliError> {
@@ -59,6 +63,7 @@ pub async fn run(socket: &Path, custom_socket: bool, action: DaemonAction) -> Re
             }
             Ok(())
         }
+        DaemonAction::Proxy => daemon_proxy::run(socket).await,
     }
 }
 

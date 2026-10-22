@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 /// NSViewController hosting an NSOutlineView for compact sidebar rows.
@@ -35,8 +36,11 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     /// Callback for killing all agents in a project.
     var onKillAllProjectAgents: ((ProjectState) -> Void)?
 
-    /// Callback for removing a project from the sidebar.
+    /// Callback for removing a project from its machine, for every device.
     var onRemoveProject: ((ProjectState) -> Void)?
+
+    /// Callback for hiding a remote project on this device only.
+    var onHideProject: ((ProjectState) -> Void)?
 
     /// Callback for forgetting a machine (its forward closes; nothing on it changes).
     var onRemoveMachine: ((MachineState) -> Void)?
@@ -50,9 +54,6 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     /// Prevents feedback loops during programmatic selection changes.
     private var suppressSelectionCallback = false
-
-    /// Node for context-menu tracking.
-    private var contextClickedNode: SidebarNode?
 
     /// Which rows the user closed. AppKit forgets expansion whenever it reloads, and every
     /// rebuild reloads, so the answer is kept here and replayed after each one.
@@ -75,53 +76,6 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported: the sidebar is built in code")
-    }
-
-    private struct SidebarRenderState: Equatable {
-        let activeWorkspaceId: String?
-        let projects: [ProjectRenderState]
-        let machines: [MachineRenderState]
-    }
-
-    private struct MachineRenderState: Equatable {
-        let id: UUID
-        let name: String
-        let state: MachineConnectionState
-        let statusText: String
-        let actionError: String?
-        let isStartingDaemon: Bool
-        let hiddenRevision: Int
-        let projects: [ProjectRenderState]
-        let hasLoadedProjects: Bool
-    }
-
-    private struct ProjectRenderState: Equatable {
-        let channelUnread: Int
-        let isUnavailable: Bool
-        let layoutError: String?
-        let projectRoot: String
-        let rootWorkspaces: [WorkspaceRenderState]
-        let worktrees: [WorktreeRenderState]
-        /// A project whose snapshot has not been read shows no worktrees yet, which is not a
-        /// change to its rows — but it is a change to whether the tree may be pruned, so it
-        /// has to reach the render state or the prune would be skipped.
-        let hasLoadedWorktrees: Bool
-    }
-
-    private struct WorktreeRenderState: Equatable {
-        let id: String
-        let branch: String
-        let workspaces: [WorkspaceRenderState]
-    }
-
-    private struct WorkspaceRenderState: Equatable {
-        let id: String
-        let title: String
-        let paneCount: Int
-        let tabCount: Int
-        /// `nil` for a workspace holding only file tabs — it has no agent to report on.
-        let status: AgentStatus?
-        let signal: AgentSignalPresentation?
     }
 
     // MARK: - Lifecycle
@@ -149,6 +103,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let contextMenu = NSMenu()
         contextMenu.delegate = self
         outlineView.menu = contextMenu
+        registerProjectDrag()
 
         scrollView.documentView = outlineView
         scrollView.hasVerticalScroller = true
@@ -172,27 +127,15 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         // Reloading mid-rename discards the cell holding the field editor, leaving it dead.
         // `lastRenderState` is untouched, so the next update after the edit rebuilds.
         guard editingTextField == nil else { return }
-        let nextRenderState = makeRenderState(projects: projects, machines: machines)
+        let nextRenderState = SidebarRenderState.make(
+            projects: projects, machines: machines, workspacesByProject: workspacesByProject,
+            activeWorkspaceId: activeWorkspaceId)
         guard nextRenderState != lastRenderState else { return }
 
         let oldSelectedId = selectedNodeId()
         let scrollOrigin = scrollView.contentView.bounds.origin
 
-        projectNodes = projects.map { SidebarNode.projectNode($0, workspaces: workspacesByProject[$0.projectId] ?? []) }
-        if !machines.isEmpty {
-            projectNodes.append(SidebarNode.sectionHeaderNode("MACHINES"))
-            for machine in machines {
-                let machineKey = SidebarNode.machineKey(machine.machine.id)
-                projectNodes.append(
-                    SidebarNode(
-                        kind: .machine(machine),
-                        rowKey: machineKey,
-                        children: machine.projects.map {
-                            SidebarNode.projectNode(
-                                $0, workspaces: workspacesByProject[$0.projectId] ?? [], parentKey: machineKey)
-                        }))
-            }
-        }
+        projectNodes = SidebarTree.build(projects: projects, machines: machines, workspacesByProject: workspacesByProject)
         lastRenderState = nextRenderState
         // Reloading drops every expansion AppKit knows about, and it may announce that as it
         // does. Neither that nor the replay below is the user opening or closing a row.
@@ -209,66 +152,6 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
-    /// How a workspace presents itself as one row: named after its first pane's agent,
-    /// with the pane count when it holds more than one.
-    private func renderState(for workspace: Workspace, in project: ProjectState) -> WorkspaceRenderState {
-        let agents = workspace.agentIds.compactMap { project.agent(byId: $0) }
-        let firstFile = workspace.surfaces.lazy.compactMap { entry -> String? in
-            guard case .file(let path) = entry.surface.content else { return nil }
-            return path.map { ($0 as NSString).lastPathComponent } ?? "Files"
-        }.first
-        let title = agents.first?.displayName ?? workspace.primaryAgentId ?? firstFile ?? workspace.id
-        let status: AgentStatus? =
-            agents.isEmpty
-            ? nil : agents.contains { !$0.status.isAlive } ? .broken : (agents.first?.status ?? .running)
-        return WorkspaceRenderState(
-            id: workspace.id, title: title, paneCount: workspace.paneCount, tabCount: workspace.tabCount,
-            status: status, signal: agents.first.map { $0.signalPresentation(available: !project.isUnavailable) })
-    }
-
-    private func makeRenderState(projects: [ProjectState], machines: [MachineState]) -> SidebarRenderState {
-        let machineStates = machines.map { machine in
-            MachineRenderState(
-                id: machine.machine.id, name: machine.machine.name, state: machine.state,
-                statusText: machine.statusText, actionError: machine.actionError,
-                isStartingDaemon: machine.isStartingDaemon, hiddenRevision: machine.hiddenCountRevision,
-                projects: machine.projects.map(projectRenderState),
-                hasLoadedProjects: machine.hasLoadedProjects)
-        }
-        return SidebarRenderState(
-            activeWorkspaceId: activeWorkspaceId, projects: projects.map(projectRenderState), machines: machineStates)
-    }
-
-    private func projectRenderState(_ project: ProjectState) -> ProjectRenderState {
-        let workspaces = workspacesByProject[project.projectId] ?? []
-
-        let rootWorkspaces =
-            workspaces
-            .filter { $0.container == .projectRoot && !$0.isPointGuard }
-            .map { renderState(for: $0, in: project) }
-
-        let worktrees = project.worktrees.map { worktree in
-            WorktreeRenderState(
-                id: worktree.id,
-                branch: worktree.branch,
-                workspaces:
-                    workspaces
-                    .filter { $0.container == .worktree(worktree.id) }
-                    .map { renderState(for: $0, in: project) }
-            )
-        }
-
-        return ProjectRenderState(
-            channelUnread: project.channel.unreadCount,
-            isUnavailable: project.isUnavailable,
-            layoutError: project.isRemote ? project.registry?.layoutErrorsByProject[project.projectId] : nil,
-            projectRoot: project.projectId,
-            rootWorkspaces: rootWorkspaces,
-            worktrees: worktrees,
-            hasLoadedWorktrees: project.hasLoadedWorktrees
-        )
-    }
-
     /// Close the rows the user closed and leave the rest open. `reloadData()` above leaves
     /// every row collapsed, so the recorded rows stay collapsed and everything else is
     /// expanded.
@@ -283,52 +166,19 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         expansionStore.record(liveClosed)
     }
 
-    /// Whether every row in the tree holds all the rows it will ever hold. `false` while a
-    /// project has yet to read its snapshot and a machine has yet to answer its inventory,
-    /// which is how the sidebar looks for the first moments after a relaunch or a machine
-    /// connection.
-    ///
-    /// An empty row in that window is not evidence that nothing is under it, so nothing may
-    /// be pruned on that basis. A remote project is registered with the registry before its
-    /// snapshot has been read, which is why the registry cannot answer this on its own; and a
-    /// machine whose daemon is not running cannot answer for its rows either.
-    private var isTreeSettled: Bool {
-        func settled(_ nodes: [SidebarNode]) -> Bool {
-            nodes.allSatisfy { node in
-                switch node.kind {
-                case .project(let project) where !project.hasLoadedWorktrees:
-                    return false
-                case .machine(let machine) where !machine.reportsCompleteProjects:
-                    return false
-                case .project, .machine:
-                    return settled(node.children)
-                case .worktree, .workspace, .sectionHeader:
-                    return true
-                }
-            }
-        }
-        return settled(projectNodes)
-    }
+    /// Whether every row in the tree holds all the rows it will ever hold.
+    /// See `SidebarTree.isSettled(_:)`.
+    private var isTreeSettled: Bool { SidebarTree.isSettled(projectNodes) }
 
     /// Expands the rows that are not recorded closed and reports the ones in the tree that
     /// are, parents before children.
-    ///
-    /// `parentOpen` carries whether this row is on screen yet: a row inside a closed row has
-    /// no row of its own, so it cannot be expanded, but it is still closed — that is what
-    /// lets it come back as it was when its parent opens again.
     private func applyExpansionState(_ nodes: [SidebarNode], parentOpen: Bool) -> Set<String> {
-        var liveClosed: Set<String> = []
-        for node in nodes where node.isExpandable {
-            let isClosed = expansionStore.closedRowKeys.contains(node.rowKey)
-            if isClosed {
-                liveClosed.insert(node.rowKey)
-            } else if parentOpen {
-                outlineView.expandItem(node)
-            }
-            liveClosed.formUnion(
-                applyExpansionState(node.children, parentOpen: parentOpen && !isClosed))
+        let expansion = SidebarTree.expansion(
+            nodes, closedRowKeys: expansionStore.closedRowKeys, parentOpen: parentOpen)
+        for node in expansion.open {
+            outlineView.expandItem(node)
         }
-        return liveClosed
+        return expansion.closed
     }
 
     private func selectedNodeId() -> String? {
@@ -340,18 +190,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     // MARK: - Programmatic Selection
 
     func selectNode(for selection: SidebarSelection?) {
-        guard let selection else {
-            deselectAll()
-            return
-        }
-
-        let targetId: String
-        switch selection {
-        case .workspace(let id): targetId = id
-        case .worktree(let id): targetId = id
-        case .channel(let root): targetId = root
-        case .project(let root): targetId = root
-        case .nav:
+        guard let targetId = SidebarTree.targetId(for: selection) else {
             deselectAll()
             return
         }
@@ -389,23 +228,8 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     /// The rows above a matching row, outermost first. Empty when the row is at the top level
     /// or is not in the tree.
-    private func ancestors(
-        where matches: (SidebarNode) -> Bool, in nodes: [SidebarNode]? = nil,
-        chain: [SidebarNode] = []
-    ) -> [SidebarNode] {
-        func find(in nodes: [SidebarNode], chain: [SidebarNode]) -> [SidebarNode]? {
-            for node in nodes {
-                if matches(node) {
-                    return chain
-                }
-                if let found = find(in: node.children, chain: chain + [node]) {
-                    return found
-                }
-            }
-            return nil
-        }
-        // `nil` is no match at all, which a caller reads as "no ancestors".
-        return find(in: nodes ?? projectNodes, chain: chain) ?? []
+    private func ancestors(where matches: (SidebarNode) -> Bool) -> [SidebarNode] {
+        SidebarTree.ancestors(where: matches, in: projectNodes)
     }
 
     // MARK: - Row Expansion
@@ -478,12 +302,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
         guard let node = item as? SidebarNode else { return false }
-        switch node.kind {
-        case .sectionHeader: return false
-        // Selectable so keyboard and VoiceOver users can reach its actions (Return toggles
-        // the connection; the context menu and accessibility actions hold the rest).
-        case .project, .worktree, .workspace, .machine: return true
-        }
+        return SidebarTree.isSelectable(node)
     }
 
     // MARK: - NSOutlineViewDelegate
@@ -512,13 +331,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             return
         }
 
-        let selection: SidebarSelection
-        switch node.kind {
-        case .project(let p): selection = .project(p.projectId)
-        case .worktree(let w): selection = .worktree(w.id)
-        case .workspace(let w): selection = .workspace(w.id)
-        case .sectionHeader, .machine: return
-        }
+        guard let selection = SidebarTree.selection(for: node) else { return }
         onSelectionChanged?(selection)
     }
 
@@ -579,7 +392,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     private func makeMachineCell(_ machine: MachineState) -> NSView {
         let (cell, stack) = makeCellWithStack(spacing: 6)
 
-        stack.addArrangedSubview(makeStatusDot(color: Self.statusColor(machine.state)))
+        stack.addArrangedSubview(makeStatusDot(color: machine.state.sidebarStatusColor))
         let icon = makeSymbolIcon("desktopcomputer", description: "Machine", pointSize: 11)
         let name = NSTextField(labelWithString: machine.machine.name)
         name.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -610,60 +423,20 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     /// The machine's menu actions, reachable from VoiceOver's actions rotor.
     private func machineAccessibilityActions(_ machine: MachineState) -> [NSAccessibilityCustomAction] {
-        var actions: [NSAccessibilityCustomAction] = []
-        if machine.isConnectedOrConnecting {
-            actions.append(
-                NSAccessibilityCustomAction(name: "Disconnect") { [weak self, weak machine] in
-                    guard let self, let machine else { return false }
-                    self.confirmDisconnect(machine)
-                    return true
-                })
-        } else {
-            actions.append(
-                NSAccessibilityCustomAction(name: "Connect") { [weak machine] in
-                    machine?.connect()
-                    return machine != nil
-                })
-        }
-        if machine.state == .connected(.stopped), !machine.isStartingDaemon {
-            actions.append(
-                NSAccessibilityCustomAction(name: "Start Daemon") { [weak machine] in
-                    machine?.startDaemon()
-                    return machine != nil
-                })
-        }
-        if machine.hiddenProjectCount > 0 {
-            actions.append(
-                NSAccessibilityCustomAction(name: "Show Hidden Projects") { [weak machine] in
-                    machine?.showHiddenProjects()
-                    return machine != nil
-                })
-        }
-        if machine.actionError != nil {
-            actions.append(
-                NSAccessibilityCustomAction(name: "Dismiss Error") { [weak machine] in
-                    machine?.actionError = nil
-                    return machine != nil
-                })
-        }
-        actions.append(
-            NSAccessibilityCustomAction(name: "Remove Machine") { [weak self, weak machine] in
-                guard let self, let machine else { return false }
-                self.confirmRemove(machine)
+        SidebarMenus.machineAccessibilityActions(machine).map { entry in
+            NSAccessibilityCustomAction(name: entry.name) { [weak self, weak machine] in
+                guard let self, let machine,
+                    let node = self.machineNode(machine)
+                else { return false }
+                self.perform(entry.action, on: node)
                 return true
-            })
-        return actions
+            }
+        }
     }
 
-    private static func statusColor(_ state: MachineConnectionState) -> NSColor {
-        switch state {
-        case .connected(.running): .systemGreen
-        case .connected(.stopped): .systemOrange
-        case .connected(.incompatible): .systemRed
-        case .connecting: .systemYellow
-        case .offline: .systemRed
-        case .disconnected: .tertiaryLabelColor
-        }
+    /// The row currently showing this machine.
+    private func machineNode(_ machine: MachineState) -> SidebarNode? {
+        projectNodes.first { if case .machine(let m) = $0.kind { m === machine } else { false } }
     }
 
     private func makeWorktreeCell(_ worktree: WorktreeModel, node: SidebarNode) -> NSView {
@@ -694,7 +467,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let (cell, stack) = makeCellWithStack(spacing: 5)
 
         guard let project = findProject(forWorkspaceId: workspace.id) else { return cell }
-        let state = renderState(for: workspace, in: project)
+        let state = SidebarRenderState.workspace(workspace, in: project)
 
         stack.addArrangedSubview(makeStatusDot(color: state.status?.nsColor ?? .tertiaryLabelColor))
 
@@ -830,11 +603,25 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         return button
     }
 
-    private func makeMenuItem(title: String, action: Selector, context: Any? = nil) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        item.representedObject = context
-        return item
+    /// Fills a menu from the shared entries; choosing an item performs its action on `node`.
+    private func addItems(_ entries: [SidebarMenuEntry], for node: SidebarNode, to menu: NSMenu) {
+        for entry in entries {
+            switch entry {
+            case .separator:
+                menu.addItem(.separator())
+            case .action(let title, let action, let isEnabled):
+                let item = NSMenuItem(title: title, action: #selector(menuItemChosen(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = SidebarMenuItemContext(action: action, node: node)
+                item.isEnabled = isEnabled
+                menu.addItem(item)
+            }
+        }
+    }
+
+    @objc private func menuItemChosen(_ sender: NSMenuItem) {
+        guard let ctx = sender.representedObject as? SidebarMenuItemContext else { return }
+        perform(ctx.action, on: ctx.node)
     }
 
     // MARK: - Button Actions
@@ -848,64 +635,15 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     @objc private func worktreeAddClicked(_ sender: NSButton) {
         guard let worktreeId = sender.identifier?.rawValue,
-            let project = findProject(forWorktreeId: worktreeId)
+            findProject(forWorktreeId: worktreeId) != nil,
+            let node = SidebarTree.worktreeNode(id: worktreeId, in: projectNodes)
         else { return }
 
-        let ctx = WorktreeMenuContext(project: project, worktreeId: worktreeId)
         let menu = NSMenu()
-        menu.addItem(makeMenuItem(title: "New Agent", action: #selector(menuNewAgentForWorktree(_:)), context: ctx))
-        menu.addItem(
-            makeMenuItem(title: "New Terminal", action: #selector(menuNewTerminalForWorktree(_:)), context: ctx))
+        addItems(SidebarMenus.worktreeAddMenu, for: node, to: menu)
 
         let point = NSPoint(x: 0, y: sender.bounds.height)
         menu.popUp(positioning: nil, at: point, in: sender)
-    }
-
-    @objc private func menuNewAgentForWorktree(_ sender: NSMenuItem) {
-        guard let ctx = sender.representedObject as? WorktreeMenuContext else { return }
-        onShowCommandPalette?(ctx.project, .worktree(ctx.worktreeId), false)
-    }
-
-    @objc private func menuNewTerminalForWorktree(_ sender: NSMenuItem) {
-        guard let ctx = sender.representedObject as? WorktreeMenuContext else { return }
-        guard let worktree = ctx.project.worktrees.first(where: { $0.id == ctx.worktreeId }) else { return }
-        onAddTerminal?(ctx.project, worktree)
-    }
-
-    // MARK: - Project Lookup
-
-    /// Local projects and every machine's projects, in sidebar order.
-    private var allProjects: [ProjectState] {
-        projectNodes.flatMap { node -> [ProjectState] in
-            switch node.kind {
-            case .project(let p): return [p]
-            case .machine: return node.children.compactMap { if case .project(let p) = $0.kind { p } else { nil } }
-            default: return []
-            }
-        }
-    }
-
-    private func findProject(byRoot projectId: String) -> ProjectState? {
-        allProjects.first { $0.projectId == projectId }
-    }
-
-    private func findProject(forWorktreeId wtId: String) -> ProjectState? {
-        allProjects.first { $0.worktrees.contains(where: { $0.id == wtId }) }
-    }
-
-    private func findProject(forAgentId agentId: String) -> ProjectState? {
-        allProjects.first { $0.agent(byId: agentId) != nil }
-    }
-
-    private func findProject(forWorkspaceId workspaceId: String) -> ProjectState? {
-        allProjects.first { workspacesByProject[$0.projectId]?.contains(where: { $0.id == workspaceId }) == true }
-    }
-
-    private func findWorkspace(id workspaceId: String) -> Workspace? {
-        for (_, list) in workspacesByProject {
-            if let match = list.first(where: { $0.id == workspaceId }) { return match }
-        }
-        return nil
     }
 
     // MARK: - Inline Rename State
@@ -927,53 +665,7 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         // A menu opened from the keyboard (or VoiceOver) has no clicked row: use the selection.
         let clickedRow = outlineView.clickedRow >= 0 ? outlineView.clickedRow : outlineView.selectedRow
         guard clickedRow >= 0, let node = outlineView.item(atRow: clickedRow) as? SidebarNode else { return }
-        contextClickedNode = node
-
-        switch node.kind {
-        case .workspace(let workspace): buildWorkspaceContextMenu(menu, workspace: workspace)
-        case .worktree(let worktree): buildWorktreeContextMenu(menu, worktree: worktree)
-        case .project(let project): buildProjectContextMenu(menu, project: project)
-        case .machine(let machine): buildMachineContextMenu(menu, machine: machine)
-        case .sectionHeader: break
-        }
-    }
-
-    private func buildMachineContextMenu(_ menu: NSMenu, machine: MachineState) {
-        if machine.isConnectedOrConnecting {
-            menu.addItem(makeMenuItem(title: "Disconnect", action: #selector(contextDisconnectMachine(_:))))
-        } else {
-            menu.addItem(makeMenuItem(title: "Connect", action: #selector(contextConnectMachine(_:))))
-        }
-        if machine.state == .connected(.stopped) {
-            let title = machine.isStartingDaemon ? "Starting Daemon\u{2026}" : "Start Daemon"
-            let item = makeMenuItem(title: title, action: #selector(contextStartDaemon(_:)))
-            item.isEnabled = !machine.isStartingDaemon
-            menu.addItem(item)
-        }
-        if machine.hiddenProjectCount > 0 {
-            menu.addItem(
-                makeMenuItem(
-                    title: "Show Hidden Projects (\(machine.hiddenProjectCount))",
-                    action: #selector(contextShowHiddenProjects(_:))))
-        }
-        if machine.actionError != nil {
-            menu.addItem(makeMenuItem(title: "Dismiss Error", action: #selector(contextDismissMachineError(_:))))
-        }
-        menu.addItem(.separator())
-        menu.addItem(makeMenuItem(title: "Remove Machine\u{2026}", action: #selector(contextRemoveMachine(_:))))
-    }
-
-    @objc private func contextShowHiddenProjects(_ sender: NSMenuItem) {
-        contextMachine?.showHiddenProjects()
-    }
-
-    @objc private func contextDismissMachineError(_ sender: NSMenuItem) {
-        contextMachine?.actionError = nil
-    }
-
-    @objc private func contextRetryLayout(_ sender: NSMenuItem) {
-        guard let node = contextClickedNode, case .project(let project) = node.kind else { return }
-        project.retryRemoteLayout()
+        addItems(SidebarMenus.contextMenu(for: node), for: node, to: menu)
     }
 
     /// Return on a selected machine row connects or disconnects it.
@@ -982,191 +674,15 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode,
             case .machine(let machine) = node.kind
         else { return false }
-        if machine.isConnectedOrConnecting { confirmDisconnect(machine) } else { machine.connect() }
+        toggleConnection(of: machine)
         return true
-    }
-
-    private var contextMachine: MachineState? {
-        guard let node = contextClickedNode, case .machine(let machine) = node.kind else { return nil }
-        return machine
-    }
-
-    @objc private func contextConnectMachine(_ sender: NSMenuItem) {
-        contextMachine?.connect()
-    }
-
-    @objc private func contextDisconnectMachine(_ sender: NSMenuItem) {
-        guard let machine = contextMachine else { return }
-        confirmDisconnect(machine)
-    }
-
-    private func confirmDisconnect(_ machine: MachineState) {
-        let unsaved = machine.unsavedFileNames
-        guard !unsaved.isEmpty else {
-            machine.disconnect(remember: true)
-            return
-        }
-        showConfirmation(
-            title: "Disconnect \(machine.machine.name)?",
-            message: "Its projects close in PurePoint until you connect again." + Self.unsavedWarning(unsaved),
-            confirmTitle: "Disconnect"
-        ) {
-            machine.disconnect(remember: true)
-        }
-    }
-
-    /// Closing a remote project drops its file tabs, edits included.
-    private static func unsavedWarning(_ names: [String]) -> String {
-        names.isEmpty ? "" : " Unsaved changes to \(names.joined(separator: ", ")) will be lost."
-    }
-
-    @objc private func contextStartDaemon(_ sender: NSMenuItem) {
-        contextMachine?.startDaemon()
-    }
-
-    @objc private func contextRemoveMachine(_ sender: NSMenuItem) {
-        guard let machine = contextMachine else { return }
-        confirmRemove(machine)
-    }
-
-    private func confirmRemove(_ machine: MachineState) {
-        showConfirmation(
-            title: "Remove \(machine.machine.name)?",
-            message:
-                "PurePoint will close its connection and forget it. The daemon, projects and agents on "
-                + "\(machine.machine.name) keep running and are not changed."
-                + Self.unsavedWarning(machine.unsavedFileNames),
-            confirmTitle: "Remove"
-        ) {
-            self.onRemoveMachine?(machine)
-        }
-    }
-
-    private func buildWorkspaceContextMenu(_ menu: NSMenu, workspace: Workspace) {
-        menu.addItem(makeMenuItem(title: "Rename\u{2026}", action: #selector(contextRenameAgent(_:))))
-        menu.addItem(.separator())
-        let agentCount = workspace.agentIds.count
-        let title =
-            switch agentCount {
-            case 0: "Close Workspace"
-            case 1 where workspace.tabCount == 1: "Kill Agent"
-            case 1: "Close Workspace (1 agent)"
-            default: "Close Workspace (\(agentCount) agents)"
-            }
-        menu.addItem(makeMenuItem(title: title, action: #selector(contextKillWorkspace(_:))))
-    }
-
-    private func buildWorktreeContextMenu(_ menu: NSMenu, worktree: WorktreeModel) {
-        let aliveCount = worktree.agents.filter { $0.status.isAlive }.count
-        if aliveCount > 0 {
-            menu.addItem(
-                makeMenuItem(
-                    title: "Kill All Agents (\(aliveCount))",
-                    action: #selector(contextKillWorktreeAgents(_:))
-                ))
-            menu.addItem(.separator())
-        }
-        menu.addItem(makeMenuItem(title: "Delete Worktree\u{2026}", action: #selector(contextDeleteWorktree(_:))))
-    }
-
-    private func buildProjectContextMenu(_ menu: NSMenu, project: ProjectState) {
-        let aliveCount = project.allAgents.filter { $0.status.isAlive }.count
-        if aliveCount > 0 {
-            menu.addItem(
-                makeMenuItem(
-                    title: "Kill All Agents (\(aliveCount))",
-                    action: #selector(contextKillAllProjectAgents(_:))
-                ))
-            menu.addItem(.separator())
-        }
-        if project.isRemote, project.registry?.layoutErrorsByProject[project.projectId] != nil {
-            menu.addItem(makeMenuItem(title: "Retry Layout", action: #selector(contextRetryLayout(_:))))
-        }
-        menu.addItem(makeMenuItem(title: "Remove Project\u{2026}", action: #selector(contextRemoveProject(_:))))
-    }
-
-    @objc private func contextKillWorkspace(_ sender: NSMenuItem) {
-        guard let node = contextClickedNode, case .workspace(let workspace) = node.kind else { return }
-        guard let project = findProject(forWorkspaceId: workspace.id) else { return }
-
-        let agentCount = workspace.agentIds.count
-        guard agentCount > 1 else {
-            onKillWorkspace?(project, workspace.id)
-            return
-        }
-        showConfirmation(
-            title: "Close this workspace?",
-            message: "This will kill \(agentCount) agents across its panes.",
-            confirmTitle: "Close"
-        ) {
-            self.onKillWorkspace?(project, workspace.id)
-        }
-    }
-
-    @objc private func contextKillWorktreeAgents(_ sender: NSMenuItem) {
-        guard let node = contextClickedNode, case .worktree(let worktree) = node.kind else { return }
-        guard let project = findProject(forWorktreeId: worktree.id) else { return }
-        let aliveCount = worktree.agents.filter { $0.status.isAlive }.count
-        showConfirmation(
-            title: "Kill All Agents in \(worktree.branch)?",
-            message: "This will kill \(aliveCount) running agent\(aliveCount == 1 ? "" : "s") in this worktree."
-        ) {
-            self.onKillWorktreeAgents?(project, worktree.id)
-        }
-    }
-
-    @objc private func contextDeleteWorktree(_ sender: NSMenuItem) {
-        guard let node = contextClickedNode, case .worktree(let worktree) = node.kind else { return }
-        guard let project = findProject(forWorktreeId: worktree.id) else { return }
-        let aliveCount = worktree.agents.filter { $0.status.isAlive }.count
-        let agentNote =
-            aliveCount > 0
-            ? "This will kill \(aliveCount) running agent\(aliveCount == 1 ? "" : "s"), "
-            : "This will "
-        showConfirmation(
-            title: "Delete worktree \(worktree.branch)?",
-            message: "\(agentNote)remove the worktree directory, and delete the branch locally and from GitHub.",
-            confirmTitle: "Delete"
-        ) {
-            self.onDeleteWorktree?(project, worktree.id)
-        }
-    }
-
-    @objc private func contextKillAllProjectAgents(_ sender: NSMenuItem) {
-        guard let node = contextClickedNode, case .project(let project) = node.kind else { return }
-        let aliveCount = project.allAgents.filter { $0.status.isAlive }.count
-        showConfirmation(
-            title: "Kill All Agents in \(project.projectName)?",
-            message: "This will kill \(aliveCount) running agent\(aliveCount == 1 ? "" : "s") in this project."
-        ) {
-            self.onKillAllProjectAgents?(project)
-        }
-    }
-
-    @objc private func contextRemoveProject(_ sender: NSMenuItem) {
-        guard let node = contextClickedNode, case .project(let project) = node.kind else { return }
-        let unsaved =
-            project.isRemote
-            ? project.appState?.machines.first { $0.machine.id == project.key.machineId }?.unsavedFileNames(in: project)
-                ?? []
-            : []
-        showConfirmation(
-            title: "Remove \(project.projectName)?",
-            message: project.isRemote
-                ? "This hides the project in PurePoint on this Mac. Nothing on the remote machine is changed."
-                    + Self.unsavedWarning(unsaved)
-                : "This will close the project in PurePoint and delete .pu/manifest.json and .pu/agents/. "
-                    + "The project folder will not be deleted.",
-            confirmTitle: "Remove"
-        ) {
-            self.onRemoveProject?(project)
-        }
     }
 
     private static let workspaceNameLabelId = NSUserInterfaceItemIdentifier("workspaceNameLabel")
 
-    @objc private func contextRenameAgent(_ sender: NSMenuItem) {
-        guard let node = contextClickedNode, case .workspace(let workspace) = node.kind else { return }
+    /// Turns a workspace row's name into an inline rename field.
+    func beginRename(_ node: SidebarNode) {
+        guard case .workspace(let workspace) = node.kind else { return }
         let clickedRow = outlineView.row(forItem: node)
         guard clickedRow >= 0,
             let cellView = outlineView.view(atColumn: 0, row: clickedRow, makeIfNecessary: false),
@@ -1224,14 +740,12 @@ extension SidebarOutlineViewController: NSMenuDelegate {
 
     // MARK: - Confirmation Dialog
 
-    private func showConfirmation(
-        title: String, message: String, confirmTitle: String = "Kill All", action: @escaping () -> Void
-    ) {
+    func showConfirmation(_ confirmation: SidebarConfirmation, action: @escaping () -> Void) {
         let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
+        alert.messageText = confirmation.title
+        alert.informativeText = confirmation.message
         alert.alertStyle = .warning
-        alert.addButton(withTitle: confirmTitle)
+        alert.addButton(withTitle: confirmation.confirmTitle)
         alert.addButton(withTitle: "Cancel")
 
         if let window = view.window {
@@ -1294,14 +808,15 @@ enum InlineRenameFocus {
     static var isActive = false
 }
 
-// MARK: - WorktreeMenuContext
+// MARK: - SidebarMenuItemContext
 
-private class WorktreeMenuContext: NSObject {
-    let project: ProjectState
-    let worktreeId: String
-    init(project: ProjectState, worktreeId: String) {
-        self.project = project
-        self.worktreeId = worktreeId
+/// What a menu item acts on, carried as its represented object.
+private class SidebarMenuItemContext: NSObject {
+    let action: SidebarMenuAction
+    let node: SidebarNode
+    init(action: SidebarMenuAction, node: SidebarNode) {
+        self.action = action
+        self.node = node
     }
 }
 
@@ -1323,3 +838,4 @@ final class SidebarKeyOutlineView: NSOutlineView {
         onWindowAttached?(self)
     }
 }
+#endif

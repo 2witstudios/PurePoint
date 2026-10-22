@@ -4,8 +4,11 @@ use crate::error::CliError;
 use crate::skill;
 
 pub async fn run(socket: &std::path::Path, json: bool) -> Result<(), CliError> {
+    run_at(socket, crate::commands::project_root_string()?, json).await
+}
+
+pub async fn run_at(socket: &std::path::Path, root: String, json: bool) -> Result<(), CliError> {
     crate::daemon_ctrl::ensure_daemon(socket).await?;
-    let root = crate::commands::project_root_string()?;
     let response = crate::client::send_request(
         socket,
         &pu_core::protocol::Request::Init {

@@ -19,6 +19,7 @@ fn make_agent_report(id: &str, status: AgentStatus) -> AgentStatusReport {
         trigger_seq_index: None,
         trigger_state: None,
         trigger_total: None,
+        placement: None,
     }
 }
 
