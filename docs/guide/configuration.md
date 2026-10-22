@@ -88,15 +88,17 @@ Precedence, highest first:
 
 `--agent-args` is appended after whichever of these applies.
 
-### Codex YOLO for all projects
+### Codex full access
 
-To run Codex with full access and no command approvals across every project on
-this Mac, open **Settings → Agents** and enable **YOLO for all projects**
-(`codexYolo: true` in `~/.pu/agent-settings.yaml`). New and resumed Codex agents
-launch with `--dangerously-bypass-approvals-and-sandbox --no-daemon`, replacing
-any sandbox and approval options in the effective launch args. Turning it off
-restores the project and machine settings. The switch is available even without
-a project open.
+PurePoint has no special switch for Codex full access. To run Codex with no
+sandbox and no command approvals, add the flag to its launch args, for one
+project or for every project on this Mac:
+
+```yaml
+# ~/.pu/agent-settings.yaml
+launchArgs:
+  codex: "--dangerously-bypass-approvals-and-sandbox"
+```
 
 ### Additional agent config fields
 
@@ -151,6 +153,6 @@ Files are loaded in order; later files override earlier ones.
 
 ## Scope
 
-Configuration is project-level (`.pu/config.yaml`), apart from the machine settings in `~/.pu/agent-settings.yaml` (launch args for all projects, Codex YOLO, agent status tracking). For other cross-project defaults, use global definitions (templates, agent defs, swarms, schedules, triggers in `~/.pu/`).
+Configuration is project-level (`.pu/config.yaml`), apart from the machine settings in `~/.pu/agent-settings.yaml` (launch args for all projects, agent status tracking). For other cross-project defaults, use global definitions (templates, agent defs, swarms, schedules, triggers in `~/.pu/`).
 
 See [Concepts: Scope](concepts.md#scope) for how local and global definitions interact.

@@ -7,8 +7,6 @@ use crate::types::{AgentConfig, Config, LaunchArgs};
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalAgentSettings {
-    #[serde(default)]
-    pub codex_yolo: bool,
     /// Observe agent status (working/idle/question) through the native adapters.
     #[serde(default = "crate::serde_defaults::default_true")]
     pub agent_status_tracking: bool,
@@ -21,7 +19,6 @@ pub struct GlobalAgentSettings {
 impl Default for GlobalAgentSettings {
     fn default() -> Self {
         Self {
-            codex_yolo: false,
             agent_status_tracking: true,
             launch_args: indexmap::IndexMap::new(),
         }
@@ -31,7 +28,6 @@ impl Default for GlobalAgentSettings {
 /// Changes to apply in `save_global_agent_settings`; `None` keeps the stored value.
 #[derive(Debug, Default)]
 pub struct GlobalAgentSettingsUpdate {
-    pub codex_yolo: Option<bool>,
     pub agent_status_tracking: Option<bool>,
     /// Machine-level launch args string per agent type; a blank string removes it.
     pub launch_args: indexmap::IndexMap<String, String>,
@@ -74,9 +70,6 @@ pub fn save_global_agent_settings(
     FileExt::lock(&lock)?;
     // A malformed file is an error, never silently replaced: it would erase every stored setting.
     let mut settings = load_global_agent_settings()?;
-    if let Some(enabled) = update.codex_yolo {
-        settings.codex_yolo = enabled;
-    }
     if let Some(enabled) = update.agent_status_tracking {
         settings.agent_status_tracking = enabled;
     }
@@ -99,76 +92,11 @@ pub fn save_global_agent_settings(
     Ok(settings)
 }
 
-/// Remove only Codex permission options, preserving ordered and repeated values.
-fn without_codex_permissions(args: Vec<String>) -> Vec<String> {
-    let mut result = Vec::new();
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        if matches!(
-            arg.as_str(),
-            "-s" | "--sandbox" | "-a" | "--ask-for-approval" | "--approval-mode"
-        ) {
-            args.next();
-        } else if !matches!(
-            arg.as_str(),
-            "--full-auto"
-                | "--approve-for-me"
-                | "--yolo"
-                | "--dangerously-bypass-approvals-and-sandbox"
-                | "--no-daemon"
-        ) && ![
-            "--sandbox=",
-            "--ask-for-approval=",
-            "--approval-mode=",
-            "-s",
-            "-a",
-        ]
-        .iter()
-        .any(|prefix| arg.starts_with(prefix))
-        {
-            result.push(arg);
-        }
-    }
-    result
-}
-
 fn apply_global_agent_settings(config: &mut Config, settings: &GlobalAgentSettings) {
     for (name, args) in &settings.launch_args {
         if let Some(agent) = config.agents.get_mut(name) {
             agent.machine_launch_args = Some(args.0.clone());
         }
-    }
-    if !settings.codex_yolo {
-        return;
-    }
-    if let Some(agent) = config.agents.get_mut("codex") {
-        let tokens: Vec<String> = agent
-            .command
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect();
-        // Wrapper flags belong to the wrapper, not to Codex.
-        if let Some(codex_index) = tokens.iter().position(|token| {
-            Path::new(token)
-                .file_name()
-                .is_some_and(|name| name == "codex")
-        }) {
-            let prefix_len = codex_index + 1;
-            let mut command = tokens[..prefix_len].to_vec();
-            command.extend(without_codex_permissions(tokens[prefix_len..].to_vec()));
-            agent.command = command.join(" ");
-        }
-        // Without an explicit Codex executable, the whole command belongs to
-        // an opaque wrapper. Only launch_args can safely be normalized.
-        let mut args = without_codex_permissions(crate::types::resolved_launch_args(
-            "codex",
-            agent.configured_launch_args(),
-        ));
-        args.extend([
-            "--dangerously-bypass-approvals-and-sandbox".into(),
-            "--no-daemon".into(),
-        ]);
-        agent.policy_launch_args = Some(args);
     }
 }
 
@@ -253,7 +181,6 @@ pub fn update_agent_config(
                 interactive: true,
                 launch_args: None,
                 machine_launch_args: None,
-                policy_launch_args: None,
             })
         });
 
@@ -305,7 +232,7 @@ envFiles:
 #   opencode:
 #     name: opencode
 #     command: opencode
-#     launchArgs: "--model anthropic/claude-sonnet-4"
+#     launchArgs: "--auto"
 "#;
     std::fs::write(&path, yaml)?;
     Ok(())
@@ -330,90 +257,43 @@ mod tests {
         }
     }
 
-    fn yolo(enabled: bool) -> GlobalAgentSettingsUpdate {
-        GlobalAgentSettingsUpdate {
-            codex_yolo: Some(enabled),
-            ..Default::default()
-        }
-    }
-
     #[test]
-    fn global_yolo_applies_to_multiple_projects_and_disable_restores_files() {
+    fn status_tracking_defaults_on_and_updates() {
         let _home = TestHome::new();
-        assert!(!load_global_agent_settings().unwrap().codex_yolo);
-        let project = TempDir::new().unwrap();
-        std::fs::create_dir_all(paths::pu_dir(project.path())).unwrap();
-        let yaml = "agents:\n  codex:\n    name: codex\n    command: wrapper -a authentication codex -s workspace-write --search\n    launchArgs: [--ask-for-approval=on-request, -m, custom-model, -c, a=1, -c, b=2]\n";
-        std::fs::write(paths::config_path(project.path()), yaml).unwrap();
-        let original = load_config_strict(project.path()).unwrap();
-        save_global_agent_settings(yolo(true)).unwrap();
-        let cfg = load_config_strict(project.path()).unwrap();
-        assert_eq!(
-            cfg.agents["codex"].command,
-            "wrapper -a authentication codex --search"
-        );
-        assert_eq!(
-            cfg.agents["codex"].configured_launch_args().unwrap(),
-            &[
-                "-m",
-                "custom-model",
-                "-c",
-                "a=1",
-                "-c",
-                "b=2",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--no-daemon"
-            ]
-        );
-        assert_eq!(
-            cfg.agents["claude"].launch_args,
-            original.agents["claude"].launch_args
-        );
-        let other = TempDir::new().unwrap();
-        assert!(
-            load_config_strict(other.path()).unwrap().agents["codex"]
-                .configured_launch_args()
-                .unwrap()
-                .contains(&"--no-daemon".into())
-        );
-        save_global_agent_settings(yolo(false)).unwrap();
-        let restored = load_config_strict(project.path()).unwrap();
-        assert_eq!(
-            restored.agents["codex"].command,
-            original.agents["codex"].command
-        );
-        assert_eq!(
-            restored.agents["codex"].launch_args,
-            original.agents["codex"].launch_args
-        );
-        assert_eq!(
-            std::fs::read_to_string(paths::config_path(project.path())).unwrap(),
-            yaml
-        );
-    }
-
-    #[test]
-    fn status_tracking_defaults_on_and_updates_independently_of_yolo() {
-        let home = TestHome::new();
         assert!(load_global_agent_settings().unwrap().agent_status_tracking);
-        std::fs::create_dir_all(home.0.path().join(".pu")).unwrap();
-        std::fs::write(
-            home.0.path().join(".pu/agent-settings.yaml"),
-            "codexYolo: true\n",
-        )
-        .unwrap();
-        let settings = load_global_agent_settings().unwrap();
-        assert!(settings.codex_yolo && settings.agent_status_tracking);
         let settings = save_global_agent_settings(GlobalAgentSettingsUpdate {
             agent_status_tracking: Some(false),
             ..Default::default()
         })
         .unwrap();
-        assert!(settings.codex_yolo && !settings.agent_status_tracking);
-        let settings = save_global_agent_settings(yolo(false)).unwrap();
-        assert!(!settings.codex_yolo && !settings.agent_status_tracking);
+        assert!(!settings.agent_status_tracking);
+        assert!(!load_global_agent_settings().unwrap().agent_status_tracking);
+    }
+
+    #[test]
+    fn given_legacy_codex_yolo_key_should_load_and_drop_it_on_save() {
+        // given — a settings file written before Codex YOLO was removed
+        let home = TestHome::new();
+        let path = home.0.path().join(".pu/agent-settings.yaml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "codexYolo: true\nagentStatusTracking: false\nlaunchArgs:\n  codex: --search\n",
+        )
+        .unwrap();
+        // when
         let settings = load_global_agent_settings().unwrap();
-        assert!(!settings.codex_yolo && !settings.agent_status_tracking);
+        // then — the stale key is ignored and the other settings survive
+        assert!(!settings.agent_status_tracking);
+        assert_eq!(settings.launch_args["codex"].0, ["--search"]);
+        let project = TempDir::new().unwrap();
+        let config = load_config_strict(project.path()).unwrap();
+        assert_eq!(resolved(&config, "codex"), ["--search"]);
+        // when — any save rewrites the file without it
+        save_global_agent_settings(GlobalAgentSettingsUpdate::default()).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("codexYolo"), "{content}");
+        assert!(content.contains("agentStatusTracking: false"), "{content}");
     }
 
     #[test]
@@ -422,7 +302,7 @@ mod tests {
         std::fs::create_dir_all(home.0.path().join(".pu")).unwrap();
         std::fs::write(
             home.0.path().join(".pu/agent-settings.yaml"),
-            "codexYolo: [broken",
+            "agentStatusTracking: [broken",
         )
         .unwrap();
         let project = TempDir::new().unwrap();
@@ -432,17 +312,21 @@ mod tests {
     #[test]
     fn failed_global_save_retains_confirmed_setting() {
         let home = TestHome::new();
-        save_global_agent_settings(yolo(true)).unwrap();
+        let tracking = |enabled: bool| GlobalAgentSettingsUpdate {
+            agent_status_tracking: Some(enabled),
+            ..Default::default()
+        };
+        save_global_agent_settings(tracking(false)).unwrap();
         std::fs::create_dir(home.0.path().join(".pu/agent-settings.yaml.tmp")).unwrap();
-        assert!(save_global_agent_settings(yolo(false)).is_err());
-        assert!(load_global_agent_settings().unwrap().codex_yolo);
+        assert!(save_global_agent_settings(tracking(true)).is_err());
+        assert!(!load_global_agent_settings().unwrap().agent_status_tracking);
     }
 
     #[test]
     fn given_malformed_machine_settings_should_refuse_save_and_keep_file() {
         for content in [
-            "codexYolo: true\nlaunchArgs: [broken",
-            "codexYolo: true\nlaunchArgs:\n  claude: \"--append-system-prompt 'oops\"\n",
+            "agentStatusTracking: true\nlaunchArgs: [broken",
+            "agentStatusTracking: true\nlaunchArgs:\n  claude: \"--append-system-prompt 'oops\"\n",
         ] {
             // given
             let home = TestHome::new();
@@ -460,86 +344,6 @@ mod tests {
             assert!(result.is_err(), "save should fail for {content:?}");
             assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
         }
-    }
-
-    #[test]
-    fn global_yolo_preserves_encapsulated_wrapper_command() {
-        let mut config = Config::default();
-        let command = "codex-wrapper  -a account --sandbox wrapper-profile";
-        config.agents.get_mut("codex").unwrap().command = command.into();
-        apply_global_agent_settings(
-            &mut config,
-            &GlobalAgentSettings {
-                codex_yolo: true,
-                ..GlobalAgentSettings::default()
-            },
-        );
-        assert_eq!(config.agents["codex"].command, command);
-        assert_eq!(
-            config.agents["codex"].configured_launch_args().unwrap(),
-            &["--dangerously-bypass-approvals-and-sandbox", "--no-daemon"]
-        );
-    }
-
-    #[test]
-    fn given_yolo_should_keep_project_launch_args_separate_from_policy_args() {
-        // given — the project sets its own Codex args
-        let mut config = Config::default();
-        config.agents.get_mut("codex").unwrap().launch_args = Some(vec![
-            "--sandbox".into(),
-            "read-only".into(),
-            "--search".into(),
-        ]);
-        // when
-        apply_global_agent_settings(
-            &mut config,
-            &GlobalAgentSettings {
-                codex_yolo: true,
-                ..GlobalAgentSettings::default()
-            },
-        );
-        // then — the project value is what the project file says; YOLO's
-        // rewrite lives in its own slot and takes precedence
-        let codex = &config.agents["codex"];
-        assert_eq!(
-            codex.launch_args.as_deref().unwrap(),
-            &["--sandbox", "read-only", "--search"]
-        );
-        assert_eq!(
-            codex.configured_launch_args().unwrap(),
-            &[
-                "--search",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--no-daemon"
-            ]
-        );
-    }
-
-    #[test]
-    fn yolo_removes_legacy_and_duplicate_permission_options() {
-        let args = [
-            "--full-auto",
-            "--approval-mode=full-auto",
-            "--sandbox=read-only",
-            "-a",
-            "never",
-            "--yolo",
-            "--no-daemon",
-            "--search",
-        ];
-        assert_eq!(
-            without_codex_permissions(args.into_iter().map(str::to_owned).collect()),
-            ["--search"]
-        );
-    }
-
-    #[test]
-    fn yolo_removes_attached_short_permission_options() {
-        let args = ["-s=workspace-write", "-anever", "--search", "-mcustom"];
-        assert_eq!(
-            without_codex_permissions(args.into_iter().map(str::to_owned).collect()),
-            ["--search", "-mcustom"]
-        );
     }
 
     #[test]
@@ -855,25 +659,6 @@ agents:
         assert_eq!(
             load_global_agent_settings().unwrap().launch_args["claude"].0,
             ["--verbose"]
-        );
-    }
-
-    #[test]
-    fn given_yolo_and_machine_codex_args_should_normalize_machine_args() {
-        let home = TestHome::new();
-        write_machine_settings(
-            &home,
-            "codexYolo: true\nlaunchArgs:\n  codex: --sandbox read-only --search\n",
-        );
-        let project = TempDir::new().unwrap();
-        let config = load_config_strict(project.path()).unwrap();
-        assert_eq!(
-            resolved(&config, "codex"),
-            [
-                "--search",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--no-daemon"
-            ]
         );
     }
 

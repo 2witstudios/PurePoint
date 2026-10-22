@@ -141,9 +141,8 @@ Read agent configuration for a project.
 `launch_args` is the project value as a list (`null` when unset).
 `project_launch_args` and `machine_launch_args` are the project and
 machine-level values in their string form, omitted when unset.
-`policy_launch_args` is present when Codex YOLO for all projects rewrites the
-args, and then overrides both. `resolved_launch_args` is what spawn and resume
-append (policy, else project, else machine, else none), and `resolved_command`
+`resolved_launch_args` is what spawn and resume
+append (project, else machine, else none), and `resolved_command`
 previews the command line. The three string
 fields were added additively; older clients ignore them.
 
@@ -165,13 +164,18 @@ Read or update the machine settings in `~/.pu/agent-settings.yaml`.
 
 **Request**: `{"type": "update_global_agent_settings", "launch_args": {"claude": "--dangerously-skip-permissions"}}`
 
-All fields are optional and omitted ones keep their stored value: `codex_yolo`
-(bool), `agent_status_tracking` (bool), and `launch_args` (agent type →
+All fields are optional and omitted ones keep their stored value:
+`agent_status_tracking` (bool) and `launch_args` (agent type →
 launch args string; a blank string removes that agent's entry, unknown agent
 types and unbalanced quotes are rejected without saving).
 
+A `codex_yolo` field sent by older clients is ignored; Codex full access is now
+a launch arg (`--dangerously-bypass-approvals-and-sandbox`).
+
 **Response**: `{"type": "global_agent_settings_report", "codex_yolo": false, "agent_status_tracking": true, "launch_args": {"claude": "--dangerously-skip-permissions"}}`
 
+`codex_yolo` is deprecated and always `false`. It is still sent so protocol-12
+apps that require it can decode the report; clients should ignore it.
 `launch_args` defaults to `{}`. A daemon that omits it predates protocol v11
 and does not save machine-level launch args.
 

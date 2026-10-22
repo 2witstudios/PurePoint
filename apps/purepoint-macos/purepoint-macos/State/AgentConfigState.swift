@@ -8,7 +8,6 @@ final class AgentConfigState {
     var defaultAgent: String = "claude"
     var isLoading = false
     var error: String?
-    var codexYolo = false
     var agentStatusTracking = true
     /// Machine-level ("all projects") launch args string per agent type.
     var machineLaunchArgs: [String: String] = [:]
@@ -44,14 +43,6 @@ final class AgentConfigState {
         await sendGlobalSettings(.getGlobalAgentSettings)
     }
 
-    func updateGlobalSettings(codexYolo: Bool, projectRoot: String?) async {
-        guard !isSavingGlobalSettings else { return }
-        isSavingGlobalSettings = true
-        await sendGlobalSettings(.updateGlobalAgentSettings(codexYolo: codexYolo))
-        if let projectRoot { await load(projectRoot: projectRoot) }
-        isSavingGlobalSettings = false
-    }
-
     /// Save the machine-level launch args for one agent type; a blank string removes them.
     func updateMachineLaunchArgs(agentName: String, launchArgs: String, projectRoot: String?) async {
         guard !isSavingGlobalSettings else { return }
@@ -73,13 +64,12 @@ final class AgentConfigState {
         do {
             try await ensureDaemon()
             switch try await sendRequest(request) {
-            case .globalAgentSettingsReport(let yolo, let tracking, let launchArgs):
-                codexYolo = yolo
+            case .globalAgentSettingsReport(let tracking, let launchArgs):
                 agentStatusTracking = tracking
                 globalSettingsLoaded = true
                 if let launchArgs {
                     machineLaunchArgs = launchArgs
-                } else if case .updateGlobalAgentSettings(_, _, .some) = request {
+                } else if case .updateGlobalAgentSettings(_, .some) = request {
                     globalError = Self.oldDaemonMessage("save launch args for all projects")
                 }
             case .error(_, let message):

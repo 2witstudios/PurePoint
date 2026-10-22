@@ -4,7 +4,11 @@ import Observation
 
 // Minimal app chrome for an isolated host of the actual desktop chat.
 // Excluded from production targets; never starts Pi, Cargo or the daemon.
-@Observable final class AppState { var showSettings = false }
+@MainActor @Observable final class AppState {
+    var showSettings = false
+    func pointGuardPrompts() async -> [PointGuardPrompt]? { [] }
+    func pointGuardPrompt(named name: String) async -> PointGuardPrompt? { nil }
+}
 struct InlineErrorBanner: View {
     let message: String
     let dismiss: () -> Void
@@ -42,8 +46,18 @@ struct InlineErrorBanner: View {
             | iOS | Shared styles | Ready |
             """)
         ], tools: [], queue: [], dialogs: [], notices: [])
+        // A fresh conversation opens on the Point Guard court.
+        let court = PiChatModel(defaults: defaults)
+        court.exploreDemo()
+        court.snapshot = PiSnapshot(version: 1, epoch: "preview", revision: 1, busy: false, sessionId: "court", title: "New conversation", messages: [], tools: [], queue: [], dialogs: [], notices: [])
         var windows: [NSWindow] = []
-        for (name, width, dark) in [("desktop-chat-light", 940.0, false), ("desktop-chat-dark", 940.0, true), ("desktop-chat-narrow", 400.0, false)] {
+        let renders: [(String, Double, Bool, PiChatModel)] = [
+            ("desktop-chat-light", 940, false, model), ("desktop-chat-dark", 940, true, model),
+            ("desktop-court-dark", 1280, true, court), ("desktop-court-light", 1280, false, court),
+            ("desktop-court-squeezed", 900, true, court), ("desktop-court-narrow", 400, true, court),
+            ("desktop-chat-narrow", 400, false, model),
+        ]
+        for (name, width, dark, model) in renders {
             let view = PiPointGuardChatView(model: model, showSidebar: .constant(false))
                 .environment(AppState()).environment(\.colorScheme, dark ? .dark : .light)
                 .frame(width: width, height: 950).background(dark ? Color.black : Color.white)

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Saved prompts</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+.grp{background:#222226;border-radius:12px;margin:0 12px 10px;padding:12px 14px 4px}
+.acts{display:flex;gap:18px;align-items:center;height:44px;font-size:14.5px;font-weight:600}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0E0E10; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, Inter, system-ui, sans-serif; font-size: 15px">
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: #121214"></div>
+  <section aria-label="Saved prompts sheet" style="position: absolute; left: 0; right: 0; top: 380px; bottom: 0; background: #18181B; border-radius: 12px 12px 0 0; display: flex; flex-direction: column">
+    <div style="width: 36px; height: 5px; border-radius: 3px; background: rgba(255,255,255,0.2); margin: 6px auto 0"></div>
+    <header style="display: flex; align-items: center; height: 48px; padding: 0 8px">
+      <span style="width: 64px"></span>
+      <h1 style="flex: 1; margin: 0; text-align: center; font-size: 16px; font-weight: 600">Saved prompts</h1>
+      <button style="width: 64px; height: 44px; text-align: center; color: #FF8A3D; font-weight: 600">Done</button>
+    </header>
+    <article class="grp">
+      <div style="font-size: 12px; font-weight: 650; color: #FFB340">Delivery uncertain</div>
+      <p style="margin: 6px 0 0; font-size: 14.5px; line-height: 1.45">Use the existing TrustError enum instead of adding a new one.</p>
+      <p style="margin: 4px 0 0; font-size: 12.5px; color: #A1A1AA">Connection dropped before the Mac confirmed.</p>
+      <div class="acts">
+        <button style="color: #FF8A3D">Recover</button>
+        <button style="color: #ECECEE">Copy</button>
+        <span style="flex: 1"></span>
+        <button style="color: #FF7A70">Dismiss</button>
+      </div>
+    </article>
+    <article class="grp">
+      <div style="font-size: 12px; font-weight: 650; color: #A1A1AA">Blocked</div>
+      <p style="margin: 6px 0 0; font-size: 14.5px; line-height: 1.45">Run the tests again with --nocapture.</p>
+      <p style="margin: 4px 0 0; font-size: 12.5px; color: #A1A1AA">Agent was busy.</p>
+      <div class="acts">
+        <button style="color: #FF8A3D">Recover</button>
+        <button style="color: #ECECEE">Copy</button>
+        <span style="flex: 1"></span>
+        <button style="color: #FF7A70">Dismiss</button>
+      </div>
+    </article>
+    <p style="margin: 4px 28px 0; font-size: 12.5px; line-height: 1.45; color: #A1A1AA">Recover adds the text below your current draft. Nothing is sent.</p>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

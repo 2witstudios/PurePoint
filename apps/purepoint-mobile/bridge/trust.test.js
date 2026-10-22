@@ -295,11 +295,13 @@ test("terminal access defaults off for existing devices and explicit grants pers
         .enrollmentToken,
       name: "Existing phone",
     });
-    const legacy = JSON.parse(
-      await readFile(path.join(directory, "trust.json"), "utf8"),
-    );
-    assert.equal(legacy.devices[0].terminals, undefined);
+    const file = path.join(directory, "trust.json");
+    const legacy = JSON.parse(await readFile(file, "utf8"));
     await store.close();
+    // Devices paired before grants were stored have neither field.
+    delete legacy.devices[0].terminals;
+    delete legacy.devices[0].workspaceManagement;
+    await writeFile(file, JSON.stringify(legacy), { mode: 0o600 });
     const existing = await openTrustStore({ directory });
     try {
       assert.equal(existing.authorize(phone.credential).terminals, "off");
@@ -380,6 +382,7 @@ test("workspace management is default-off for old control grants, persists expli
         .enrollmentToken,
       name: "Phone",
     });
+    await store.setWorkspaceManagement(device.deviceId, false);
     await store.setTerminals(device.deviceId, "control");
     assert.equal(store.authorize(device.credential).workspaceManagement, false);
     await assert.rejects(store.setWorkspaceManagement(device.deviceId, "true"));
@@ -408,5 +411,55 @@ test("workspace management is default-off for old control grants, persists expli
       );
     } finally {
       await restarted.close();
+    }
+  }));
+
+test("new devices pair with full access", async () =>
+  fixture(async (store, directory) => {
+    const phone = await store.enroll({
+      enrollmentToken: JSON.parse(store.createEnrollment({ endpoint }).payload)
+        .enrollmentToken,
+      name: "Phone",
+    });
+    assert.equal(store.authorize(phone.credential).terminals, "control");
+    assert.equal(store.authorize(phone.credential).workspaceManagement, true);
+    const [disk] = JSON.parse(
+      await readFile(path.join(directory, "trust.json"), "utf8"),
+    ).devices;
+    assert.equal(disk.terminals, "control");
+    assert.equal(disk.workspaceManagement, true);
+  }));
+
+test("revoked devices are forgotten, including legacy revokedAt entries", async () =>
+  fixture(async (store, directory) => {
+    const pair = async (name) =>
+      store.enroll({
+        enrollmentToken: JSON.parse(store.createEnrollment({ endpoint }).payload)
+          .enrollmentToken,
+        name,
+      });
+    const phone = await pair("Phone");
+    const tablet = await pair("Tablet");
+    await store.revokeDevice(phone.deviceId);
+    assert.equal(store.authorize(phone.credential), null);
+    assert.deepEqual(
+      store.listDevices().map((d) => d.deviceId),
+      [tablet.deviceId],
+    );
+    const file = path.join(directory, "trust.json");
+    let state = JSON.parse(await readFile(file, "utf8"));
+    assert.deepEqual(
+      state.devices.map((d) => d.deviceId),
+      [tablet.deviceId],
+    );
+    await store.close();
+    state.devices[0].revokedAt = Date.now();
+    await writeFile(file, JSON.stringify(state), { mode: 0o600 });
+    store = await openTrustStore({ directory });
+    try {
+      assert.equal(store.listDevices().length, 0);
+      assert.equal(store.authorize(tablet.credential), null);
+    } finally {
+      await store.close();
     }
   }));

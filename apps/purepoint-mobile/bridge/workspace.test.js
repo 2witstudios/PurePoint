@@ -613,6 +613,8 @@ test("real authenticated TLS WS old grants deny management, off leaks no fleet, 
     ).enrollmentToken,
     name: "Phone",
   });
+  await trust.setWorkspaceManagement(phone.deviceId, false);
+  await trust.setTerminals(phone.deviceId, "off");
   let sequence = 0;
   const connect = async () => {
     const ws = new WebSocket(url, {
