@@ -473,14 +473,14 @@ struct PlaysHero: View {
                         }
                         .onEnded { value in
                             guard enabled, let index = nearest(to: value.location, among: spots) else { return }
-                            pass(index, from: value.location, to: spots[index])
+                            pass(index, flying: (value.location, spots[index]))
                         })
                     .position(logo)
                 Text("What play do you\nwant to run?").font(.system(size: 30, weight: .bold)).tracking(-0.6)
                     .multilineTextAlignment(.center).foregroundStyle(Color(hex: 0xF4F4F5))
                     .position(x: size.width / 2, y: top + height * 0.443)
                 ForEach(Self.plays.indices, id: \.self) { index in
-                    spot(index, lit: index == (target ?? passed)) { pass(index, from: nil, to: spots[index]) }
+                    spot(index, lit: index == (target ?? passed))
                         .position(x: spots[index].x, y: spots[index].y + 13)
                 }
                 if let ball {
@@ -522,14 +522,14 @@ struct PlaysHero: View {
         let distances = spots.map { hypot($0.x - point.x, $0.y - point.y) }
         return distances.indices.min { distances[$0] < distances[$1] }.flatMap { distances[$0] < Self.reach ? $0 : nil }
     }
-    /// Lights the play and, when it was passed from the thumb at `start`, flies the ball there before calling.
-    private func pass(_ index: Int, from start: CGPoint?, to spot: CGPoint) {
+    /// Lights the play and calls it; a pass released from the thumb flies the ball there first.
+    private func pass(_ index: Int, flying path: (from: CGPoint, to: CGPoint)? = nil) {
         let prompt = Self.plays[index].prompt
         passTask?.cancel(); passTask = nil
         withAnimation(.easeOut(duration: 0.2)) { passed = index }
-        guard let start, !reduceMotion else { flight = nil; call(prompt); return }
-        flight = start
-        withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { flight = spot }
+        guard let path, !reduceMotion else { flight = nil; call(prompt); return }
+        flight = path.from
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { flight = path.to }
         passTask = Task {
             // A pass interrupted by the court going away or a new grab never calls.
             guard (try? await Task.sleep(for: .milliseconds(450))) != nil, !Task.isCancelled else { return }
@@ -538,7 +538,7 @@ struct PlaysHero: View {
     }
     private func pill(_ index: Int, lit: Bool) -> some View {
         let play = Self.plays[index]
-        return Button { pass(index, from: nil, to: .zero) } label: {
+        return Button { pass(index) } label: {
             Label(play.label, systemImage: play.icon).font(.system(size: 14, weight: .medium)).lineLimit(1)
                 .foregroundStyle(lit ? Theme.ground : Theme.muted)
                 .frame(maxWidth: .infinity, minHeight: 44)
@@ -549,9 +549,9 @@ struct PlaysHero: View {
         .buttonStyle(.plain).disabled(!enabled)
         .accessibilityLabel(play.label).accessibilityHint(play.prompt)
     }
-    private func spot(_ index: Int, lit: Bool, action: @escaping () -> Void) -> some View {
+    private func spot(_ index: Int, lit: Bool) -> some View {
         let play = Self.plays[index]
-        return Button(action: action) {
+        return Button { pass(index) } label: {
             VStack(spacing: 10) {
                 Image(systemName: play.icon).font(.system(size: 16, weight: .medium))
                     .foregroundStyle(lit ? Theme.ground : Theme.muted)
