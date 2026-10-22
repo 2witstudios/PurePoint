@@ -146,9 +146,12 @@ impl IpcServer {
         // Owner-only whatever the umask. Connections accepted before this are
         // still held to the peer check in `run`.
         std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
+        let engine = Arc::new(engine);
+        // Every served registry is pruned, so the projects stream always opens.
+        engine.start_registry_prune();
         Ok(Self {
             listener,
-            engine: Arc::new(engine),
+            engine,
             shutdown: Arc::new(Notify::new()),
             conn_limit: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
             first_line_timeout: FIRST_LINE_TIMEOUT,

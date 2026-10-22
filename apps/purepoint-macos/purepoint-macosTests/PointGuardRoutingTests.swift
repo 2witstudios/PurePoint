@@ -298,6 +298,18 @@ private struct PointGuardRoutingService: WorkspaceService {
         }
     }
 
+    @Test func legacyEntryOnAnUnmountedVolumeStillResumesLastSession() throws {
+        try withState { state, _, root in
+            try FileManager.default.createDirectory(atPath: root + "-project", withIntermediateDirectories: true)
+            UserDefaults.standard.set([root + "-unmounted"], forKey: "PurePointOpenProjects")
+            state.restoreProjects()
+            #expect(UserDefaults.standard.stringArray(forKey: "PurePointOpenProjects") == [root + "-unmounted"])
+            let project = AppState.canonicalPath(root + "-project")
+            state.applyLocalProjects([project])
+            #expect(state.projectState(forRoot: project)?.keepsSuspendedAgentsOnNextOpen == false)
+        }
+    }
+
     @Test func pointGuardFolderRemovedElsewhereIsRegisteredAgain() throws {
         var started: [String] = []
         let root = NSTemporaryDirectory() + "point-guard-reregister-" + UUID().uuidString
@@ -320,5 +332,7 @@ private struct PointGuardRoutingService: WorkspaceService {
         state.applyLocalProjects([])
         #expect(started == [root])
         #expect(state.projects.map(\.projectRoot) == [root])
+        // The agents the removal suspended stay paused.
+        #expect(state.projectState(forRoot: root)?.keepsSuspendedAgentsOnNextOpen == true)
     }
 }

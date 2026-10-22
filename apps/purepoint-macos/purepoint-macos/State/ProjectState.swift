@@ -132,6 +132,9 @@ final class ProjectState: Identifiable {
         let root = projectRoot
         let svc = service
         let client = self.client
+        // One open only, whether or not it succeeds.
+        let keepsSuspendedAgents = keepsSuspendedAgentsOnNextOpen
+        keepsSuspendedAgentsOnNextOpen = false
 
         openTask?.cancel()
         refreshTask?.cancel()
@@ -197,11 +200,7 @@ final class ProjectState: Identifiable {
                 self.appState?.daemonError = error.localizedDescription
                 return
             }
-            if self.keepsSuspendedAgentsOnNextOpen {
-                self.keepsSuspendedAgentsOnNextOpen = false
-            } else {
-                self.resumeSuspendedAgents()
-            }
+            if !keepsSuspendedAgents { self.resumeSuspendedAgents() }
         }
         #else
         startWatchingRemote()

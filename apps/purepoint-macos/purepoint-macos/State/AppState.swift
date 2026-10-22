@@ -358,7 +358,6 @@ final class AppState {
         // project with the daemon, and then deleted.
         let paths = projectRoot.map { [$0] }
             ?? UserDefaults.standard.stringArray(forKey: Self.openProjectsKey) ?? []
-        resumesOnFirstLocalList = paths.isEmpty
         // Opening projects persists current state, so snapshot the saved lists first.
         let savedPointGuardFolders = UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") ?? []
         pointGuardFolders.formUnion(savedPointGuardFolders)
@@ -374,6 +373,8 @@ final class AppState {
             guard !isTooBroadProjectRoot(path) else { continue }
             openProject(path)
         }
+        // The first list reopens last session's sidebar, unless that came from the legacy list.
+        resumesOnFirstLocalList = paths.count == notImported.count
         if projectRoot == nil {
             if notImported.isEmpty {
                 UserDefaults.standard.removeObject(forKey: Self.openProjectsKey)
@@ -420,7 +421,9 @@ final class AppState {
             if let owner = projectState(forRoot: canonical[root] ?? root) ?? pointGuardProjects.first(where: {
                 Self.canonicalPath($0.key) == root
             })?.value, isPointGuardFolder(owner.projectRoot) {
-                // Removed elsewhere, but Point Guard works in this folder: register it again.
+                // Removed elsewhere, but Point Guard works in this folder: register it again,
+                // leaving the agents the removal suspended paused.
+                owner.keepsSuspendedAgentsOnNextOpen = true
                 startProject(owner)
             } else if let open = canonical[root] {
                 closeProject(open)

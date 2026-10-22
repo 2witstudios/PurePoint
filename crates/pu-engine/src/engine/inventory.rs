@@ -49,7 +49,11 @@ impl Engine {
     /// Drops, in the background, registered folders whose manifest older clients
     /// deleted to remove the project. Reads are bounded so a stale network mount
     /// delays nothing but itself; the project stream opens once this finishes.
+    /// Does nothing for an engine without a loaded registry.
     pub fn start_registry_prune(self: &std::sync::Arc<Self>) {
+        if *self.registry_ready.borrow() {
+            return;
+        }
         let engine = std::sync::Arc::clone(self);
         tokio::spawn(async move { engine.prune_removed_projects().await });
     }
@@ -75,10 +79,17 @@ impl Engine {
                 removed.push(root);
             }
         }
-        if !removed.is_empty()
-            && let Err(e) = self.unregister_projects(removed, true).await
+        // The removal re-reads each manifest under the update lock; a mount that went
+        // stale since must not keep the projects stream closed.
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.unregister_projects(removed, true),
+        )
+        .await
         {
-            tracing::warn!("failed to drop removed projects from the registry: {e}");
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => tracing::warn!("failed to drop removed projects from the registry: {e}"),
+            Err(_) => tracing::warn!("dropping removed projects from the registry timed out"),
         }
         self.registry_ready.send_replace(true);
     }
@@ -227,10 +238,12 @@ impl Engine {
                     ),
                 );
             }
-            if let Response::SuspendResult { suspended: ids } =
-                self.handle_suspend(&root, SuspendTarget::All).await
-            {
-                suspended = ids;
+            match self.handle_suspend(&root, SuspendTarget::All).await {
+                Response::SuspendResult { suspended: ids } => suspended = ids,
+                // Without a manifest nothing can be suspended; its sessions are stopped below.
+                Response::Error { code, .. } if code == "NOT_INITIALIZED" => {}
+                // Never kill agents a readable project would have suspended.
+                error => return error,
             }
             // Sessions the manifest does not list (or a missing manifest) still
             // belong to the project; nothing may keep running in a removed one.
@@ -1485,5 +1498,42 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn given_unreadable_manifest_should_refuse_removal_rather_than_kill_suspendable_agents() {
+        let (engine, id, tmp) = crate::test_helpers::init_and_spawn().await;
+        let root = tmp.path().join("project").canonicalize().unwrap();
+        std::fs::write(pu_core::paths::manifest_path(&root), b"corrupt").unwrap();
+        let root = root.to_string_lossy().into_owned();
+        let response = engine
+            .handle_request(Request::RemoveProject {
+                project_root: root.clone(),
+                suspend_agents: true,
+            })
+            .await;
+        assert!(matches!(response, Response::Error { .. }), "{response:?}");
+        assert_eq!(engine.registered_projects(), vec![root]);
+        assert!(engine.sessions.lock().await.contains_key(&id));
+        engine.kill_all_sessions(Duration::from_millis(10)).await;
+    }
+
+    #[tokio::test]
+    async fn given_missing_manifest_should_stop_live_sessions_and_report_them_killed() {
+        let (engine, id, tmp) = crate::test_helpers::init_and_spawn().await;
+        let root = tmp.path().join("project").canonicalize().unwrap();
+        std::fs::remove_file(pu_core::paths::manifest_path(&root)).unwrap();
+        let response = engine
+            .handle_request(Request::RemoveProject {
+                project_root: root.to_string_lossy().into_owned(),
+                suspend_agents: true,
+            })
+            .await;
+        assert!(
+            matches!(&response, Response::ProjectRemoved { removed: true, suspended, killed, .. }
+                if suspended.is_empty() && *killed == vec![id.clone()]),
+            "{response:?}"
+        );
+        engine.kill_all_sessions(Duration::from_millis(10)).await;
     }
 }

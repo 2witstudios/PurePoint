@@ -363,6 +363,27 @@ async fn given_projects_add_and_remove_should_change_what_every_client_lists() {
     let listed = json(&socket, tmp.path(), &["projects", "list", "--json"]).await;
     assert_eq!(listed["projects"][0]["project_root"], root_s);
 
+    // An agent's inherited PU_PROJECT_ROOT never chooses what to remove.
+    let inherited = tokio::process::Command::new(env!("CARGO_BIN_EXE_pu"))
+        .arg("--socket")
+        .arg(&socket)
+        .args(["projects", "remove", "--json"])
+        .current_dir(tmp.path())
+        .env("PU_PROJECT_ROOT", root_s)
+        .env_remove("PU_AGENT_ID")
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        inherited.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inherited.stderr)
+    );
+    let inherited: serde_json::Value = serde_json::from_slice(&inherited.stdout).unwrap();
+    assert_eq!(inherited["removed"], false);
+    let listed = json(&socket, tmp.path(), &["projects", "list", "--json"]).await;
+    assert_eq!(listed["projects"][0]["project_root"], root_s);
+
     let removed = json(
         &socket,
         tmp.path(),

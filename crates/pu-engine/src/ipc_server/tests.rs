@@ -629,7 +629,9 @@ async fn given_subscribe_projects_should_push_the_list_on_add_and_remove() {
     let project_root = tmp.path().canonicalize().unwrap().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
     let root = project_root.to_string_lossy().into_owned();
-    let server = IpcServer::bind(&sock_path, Engine::new()).unwrap();
+    // A loaded registry is pruned once served, which opens the stream.
+    let engine = Engine::with_project_registry(tmp.path().join("registry.json")).unwrap();
+    let server = IpcServer::bind(&sock_path, engine).unwrap();
     let handle = tokio::spawn(async move { server.run().await });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 

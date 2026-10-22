@@ -11,7 +11,7 @@ pub async fn run(socket: &Path, action: ProjectsAction) -> Result<(), CliError> 
             crate::commands::inventory::run(socket, InventoryKind::Projects, None, json).await
         }
         ProjectsAction::Add { path, json } => {
-            let root = resolve(path)?;
+            let root = resolve(path, Default::Init)?;
             if crate::machine_target::remote_machine().is_none() {
                 // Locally, adding is `pu init`: it also writes the agent context file.
                 return crate::commands::init::run_at(socket, root, json).await;
@@ -23,7 +23,7 @@ pub async fn run(socket: &Path, action: ProjectsAction) -> Result<(), CliError> 
             suspend_agents,
             json,
         } => {
-            let project_root = resolve(path)?;
+            let project_root = resolve(path, Default::Explicit)?;
             send(
                 socket,
                 Request::RemoveProject {
@@ -44,11 +44,28 @@ async fn send(socket: &Path, request: Request, json: bool) -> Result<(), CliErro
     output::print_response(&response, json)
 }
 
+/// Where a command without a path argument looks for its project.
+enum Default {
+    /// As `pu init`: --project, then PU_PROJECT_ROOT (set for agents), then cwd.
+    Init,
+    /// --project, then cwd. Removal ignores an inherited PU_PROJECT_ROOT, so it
+    /// never removes a project for every device that the caller did not name.
+    Explicit,
+}
+
 /// A path argument wins over --project and the current directory. On another
-/// machine it must be absolute: a local relative path means nothing there.
-fn resolve(path: Option<String>) -> Result<String, CliError> {
-    let Some(path) = path else {
-        return crate::commands::project_root_string();
+/// machine the root must be absolute: a local relative path means nothing there.
+fn resolve(path: Option<String>, default: Default) -> Result<String, CliError> {
+    let path = match (path, default) {
+        (Some(path), _) => path,
+        (None, Default::Init) => crate::commands::project_root_string()?,
+        (None, Default::Explicit) => match crate::commands::explicit_project() {
+            Some(root) => root,
+            None => match crate::machine_target::remote_machine() {
+                Some(machine) => return Err(crate::commands::remote_project_required(machine)),
+                None => crate::commands::cwd_string()?,
+            },
+        },
     };
     if crate::machine_target::remote_machine().is_some() {
         if !Path::new(&path).is_absolute() {

@@ -358,7 +358,8 @@ export function workspaceConnection({
         check();
         if (version < 13)
           fail("unsupported", "Update the machine's daemon to remove projects");
-        // Running agents are suspended, not killed: they resume if the project is added again.
+        // The project's agents are suspended so they resume if it is added again; only a
+        // session its manifest does not record is stopped (reported as `killed`).
         ipc = {
           type: "remove_project",
           project_root: project.id,
