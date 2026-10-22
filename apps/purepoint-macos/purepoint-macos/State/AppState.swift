@@ -437,7 +437,10 @@ final class AppState {
     #if os(macOS)
     private func canonicalRoot(of root: String) -> String {
         if let known = canonicalRoots[root] { return known }
-        let resolved = Self.canonicalPath(root)
+        guard let resolved = Self.resolvedPath(root) else {
+            // Not resolvable yet (an unmounted volume): try again on the next report.
+            return root
+        }
         canonicalRoots[root] = resolved
         return resolved
     }
@@ -461,7 +464,12 @@ final class AppState {
     /// The path with symlinks resolved, as the daemon's `canonicalize` reports it (unlike
     /// `URL.resolvingSymlinksInPath`, which drops `/private`).
     nonisolated static func canonicalPath(_ path: String) -> String {
-        guard let resolved = realpath(path, nil) else { return path }
+        resolvedPath(path) ?? path
+    }
+
+    /// The path with symlinks resolved, or nil when it does not resolve (yet).
+    nonisolated private static func resolvedPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
         defer { free(resolved) }
         return String(cString: resolved)
     }

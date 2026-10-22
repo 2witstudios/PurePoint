@@ -76,7 +76,7 @@ impl Engine {
                 removed.push(root);
             }
         }
-        // The removal re-reads each manifest under the update lock; a mount that went
+        // The removal re-checks each manifest under the update lock; a mount that went
         // stale since must not keep the projects stream closed.
         match tokio::time::timeout(
             Duration::from_secs(5),
@@ -749,8 +749,10 @@ pub(super) fn project_root_not_allowed(root: &str) -> Response {
 
 /// A project folder whose manifest is gone was removed by an older client. A
 /// missing folder is only unavailable: it may be on an unmounted volume.
+/// Only a manifest known to be absent counts: one that cannot be checked (a
+/// permission error, a stale network mount) keeps the project.
 fn was_removed(root: &Path) -> bool {
-    root.is_dir() && !pu_core::paths::manifest_path(root).exists()
+    root.is_dir() && matches!(pu_core::paths::manifest_path(root).try_exists(), Ok(false))
 }
 
 /// Whether `unregister_projects` re-checks, under the update lock, that each
@@ -1525,5 +1527,23 @@ mod tests {
             "{response:?}"
         );
         engine.kill_all_sessions(Duration::from_millis(10)).await;
+    }
+
+    #[tokio::test]
+    async fn given_manifest_that_cannot_be_checked_should_keep_the_project_on_prune() {
+        use std::os::unix::fs::PermissionsExt;
+        // Permissions do not stop root, so the stat would succeed and prove nothing.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let engine = Engine::with_project_registry(tmp.path().join("registry.json")).unwrap();
+        let root = init(&engine, &tmp.path().join("project")).await;
+        let pu = pu_core::paths::pu_dir(Path::new(&root));
+        // An unreadable `.pu/` is not a removed project, whatever the manifest stat says.
+        std::fs::set_permissions(&pu, std::fs::Permissions::from_mode(0o000)).unwrap();
+        engine.prune_removed_projects().await;
+        std::fs::set_permissions(&pu, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(engine.registered_projects(), vec![root]);
     }
 }
