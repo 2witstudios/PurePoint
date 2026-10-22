@@ -95,10 +95,10 @@ struct PointGuardSetupView: View {
                             Spacer()
                             Button("Connect phone") { showPhone = true; Task { await service.connectPhone() } }
                         }
-                        let devices = service.devices.filter { if case .null = $0["revokedAt"] { return true }; return false }
-                        ForEach(devices.indices, id: \.self) { index in
+                        let devices = service.devices.compactMap { device in device["deviceId"].text.map { (id: $0, device: device) } }
+                        ForEach(devices, id: \.id) { row in
                             Divider()
-                            deviceRow(devices[index])
+                            deviceRow(id: row.id, row.device)
                         }
                     }.padding(8)
                 }
@@ -121,8 +121,8 @@ struct PointGuardSetupView: View {
         .onChange(of: service.auth["status"].text) { _, value in if value != "pending" { response = "" } }
         .sheet(isPresented: $showPhone) { PointGuardPhoneView(service: service, isPresented: $showPhone) }
     }
-    private func deviceRow(_ device: PiJSONValue) -> some View {
-        let id = device["deviceId"].text
+    private func deviceRow(id: String, _ device: PiJSONValue) -> some View {
+        let busy = service.deviceUpdates.contains(id)
         let name = device["name"].text ?? "Phone"
         let manages: Bool = { if case .bool(let allowed) = device["workspaceManagement"] { return allowed }; return false }()
         let level = PointGuardPhoneAccess.Level(terminals: device["terminals"].text ?? "off", workspaceManagement: manages)
@@ -132,13 +132,14 @@ struct PointGuardSetupView: View {
                 Spacer()
                 Picker("Access", selection: Binding(
                     get: { level },
-                    set: { next in if let id { Task { await service.setAccess(id, to: next) } } }
+                    set: { next in Task { await service.setAccess(id, to: next) } }
                 )) {
                     ForEach(PointGuardPhoneAccess.Level.allCases) { Text($0.title).tag($0) }
                 }
                 .labelsHidden().pickerStyle(.menu).fixedSize()
-                .disabled(id.map(service.accessUpdates.contains) ?? true)
-                Button("Revoke", role: .destructive) { if let id { Task { await service.revokeDevice(id) } } }
+                .disabled(busy)
+                Button("Revoke", role: .destructive) { Task { await service.revokeDevice(id) } }
+                    .disabled(busy)
             }
             Text(PointGuardPhoneAccess.summary(terminals: level.terminals, workspaceManagement: level.workspaceManagement))
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

@@ -18,8 +18,8 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     @Published private(set) var auth: PiJSONValue = .null
     @Published private(set) var enrollment: PiJSONValue = .null
     @Published private(set) var devices: [PiJSONValue] = []
-    /// Devices with an Access change in flight; their menu stays disabled until it lands.
-    @Published private(set) var accessUpdates: Set<String> = []
+    /// Devices with an access change or revoke in flight; their row stays disabled until it lands.
+    @Published private(set) var deviceUpdates: Set<String> = []
     @Published private(set) var restartRequired = false
     @Published private(set) var hasPendingAuthCleanup = false
     @Published private(set) var hasPendingEnrollmentCleanup = false
@@ -345,10 +345,10 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     }
     /// Moves a device to `level` from its stored grants. One change per device at a time.
     func setAccess(_ id: String, to level: PointGuardPhoneAccess.Level) async {
-        guard !accessUpdates.contains(id),
+        guard !deviceUpdates.contains(id),
               let device = devices.first(where: { $0["deviceId"].text == id }) else { return }
-        accessUpdates.insert(id)
-        defer { accessUpdates.remove(id) }
+        deviceUpdates.insert(id)
+        defer { deviceUpdates.remove(id) }
         let stored: Bool = { if case .bool(let allowed) = device["workspaceManagement"] { return allowed }; return false }()
         do {
             for step in PointGuardPhoneAccess.steps(terminals: device["terminals"].text ?? "off", workspaceManagement: stored, to: level) {
@@ -364,6 +364,9 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     }
 
     func revokeDevice(_ id: String) async {
+        guard !deviceUpdates.contains(id) else { return }
+        deviceUpdates.insert(id)
+        defer { deviceUpdates.remove(id) }
         do { _ = try await request("devices.revoke", fields: ["deviceId": .string(id)]); await refresh() }
         catch { self.error = error.localizedDescription }
     }
