@@ -95,6 +95,11 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::ChannelHistory { .. } | Response::ChannelMessage { .. } => {
             print!("{}", crate::commands::channel::format_response(response));
         }
+        Response::ProjectOrder { project_roots } => {
+            for root in project_roots {
+                println!("{root}");
+            }
+        }
         Response::HealthReport {
             pid,
             uptime_seconds,

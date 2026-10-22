@@ -21,6 +21,8 @@ enum SidebarMenuAction: Equatable {
     case retryLayout
     case hideProject
     case removeProject
+    case moveProjectUp
+    case moveProjectDown
     case newAgentInWorktree
     case newTerminalInWorktree
 }
@@ -125,6 +127,13 @@ enum SidebarMenus {
         }
         if project.isRemote, project.registry?.layoutErrorsByProject[project.projectId] != nil {
             entries.append(.action("Retry Layout", .retryLayout))
+        }
+        if let siblings = project.appState?.siblingProjects(of: project), siblings.count > 1,
+            let index = siblings.firstIndex(where: { $0 === project })
+        {
+            entries.append(.action("Move Up", .moveProjectUp, isEnabled: index > 0))
+            entries.append(.action("Move Down", .moveProjectDown, isEnabled: index < siblings.count - 1))
+            entries.append(.separator)
         }
         if project.isRemote {
             // Hiding is this device's choice; removing changes the machine for every device.

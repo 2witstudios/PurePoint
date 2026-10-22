@@ -362,6 +362,8 @@ nonisolated enum DaemonRequest: Encodable {
     case shutdown
     /// The daemon's registered projects; no project root means all of them.
     case inventory(kind: String, projectRoot: String? = nil)
+    /// Save the order of the daemon's registered projects, which every client shows (protocol 14).
+    case reorderProjects(projectRoots: [String])
     // File and git access confined to registered projects (machines.md, protocol 9).
     case fsList(path: String, recursive: Bool = false, includeHidden: Bool = true, maxEntries: Int = 20_000)
     /// `fs_list` with `directories_only`: the subdirectories of any directory on the machine,
@@ -621,6 +623,9 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("inventory", forKey: .key("type"))
             try container.encode(kind, forKey: .key("kind"))
             try container.encodeIfPresent(projectRoot, forKey: .key("project_root"))
+        case .reorderProjects(let projectRoots):
+            try container.encode("reorder_projects", forKey: .key("type"))
+            try container.encode(projectRoots, forKey: .key("project_roots"))
         case .fsList(let path, let recursive, let includeHidden, let maxEntries):
             try container.encode("fs_list", forKey: .key("type"))
             try container.encode(path, forKey: .key("path"))
@@ -711,6 +716,8 @@ nonisolated enum DaemonResponse: Decodable {
     /// `launchArgs` is nil when the daemon predates machine-level launch args (protocol < 11).
     case globalAgentSettingsReport(agentStatusTracking: Bool, launchArgs: [String: String]? = nil)
     case inventory(InventoryReportPayload)
+    /// The registered projects in their saved order.
+    case projectOrder(projectRoots: [String])
     case fsListResult(path: String, entries: [FsEntryPayload], truncated: Bool)
     case fsStatResult(FsStatPayload)
     case fsReadResult(path: String, data: Data, size: UInt64, modifiedMs: Int64, truncated: Bool)
@@ -837,6 +844,8 @@ nonisolated enum DaemonResponse: Decodable {
                 agentStatusTracking: p.agentStatusTracking ?? true, launchArgs: p.launchArgs)
         case "inventory":
             self = .inventory(try InventoryReportPayload(from: decoder))
+        case "project_order":
+            self = .projectOrder(projectRoots: try ProjectOrderPayload(from: decoder).projectRoots)
         case "fs_list_result":
             let p = try FsListResultPayload(from: decoder)
             self = .fsListResult(path: p.path, entries: p.entries, truncated: p.truncated)
@@ -1253,7 +1262,7 @@ private nonisolated struct DynamicCodingKey: CodingKey {
 
 nonisolated enum DaemonProtocol {
     /// The protocol this app speaks. A daemon reporting another version is incompatible.
-    static let version = 13
+    static let version = 14
 }
 
 nonisolated struct InventoryProjectPayload: Decodable, Sendable, Equatable {
@@ -1284,6 +1293,14 @@ nonisolated struct InventoryReportPayload: Decodable, Sendable {
         projectRoot = try container.decodeIfPresent(String.self, forKey: .projectRoot)
         complete = try container.decodeIfPresent(Bool.self, forKey: .complete) ?? true
         projects = try container.decodeIfPresent([InventoryProjectPayload].self, forKey: .projects) ?? []
+    }
+}
+
+nonisolated struct ProjectOrderPayload: Decodable, Sendable {
+    let projectRoots: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case projectRoots = "project_roots"
     }
 }
 

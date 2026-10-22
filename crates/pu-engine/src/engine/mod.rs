@@ -89,9 +89,10 @@ pub struct Engine {
     grid_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<GridCommand>>>>,
     /// Per-project broadcast channels for status push updates.
     status_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
-    /// Projects added with `Init` and not removed since — scheduler scans these.
-    registered_projects: Arc<std::sync::Mutex<HashSet<String>>>,
-    /// Signalled whenever a project is added to or removed from the registry.
+    /// Projects added with `Init` and not removed since — scheduler scans these —
+    /// in the order clients show them.
+    registered_projects: Arc<std::sync::Mutex<Vec<String>>>,
+    /// Signalled whenever a project is added, removed or reordered in the registry.
     projects_changed: tokio::sync::broadcast::Sender<()>,
     /// False from loading a registry until its removed projects are dropped.
     registry_ready: tokio::sync::watch::Sender<bool>,
@@ -207,7 +208,7 @@ impl Engine {
             reaped_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
             grid_channels: Arc::new(Mutex::new(HashMap::new())),
             status_channels: Arc::new(Mutex::new(HashMap::new())),
-            registered_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            registered_projects: Arc::new(std::sync::Mutex::new(Vec::new())),
             projects_changed: tokio::sync::broadcast::channel(16).0,
             registry_ready: tokio::sync::watch::Sender::new(true),
             resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
@@ -302,11 +303,7 @@ impl Engine {
     pub fn registered_projects(&self) -> Vec<String> {
         self.registered_projects
             .lock()
-            .map(|p| {
-                let mut roots: Vec<_> = p.iter().cloned().collect();
-                roots.sort();
-                roots
-            })
+            .map(|p| p.clone())
             .unwrap_or_default()
     }
 
@@ -414,6 +411,12 @@ impl Engine {
                 kind,
                 state,
             } => Response::Inventory(self.inventory(project_root, kind, state).await),
+            Request::ReorderProjects { project_roots } => {
+                match self.reorder_projects(project_roots).await {
+                    Ok(project_roots) => Response::ProjectOrder { project_roots },
+                    Err(response) => response,
+                }
+            }
             Request::ResolveAgent {
                 agent_id,
                 project_root,

@@ -51,6 +51,9 @@ final class MachineState: Identifiable {
     /// How often the project list is re-read while the daemon is up, in case a pushed
     /// change was missed.
     private static let refreshInterval: Duration = .seconds(30)
+    /// Bumped by each local move, so a project list fetched before it can't undo it.
+    @ObservationIgnored private var orderRevision = 0
+    @ObservationIgnored private lazy var orderSaver = ProjectOrderSaver(endpoint: endpoint)
 
     var endpoint: DaemonEndpoint { .machine(machine.id) }
     var isConnectedOrConnecting: Bool { state != .disconnected }
@@ -338,6 +341,7 @@ final class MachineState: Identifiable {
     /// Discover the daemon's registered projects (`inventory`, kind projects, all roots).
     func refreshProjects() async {
         let client = endpoint.makeClient()
+        let revision = orderRevision
         let response: DaemonResponse
         do {
             response = try await client.send(.inventory(kind: "projects"))
@@ -351,6 +355,8 @@ final class MachineState: Identifiable {
         switch response {
         case .inventory(let report):
             actionError = nil
+            // Listed before a move this app made: the next refresh brings the saved order.
+            guard revision == orderRevision else { return }
             setProjects(roots: report.projects.map(\.projectRoot))
         case .error(_, let message):
             actionError = "Could not list projects on \(machine.name): \(message)"
@@ -360,7 +366,11 @@ final class MachineState: Identifiable {
     }
 
     private func setProjects(roots: [String]) {
-        let visible = roots.filter { !hiddenRoots.contains($0) }
+        var visible = roots.filter { !hiddenRoots.contains($0) }
+        if orderSaver.pending > 0 {
+            // The list may predate a move still being saved: keep the order on screen.
+            visible = ProjectOrder.sorted(visible, by: projects.map(\.projectRoot), root: { $0 })
+        }
         let wanted = Set(visible)
         var kept: [ProjectState] = []
         for project in projects where !wanted.contains(project.projectRoot) {
@@ -392,6 +402,22 @@ final class MachineState: Identifiable {
         for project in restored {
             project.isUnavailable = false
             project.startWatching()
+        }
+    }
+
+    /// Move a project to `index` among this machine's projects and save the order on the
+    /// machine, so every device lists its projects the same way.
+    func moveProject(root: String, to index: Int) {
+        guard let next = ProjectOrder.moving(root, to: index, in: projects) else { return }
+        projects = next
+        orderRevision += 1
+        orderSaver.save(next.map(\.projectRoot)) { [weak self] in
+            guard let self else { return }
+            Task {
+                // Show the order the machine kept.
+                await self.refreshProjects()
+                self.actionError = "Could not save the project order on \(self.machine.name)."
+            }
         }
     }
 

@@ -5,6 +5,7 @@ export const workspaceFeatures = Object.freeze({
   inventory: true,
   management: true,
   operationStatus: true,
+  projectOrder: true,
 });
 export const workspaceOperations = [
   "workspace.catalog",
@@ -15,6 +16,7 @@ export const workspaceOperations = [
   "workspace.rename",
   "workspace.stop",
   "workspace.removeProject",
+  "workspace.reorderProjects",
 ];
 const fail = (code, message) => {
   throw new Error(`workspace_${code}: ${message}`);
@@ -116,6 +118,7 @@ const fields = {
   "workspace.rename": ["agentId", "name"],
   "workspace.stop": ["agentId", "confirm"],
   "workspace.removeProject": ["confirm"],
+  "workspace.reorderProjects": ["projectIds"],
 };
 const fingerprint = (request) =>
   JSON.stringify(
@@ -176,6 +179,28 @@ export function workspaceConnection({
     if (!project || (!project.available && r.op !== "workspace.removeProject"))
       fail("target", "Registered available project required");
     return { machine, metadata, project };
+  };
+  // Project order is per machine: every listed root must be registered there.
+  const resolveOrder = async (r, signal, check) => {
+    if (
+      !identifier(r.machine) ||
+      !Array.isArray(r.projectIds) ||
+      r.projectIds.length === 0 ||
+      r.projectIds.length > 4096 ||
+      r.projectIds.some((id) => !bounded(id, 4096)) ||
+      new Set(r.projectIds).size !== r.projectIds.length
+    )
+      fail(
+        "invalid",
+        "Exact machine and distinct registered projects required",
+      );
+    const machine = await daemons.resolve(r.machine);
+    check();
+    const metadata = await projectMetadata(machine, { signal });
+    check();
+    if (!r.projectIds.every((id) => metadata.projects.some((p) => p.id === id)))
+      fail("target", "Every project must be registered on this machine");
+    return { machine, metadata, project: null };
   };
   const catalog = async (machine, projectId, signal, check) => {
     const config = await daemonRequest(
@@ -301,11 +326,9 @@ export function workspaceConnection({
       if (abort.signal.aborted) fail("permission", "Operation fenced");
     };
     try {
-      const { machine, metadata, project } = await resolve(
-        r,
-        abort.signal,
-        check,
-      );
+      const { machine, metadata, project } = await (
+        r.op === "workspace.reorderProjects" ? resolveOrder : resolve
+      )(r, abort.signal, check);
       if (!mutation)
         return await catalog(machine, project.id, abort.signal, check);
       if (r.name !== undefined && !bounded(r.name, 80))
@@ -318,7 +341,24 @@ export function workspaceConnection({
       )
         fail("invalid", "Base requires a bounded git reference");
       let ipc;
-      if (["workspace.rename", "workspace.stop"].includes(r.op)) {
+      if (r.op === "workspace.reorderProjects") {
+        // Health alone carries the version; an older daemon can't parse the request.
+        const health = await daemonRequest(
+          machine.socket,
+          { type: "health" },
+          { signal: abort.signal },
+        );
+        check();
+        if (
+          !Number.isInteger(health.protocol_version) ||
+          health.protocol_version < 14
+        )
+          fail(
+            "unsupported",
+            "Update the machine's daemon to reorder projects",
+          );
+        ipc = { type: "reorder_projects", project_roots: r.projectIds };
+      } else if (["workspace.rename", "workspace.stop"].includes(r.op)) {
         if (!identifier(r.agentId)) fail("invalid", "Exact agent required");
         const { inventory } = await daemons.inspect(machine, {
           signal: abort.signal,
@@ -476,6 +516,7 @@ export function workspaceConnection({
         "workspace.rename": "rename_result",
         "workspace.stop": "kill_result",
         "workspace.removeProject": "project_removed",
+        "workspace.reorderProjects": "project_order",
       }[r.op];
       if (reply.type !== expected) throw new Error("Unexpected daemon receipt");
       entry.result = {
@@ -493,6 +534,9 @@ export function workspaceConnection({
             "workspace.createWorktree",
           ].includes(r.op)
             ? { worktreeId: reply.worktree_id ?? null }
+            : {}),
+          ...(r.op === "workspace.reorderProjects"
+            ? { projectIds: reply.project_roots }
             : {}),
         },
       };

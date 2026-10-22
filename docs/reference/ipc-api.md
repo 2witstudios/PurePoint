@@ -77,6 +77,18 @@ ResolveAgent returns `type: agent_resolved`, agent_id, project_root and worktree
 
 Production registry: `<socket>.projects.json`, loaded on startup and atomically updated by `init` (add) and `remove_project` (remove) — nothing else adds a project, so a removed project stays removed even while other clients still use it. A registered root whose folder still exists but has no `.pu/manifest.json` (removed by an older client) is dropped in the background when the daemon starts (inventory itself never changes the registry); a root whose folder is missing stays, reported unavailable, since it may be on an unmounted volume. `/`, `$HOME` and ancestors of `$HOME` are never registered, even when `~/.pu/manifest.json` makes `$HOME` look initialized; such entries left by older daemons are removed when the registry loads. Requests naming such a root fail with `project_root_not_allowed`, except `status`, `subscribe_status`, `read`, `channel_read` and `kill`, which stay available so agents an older version recorded there can be seen and stopped. Roots are canonical, registration survives restart, and startup does not resume agents. Health returns registered roots and counts only session handles without observed exits.
 
+The registry is ordered, and that order is the one every client shows for the machine. New projects are appended; `inventory` (projects) and Health list roots in registry order. Registries written by older daemons, which kept roots sorted by path, load in that order.
+
+### Reorder projects
+
+Set the order of the registered projects (protocol 14). A change is pushed to `subscribe_projects` streams.
+
+**Request**: `{"type": "reorder_projects", "project_roots": ["/b", "/a"]}`
+
+**Response**: `{"type": "project_order", "project_roots": ["/b", "/a", "/c"]}`
+
+The listed roots move to the front in the given order. Registered roots not listed follow in their current order, and unknown roots are ignored, so a client with a stale list can reorder projects but never drop one. Roots are canonicalized like registration. The new order is written atomically to the registry before the reply.
+
 ### Health
 
 Check daemon liveness and protocol version.
@@ -89,7 +101,7 @@ Check daemon liveness and protocol version.
   "type": "health_report",
   "pid": 12345,
   "uptime_seconds": 3600,
-  "protocol_version": 13,
+  "protocol_version": 14,
   "projects": ["/path/to/project"],
   "agent_count": 3
 }
@@ -406,7 +418,7 @@ Then streams: `{"type": "status_event", "worktrees": [...], "agents": [...]}`
 
 ### SubscribeProjects
 
-Follow the registered projects. The full sorted list of roots is sent once on subscribing and again after every `init` that adds a project and every removal, so every client shows the same projects without polling. Any request line ends the stream.
+Follow the registered projects. The full list of roots, in registry order, is sent once on subscribing and again after every `init` that adds a project, every removal and every `reorder_projects` that changes the order, so every client shows the same projects without polling. Any request line ends the stream.
 
 **Request**: `{"type": "subscribe_projects"}`
 

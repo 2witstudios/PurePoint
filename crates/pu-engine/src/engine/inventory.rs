@@ -38,7 +38,14 @@ impl Engine {
             tracing::warn!("failed to rewrite project registry: {e}");
         }
         engine.project_registry_path = Some(path);
-        *engine.registered_projects.lock().unwrap() = projects.into_iter().collect();
+        // Keep the stored order; drop repeats an older daemon may have written.
+        let mut ordered = Vec::with_capacity(projects.len());
+        for root in projects {
+            if !ordered.contains(&root) {
+                ordered.push(root);
+            }
+        }
+        *engine.registered_projects.lock().unwrap() = ordered;
         // Until `start_registry_prune` has run, the project stream waits: a client
         // following it must not open a project an older client removed.
         engine.registry_ready.send_replace(false);
@@ -125,17 +132,16 @@ impl Engine {
                 if current.contains(&root) {
                     return Ok(false);
                 }
-                current.iter().cloned().collect()
+                current.clone()
             };
-            next.push(root.clone());
-            next.sort();
+            // New projects go last; the registry order is the order clients show.
+            next.push(root);
             if let Some(path) = registry {
                 write_registry(&path, &next)?;
             }
-            projects
+            *projects
                 .lock()
-                .map_err(|_| std::io::Error::other("project registry lock poisoned"))?
-                .insert(root);
+                .map_err(|_| std::io::Error::other("project registry lock poisoned"))? = next;
             Ok(true)
         })
         .await
@@ -145,6 +151,61 @@ impl Engine {
             self.notify_projects_changed();
         }
         Ok(())
+    }
+
+    /// Moves the given registered roots to the front, in the given order. Registered
+    /// roots left out keep their relative order after them and unknown roots are
+    /// ignored, so a client's stale list can reorder but never drop a project.
+    pub(super) async fn reorder_projects(
+        &self,
+        roots: Vec<String>,
+    ) -> Result<Vec<String>, Response> {
+        let update = self.project_registry_updates.clone().lock_owned().await;
+        let projects = self.registered_projects.clone();
+        let registry = self.project_registry_path.clone();
+        let (next, changed) =
+            tokio::task::spawn_blocking(move || -> std::io::Result<(Vec<String>, bool)> {
+                let _update = update;
+                let current = projects
+                    .lock()
+                    .map_err(|_| std::io::Error::other("project registry lock poisoned"))?
+                    .clone();
+                let mut next = Vec::with_capacity(current.len());
+                for root in roots {
+                    // Accept any spelling of a registered root, as registration does.
+                    let root = match Path::new(&root).canonicalize() {
+                        Ok(path) => path.to_string_lossy().into_owned(),
+                        Err(_) => root,
+                    };
+                    if current.contains(&root) && !next.contains(&root) {
+                        next.push(root);
+                    }
+                }
+                for root in &current {
+                    if !next.contains(root) {
+                        next.push(root.clone());
+                    }
+                }
+                let changed = next != current;
+                if changed {
+                    if let Some(path) = registry {
+                        write_registry(&path, &next)?;
+                    }
+                    *projects
+                        .lock()
+                        .map_err(|_| std::io::Error::other("project registry lock poisoned"))? =
+                        next.clone();
+                }
+                Ok((next, changed))
+            })
+            .await
+            .map_err(|e| Self::inventory_error("IO_ERROR", e.to_string()))?
+            .map_err(|e| Self::inventory_error("IO_ERROR", e.to_string()))?;
+        // Clients following the project stream pick up the new order.
+        if changed {
+            self.notify_projects_changed();
+        }
+        Ok(next)
     }
 
     /// Removes registered roots and returns the ones that were registered.
@@ -167,22 +228,20 @@ impl Engine {
                 .iter()
                 .cloned()
                 .collect();
-            let (removed, mut next): (Vec<_>, Vec<_>) = current.into_iter().partition(|root| {
+            let (removed, next): (Vec<_>, Vec<_>) = current.into_iter().partition(|root| {
                 roots.contains(root) && (mode == Unregister::Always || was_removed(Path::new(root)))
             });
             if removed.is_empty() {
                 return Ok(removed);
             }
-            next.sort();
+            // `partition` keeps the remaining projects in their order.
             if let Some(path) = registry {
                 write_registry(&path, &next)?;
             }
-            let mut current = projects
+            projects
                 .lock()
-                .map_err(|_| std::io::Error::other("project registry lock poisoned"))?;
-            for root in &removed {
-                current.remove(root);
-            }
+                .map_err(|_| std::io::Error::other("project registry lock poisoned"))?
+                .retain(|root| !removed.contains(root));
             Ok(removed)
         })
         .await
@@ -356,7 +415,7 @@ impl Engine {
         };
         // Read independently so one slow project cannot block the whole query.
         let mut reads = tokio::task::JoinSet::new();
-        for root in roots {
+        for root in roots.iter().cloned() {
             reads.spawn(async move {
                 let path = PathBuf::from(&root);
                 let read = tokio::task::spawn_blocking(move || manifest::read_manifest(&path));
@@ -375,7 +434,8 @@ impl Engine {
                 Err(_) => report.complete = false,
             }
         }
-        manifests.sort_by(|a, b| a.0.cmp(&b.0));
+        // Reads finish in any order; report projects in registry order.
+        manifests.sort_by_key(|(root, _)| roots.iter().position(|r| r == root));
         // A global query read every registered root; a scoped one needs the registry.
         let registered: HashSet<String> = if report.project_root.is_none() {
             manifests.iter().map(|(root, _)| root.clone()).collect()
@@ -822,11 +882,83 @@ mod tests {
         let first = tmp.path().join("first");
         let second = tmp.path().join("second");
         let (first, second) = tokio::join!(init(&engine, &first), init(&engine, &second));
+        // Concurrent registrations land in completion order.
+        let mut registered = Engine::with_project_registry(path)
+            .unwrap()
+            .registered_projects();
+        registered.sort();
+        assert_eq!(registered, vec![first, second]);
+    }
+
+    async fn reorder(engine: &Engine, roots: &[&str]) -> Vec<String> {
+        match engine
+            .handle_request(Request::ReorderProjects {
+                project_roots: roots.iter().map(|r| r.to_string()).collect(),
+            })
+            .await
+        {
+            Response::ProjectOrder { project_roots } => project_roots,
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn given_registration_should_keep_insertion_order_not_path_order() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let engine = Engine::with_project_registry(tmp.path().join("registry.json")).unwrap();
+        let zeta = init(&engine, &tmp.path().join("zeta")).await;
+        let alpha = init(&engine, &tmp.path().join("alpha")).await;
         assert_eq!(
-            Engine::with_project_registry(path)
-                .unwrap()
-                .registered_projects(),
-            vec![first, second]
+            engine.registered_projects(),
+            vec![zeta.clone(), alpha.clone()]
+        );
+        let names: Vec<_> = inventory(&engine, InventoryKind::Projects)
+            .await
+            .projects
+            .into_iter()
+            .map(|p| p.project_root)
+            .collect();
+        assert_eq!(names, vec![zeta, alpha]);
+    }
+
+    #[tokio::test]
+    async fn given_reorder_should_persist_the_order_across_restart() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("registry.json");
+        let engine = Engine::with_project_registry(path.clone()).unwrap();
+        let a = init(&engine, &tmp.path().join("a")).await;
+        let b = init(&engine, &tmp.path().join("b")).await;
+        let c = init(&engine, &tmp.path().join("c")).await;
+        let order = reorder(&engine, &[&c, &a, &b]).await;
+        assert_eq!(order, vec![c.clone(), a.clone(), b.clone()]);
+        assert_eq!(engine.registered_projects(), order);
+        drop(engine);
+        let engine = Engine::with_project_registry(path).unwrap();
+        assert_eq!(engine.registered_projects(), vec![c, a, b]);
+    }
+
+    #[tokio::test]
+    async fn given_partial_or_unknown_reorder_should_keep_every_registered_project() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let engine = Engine::with_project_registry(tmp.path().join("registry.json")).unwrap();
+        let a = init(&engine, &tmp.path().join("a")).await;
+        let b = init(&engine, &tmp.path().join("b")).await;
+        let c = init(&engine, &tmp.path().join("c")).await;
+        let alias = tmp.path().join("alias");
+        std::os::unix::fs::symlink(&c, &alias).unwrap();
+        let order = reorder(&engine, &["/nowhere", alias.to_str().unwrap(), &c, &b]).await;
+        assert_eq!(order, vec![c, b, a]);
+    }
+
+    #[tokio::test]
+    async fn given_an_existing_registry_file_should_load_in_its_stored_order() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("registry.json");
+        std::fs::write(&path, br#"["/b/project", "/a/project", "/b/project"]"#).unwrap();
+        let engine = Engine::with_project_registry(path).unwrap();
+        assert_eq!(
+            engine.registered_projects(),
+            vec!["/b/project", "/a/project"]
         );
     }
 

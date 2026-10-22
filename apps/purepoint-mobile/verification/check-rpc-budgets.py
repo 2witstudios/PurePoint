@@ -47,6 +47,7 @@ matrix = {
     "workspace.rename": (metadata_ms + inspect_ms + short_dispatch_ms, 100_000),
     "workspace.stop": (metadata_ms + inspect_ms + short_dispatch_ms, 100_000),
     "workspace.removeProject": (metadata_ms + inspect_ms + short_dispatch_ms, 100_000),
+    "workspace.reorderProjects": (metadata_ms + inspect_ms + short_dispatch_ms, 100_000),
 }
 for operation, (bridge_ms, expected_phone_ms) in matrix.items():
     assert phone_ms.get(operation, 35_000) == expected_phone_ms, (operation, "Exact receipt deadline mismatch")

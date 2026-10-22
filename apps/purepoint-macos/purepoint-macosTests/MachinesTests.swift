@@ -315,7 +315,22 @@ struct HealthProbeTests {
 
 struct DaemonProjectHostRequestTests {
     @Test func givenProtocolShouldBeCurrentVersion() {
-        #expect(DaemonProtocol.version == 13)
+        #expect(DaemonProtocol.version == 14)
+    }
+
+    @Test func givenReorderProjectsShouldSendTheWholeOrder() throws {
+        let object = try json(.reorderProjects(projectRoots: ["/b", "/a"]))
+        #expect(object["type"] as? String == "reorder_projects")
+        #expect(object["project_roots"] as? [String] == ["/b", "/a"])
+    }
+
+    @Test func givenProjectOrderReplyShouldParse() {
+        let response = DaemonClient.parse(Data(#"{"type":"project_order","project_roots":["/b","/a"]}"#.utf8))
+        guard case .projectOrder(let roots) = response else {
+            Issue.record("expected projectOrder, got \(response)")
+            return
+        }
+        #expect(roots == ["/b", "/a"])
     }
 
     @Test func givenRemoveProjectShouldNameTheRootAndWhetherToSuspendAgents() throws {
