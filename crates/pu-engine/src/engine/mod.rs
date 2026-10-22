@@ -93,6 +93,8 @@ pub struct Engine {
     registered_projects: Arc<std::sync::Mutex<HashSet<String>>>,
     /// Signalled whenever a project is added to or removed from the registry.
     projects_changed: tokio::sync::broadcast::Sender<()>,
+    /// False from loading a registry until its removed projects are dropped.
+    registry_ready: tokio::sync::watch::Sender<bool>,
     /// Agents with a resume in progress, so two resumes of one agent can never
     /// both spawn `claude --resume` on the same transcript.
     resuming: Arc<std::sync::Mutex<HashSet<String>>>,
@@ -207,6 +209,7 @@ impl Engine {
             status_channels: Arc::new(Mutex::new(HashMap::new())),
             registered_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
             projects_changed: tokio::sync::broadcast::channel(16).0,
+            registry_ready: tokio::sync::watch::Sender::new(true),
             resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
             shutdown_killed: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }

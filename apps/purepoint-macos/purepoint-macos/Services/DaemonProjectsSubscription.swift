@@ -47,6 +47,11 @@ actor DaemonProjectsSubscription {
 
     private func run(onChange: @escaping @MainActor ([String]) -> Void) async throws {
         let (conn, reader) = try await client.connect()
+        // Stopped while connecting: nothing else would ever close this connection.
+        guard !stopped else {
+            conn.close()
+            return
+        }
         connection?.close()
         connection = conn
         try await DaemonClient.write(.subscribeProjects, to: conn)

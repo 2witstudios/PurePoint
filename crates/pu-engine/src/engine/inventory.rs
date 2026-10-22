@@ -27,17 +27,11 @@ impl Engine {
         }
         let mut engine = Self::new();
         // `/`, `$HOME` and its ancestors are never projects, whatever an older
-        // daemon recorded; drop them from the registry on disk too. So are
-        // folders whose manifest older clients deleted to remove the project:
-        // clients that follow the registry must not open them again.
+        // daemon recorded; drop them from the registry on disk too.
         let count = projects.len();
         let projects: Vec<String> = projects
             .into_iter()
-            .filter(|root| {
-                let path = Path::new(root);
-                !is_too_broad_project_root(path, engine.home.as_deref())
-                    && !was_removed(path, &manifest::read_manifest(path))
-            })
+            .filter(|root| !is_too_broad_project_root(Path::new(root), engine.home.as_deref()))
             .collect();
         if projects.len() != count
             && let Err(e) = write_registry(&path, &projects)
@@ -46,7 +40,53 @@ impl Engine {
         }
         engine.project_registry_path = Some(path);
         *engine.registered_projects.lock().unwrap() = projects.into_iter().collect();
+        // Until `start_registry_prune` has run, the project stream waits: a client
+        // following it must not open a project an older client removed.
+        engine.registry_ready.send_replace(false);
         Ok(engine)
+    }
+
+    /// Drops, in the background, registered folders whose manifest older clients
+    /// deleted to remove the project. Reads are bounded so a stale network mount
+    /// delays nothing but itself; the project stream opens once this finishes.
+    pub fn start_registry_prune(self: &std::sync::Arc<Self>) {
+        let engine = std::sync::Arc::clone(self);
+        tokio::spawn(async move { engine.prune_removed_projects().await });
+    }
+
+    pub(crate) async fn prune_removed_projects(&self) {
+        let mut reads = tokio::task::JoinSet::new();
+        for root in self.registered_projects() {
+            reads.spawn(async move {
+                let path = PathBuf::from(&root);
+                let read = tokio::task::spawn_blocking(move || {
+                    was_removed(&path, &manifest::read_manifest(&path))
+                });
+                let removed = matches!(
+                    tokio::time::timeout(Duration::from_secs(2), read).await,
+                    Ok(Ok(true))
+                );
+                removed.then_some(root)
+            });
+        }
+        let mut removed = Vec::new();
+        while let Some(result) = reads.join_next().await {
+            if let Ok(Some(root)) = result {
+                removed.push(root);
+            }
+        }
+        if !removed.is_empty()
+            && let Err(e) = self.unregister_projects(removed, true).await
+        {
+            tracing::warn!("failed to drop removed projects from the registry: {e}");
+        }
+        self.registry_ready.send_replace(true);
+    }
+
+    /// Resolves once registered projects removed by older clients are dropped.
+    pub(crate) async fn registry_ready(&self) {
+        let mut ready = self.registry_ready.subscribe();
+        let _ = ready.wait_for(|ready| *ready).await;
     }
 
     /// Registers an initialized project, except one too broad to be a project
@@ -175,7 +215,7 @@ impl Engine {
             })
             .map(|(id, _)| id.clone())
             .collect();
-        let mut suspended = Vec::new();
+        let (mut suspended, mut killed) = (Vec::new(), Vec::new());
         if !live.is_empty() {
             if !suspend_agents {
                 return Self::inventory_error(
@@ -200,7 +240,7 @@ impl Engine {
                 .collect();
             if !rest.is_empty() {
                 self.kill_agents(&rest).await;
-                suspended.extend(rest);
+                killed = rest;
             }
         }
         match self.unregister_projects(vec![root.clone()], false).await {
@@ -208,6 +248,7 @@ impl Engine {
                 removed: !removed.is_empty(),
                 project_root: root,
                 suspended,
+                killed,
             },
             Err(e) => Self::inventory_error("IO_ERROR", e.to_string()),
         }
@@ -331,6 +372,7 @@ impl Engine {
             }
         }
         manifests.sort_by(|a, b| a.0.cmp(&b.0));
+        let registered: HashSet<String> = self.registered_projects().into_iter().collect();
         let sessions = self.sessions.lock().await;
         let mut observed_sessions = HashSet::new();
         let mut removed = Vec::new();
@@ -472,7 +514,12 @@ impl Engine {
                 {
                     &mut project.counts
                 } else {
-                    report.complete = false;
+                    // A registered project whose manifest could not be read is
+                    // missing from the report. An agent in a folder that is not
+                    // a registered project counts as standalone.
+                    if registered.contains(root) {
+                        report.complete = false;
+                    }
                     &mut standalone
                 }
             } else {
@@ -1208,7 +1255,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn given_registry_listing_a_project_removed_by_an_older_client_should_drop_it_on_load() {
+    async fn given_registry_listing_a_project_removed_by_an_older_client_should_drop_it_after_load()
+    {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("registry.json");
         let engine = Engine::with_project_registry(path.clone()).unwrap();
@@ -1223,6 +1271,7 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
 
         let engine = Engine::with_project_registry(path.clone()).unwrap();
+        engine.prune_removed_projects().await;
         let mut expected = vec![kept, unmounted];
         expected.sort();
         assert_eq!(engine.registered_projects(), expected);
@@ -1385,5 +1434,56 @@ mod tests {
             "suspended agents resume when the project is added again"
         );
         engine.kill_all_sessions(Duration::from_millis(10)).await;
+    }
+
+    #[tokio::test]
+    async fn given_agent_in_an_unregistered_folder_should_count_as_standalone_without_partial_inventory()
+     {
+        let (engine, id, tmp) = crate::test_helpers::init_and_spawn().await;
+        let root = tmp
+            .path()
+            .join("project")
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        engine
+            .unregister_projects(vec![root.clone()], false)
+            .await
+            .unwrap();
+        let report = inventory(&engine, InventoryKind::Agents).await;
+        assert!(
+            report.complete,
+            "an unregistered folder is not a missing project"
+        );
+        assert!(report.projects.is_empty());
+        assert_eq!(report.summary.running, 1);
+        assert!(report.agents.iter().any(|a| a.id == id));
+        engine.kill_all_sessions(Duration::from_millis(10)).await;
+    }
+
+    #[tokio::test]
+    async fn given_loaded_registry_should_hold_project_followers_until_removed_projects_are_dropped()
+     {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let engine = Engine::with_project_registry(tmp.path().join("registry.json")).unwrap();
+        let wait = Duration::from_millis(50);
+        assert!(
+            tokio::time::timeout(wait, engine.registry_ready())
+                .await
+                .is_err()
+        );
+        engine.prune_removed_projects().await;
+        assert!(
+            tokio::time::timeout(wait, engine.registry_ready())
+                .await
+                .is_ok()
+        );
+        // An in-memory engine has nothing to prune.
+        assert!(
+            tokio::time::timeout(wait, Engine::new().registry_ready())
+                .await
+                .is_ok()
+        );
     }
 }

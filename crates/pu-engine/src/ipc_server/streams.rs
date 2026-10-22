@@ -324,6 +324,7 @@ pub(super) async fn handle_projects_stream(
 ) -> bool {
     // Subscribe before the first send so no change between them is missed.
     let mut rx = engine.subscribe_projects();
+    engine.registry_ready().await;
     if !send_projects(writer, engine).await {
         return true;
     }

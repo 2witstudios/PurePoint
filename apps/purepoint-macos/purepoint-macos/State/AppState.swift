@@ -127,6 +127,9 @@ final class AppState {
     /// Until the local daemon first reports its projects, a saved workspace selection may
     /// belong to one that has not opened yet.
     @ObservationIgnored private var awaitingLocalProjects = false
+    /// Whether the first local project list reopens last session's sidebar, whose agents
+    /// this app suspended on quit and resumes. Projects that join later keep theirs paused.
+    @ObservationIgnored private var resumesOnFirstLocalList = false
 
     /// The sidebar list from before the daemon owned it; read once, then deleted.
     private static let openProjectsKey = "PurePointOpenProjects"
@@ -247,13 +250,14 @@ final class AppState {
 
     /// Open a project on this Mac. iOS has no local machine: every iPad project is
     /// machine-backed and arrives through its `MachineState`, so a local root never opens.
-    func openProject(_ root: String) {
+    func openProject(_ root: String, resumingSuspendedAgents: Bool = true) {
         #if os(macOS)
         guard !projects.contains(where: { $0.projectRoot == root }) else { return }
 
         let project = pointGuardProjects.removeValue(forKey: root)
             ?? ProjectState(projectRoot: root, service: service, registry: registry)
         project.appState = self
+        if !resumingSuspendedAgents { project.keepsSuspendedAgentsOnNextOpen = true }
         projects.append(project)
         if pointGuardFolders.contains(root) { shownPointGuardFolders.insert(root) }
         startProject(project)
@@ -314,7 +318,8 @@ final class AppState {
         let root = project.projectRoot
         if !isPointGuardFolder(root) {
             let client = DaemonEndpoint.local.makeClient()
-            switch try await client.send(.removeProject(projectRoot: root, suspendAgents: true)) {
+            // The daemon registered the canonical path; a symlinked one may name a deleted folder.
+            switch try await client.send(.removeProject(projectRoot: Self.canonicalPath(root), suspendAgents: true)) {
             case .projectRemoved:
                 break
             case .error(_, let message):
@@ -353,16 +358,28 @@ final class AppState {
         // project with the daemon, and then deleted.
         let paths = projectRoot.map { [$0] }
             ?? UserDefaults.standard.stringArray(forKey: Self.openProjectsKey) ?? []
-        if projectRoot == nil { UserDefaults.standard.removeObject(forKey: Self.openProjectsKey) }
+        resumesOnFirstLocalList = paths.isEmpty
         // Opening projects persists current state, so snapshot the saved lists first.
         let savedPointGuardFolders = UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") ?? []
         pointGuardFolders.formUnion(savedPointGuardFolders)
         shownPointGuardFolders.formUnion(
             UserDefaults.standard.stringArray(forKey: Self.shownPointGuardFoldersKey) ?? [])
+        var notImported: [String] = []
         for path in paths {
-            guard projectRoot != nil || FileManager.default.fileExists(atPath: path) else { continue }
+            guard projectRoot != nil || FileManager.default.fileExists(atPath: path) else {
+                // On a volume that is not mounted yet: try again next launch.
+                notImported.append(path)
+                continue
+            }
             guard !isTooBroadProjectRoot(path) else { continue }
             openProject(path)
+        }
+        if projectRoot == nil {
+            if notImported.isEmpty {
+                UserDefaults.standard.removeObject(forKey: Self.openProjectsKey)
+            } else {
+                UserDefaults.standard.set(notImported, forKey: Self.openProjectsKey)
+            }
         }
         for root in savedPointGuardFolders {
             guard FileManager.default.fileExists(atPath: root) else { continue }
@@ -400,13 +417,22 @@ final class AppState {
         let canonical = Dictionary(
             projects.map { (Self.canonicalPath($0.projectRoot), $0.projectRoot) }, uniquingKeysWith: { first, _ in first })
         for root in lastLocalProjects.subtracting(registered) {
-            if let open = canonical[root] { closeProject(open) }
+            if let owner = projectState(forRoot: canonical[root] ?? root) ?? pointGuardProjects.first(where: {
+                Self.canonicalPath($0.key) == root
+            })?.value, isPointGuardFolder(owner.projectRoot) {
+                // Removed elsewhere, but Point Guard works in this folder: register it again.
+                startProject(owner)
+            } else if let open = canonical[root] {
+                closeProject(open)
+            }
         }
+        let resuming = resumesOnFirstLocalList
+        resumesOnFirstLocalList = false
         let hidden = Set(pointGuardProjects.keys.filter { !shownPointGuardFolders.contains($0) }.map(Self.canonicalPath))
         for root in roots where canonical[root] == nil {
             guard FileManager.default.fileExists(atPath: root), !isTooBroadProjectRoot(root) else { continue }
             if hidden.contains(root) { continue }
-            openProject(root)
+            openProject(root, resumingSuspendedAgents: resuming)
         }
         lastLocalProjects = registered
         awaitingLocalProjects = false

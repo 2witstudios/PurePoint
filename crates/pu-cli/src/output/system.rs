@@ -24,7 +24,12 @@ pub(crate) fn print_init_result(created: bool) {
     }
 }
 
-pub(crate) fn print_project_removed(project_root: &str, removed: bool, suspended: &[String]) {
+pub(crate) fn print_project_removed(
+    project_root: &str,
+    removed: bool,
+    suspended: &[String],
+    killed: &[String],
+) {
     if !removed {
         println!("{project_root} was not a registered project");
         return;
@@ -34,6 +39,12 @@ pub(crate) fn print_project_removed(project_root: &str, removed: bool, suspended
         println!(
             "  Suspended {} agent(s); they resume when the project is added again",
             suspended.len()
+        );
+    }
+    if !killed.is_empty() {
+        println!(
+            "  Stopped {} session(s) the project did not list",
+            killed.len()
         );
     }
     println!("  Files, including .pu/, were not changed");

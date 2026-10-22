@@ -117,8 +117,9 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
             project_root,
             removed,
             suspended,
+            killed,
         } => {
-            system::print_project_removed(project_root, *removed, suspended);
+            system::print_project_removed(project_root, *removed, suspended, killed);
         }
         Response::ProjectsSubscribed => {
             println!("Projects subscription active");

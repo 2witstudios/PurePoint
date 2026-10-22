@@ -280,4 +280,45 @@ private struct PointGuardRoutingService: WorkspaceService {
             #expect(UserDefaults.standard.stringArray(forKey: "PurePointOpenProjects") == nil)
         }
     }
+
+    @Test func projectsJoiningAfterLaunchKeepTheirSuspendedAgentsPaused() throws {
+        try withState { state, _, root in
+            for path in [root + "-project", root + "-next"] {
+                try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+            }
+            UserDefaults.standard.removeObject(forKey: "PurePointOpenProjects")
+            state.restoreProjects()
+            // Last session's sidebar: this app suspended its agents on quit and resumes them.
+            let project = AppState.canonicalPath(root + "-project"), next = AppState.canonicalPath(root + "-next")
+            state.applyLocalProjects([project])
+            #expect(state.projectState(forRoot: project)?.keepsSuspendedAgentsOnNextOpen == false)
+            // Added later, by another device or the CLI.
+            state.applyLocalProjects([next, project])
+            #expect(state.projectState(forRoot: next)?.keepsSuspendedAgentsOnNextOpen == true)
+        }
+    }
+
+    @Test func pointGuardFolderRemovedElsewhereIsRegisteredAgain() throws {
+        var started: [String] = []
+        let root = NSTemporaryDirectory() + "point-guard-reregister-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let saved = UserDefaults.standard.object(forKey: "PurePointPointGuardFolders")
+        let savedShown = UserDefaults.standard.object(forKey: "PurePointShownPointGuardFolders")
+        defer {
+            UserDefaults.standard.set(saved, forKey: "PurePointPointGuardFolders")
+            UserDefaults.standard.set(savedShown, forKey: "PurePointShownPointGuardFolders")
+        }
+        let state = AppState(
+            service: PointGuardRoutingService(), startProject: { started.append($0.projectRoot) },
+            followsLocalDaemon: false)
+        state.updatePointGuardRoot(root)
+        state.openProject(root)
+        let canonical = AppState.canonicalPath(root)
+        state.applyLocalProjects([canonical])
+        started.removeAll()
+        state.applyLocalProjects([])
+        #expect(started == [root])
+        #expect(state.projects.map(\.projectRoot) == [root])
+    }
 }

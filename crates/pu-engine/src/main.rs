@@ -86,6 +86,9 @@ async fn main() {
         }
     };
 
+    // Drop projects older clients removed by deleting their manifest
+    server.engine().start_registry_prune();
+
     // Start background reaper for dead sessions and orphaned channels
     server.engine().start_session_reaper();
 

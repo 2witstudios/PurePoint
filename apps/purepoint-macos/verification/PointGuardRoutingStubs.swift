@@ -105,6 +105,7 @@ actor DaemonProjectsSubscription {
         self.projectRoot = projectRoot
         self.registry = registry
     }
+    var keepsSuspendedAgentsOnNextOpen = false
     func startWatching() {}
     func stopWatching() {}
     func agent(byId id: String) -> AgentModel? { allAgents.first { $0.id == id } }
