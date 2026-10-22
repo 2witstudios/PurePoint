@@ -460,27 +460,31 @@ nonisolated struct LiveAgent: Equatable, Sendable {
 ///
 /// Two apps write the same `.pu/workspaces.json` and every save is conditional, so a save that
 /// finds the document changed has to take the other Mac's edits without dropping its own.
-/// `base` is the document as this app last read or wrote it. A workspace this app changed or
-/// added keeps this app's version — also when the other Mac changed it too, so a tab just split
-/// here for a spawn survives — and everything else takes theirs. The other Mac then adopts the
-/// result: its copy of each workspace is unchanged from its base, so it takes ours and no
-/// further write follows.
+/// `base` is the document as this app last read or wrote it; their changes are measured against
+/// it. Ours are measured against `oursBase` (by default the same), which a caller can set to the
+/// base as its own reconciler shows it, so grouping derived from the manifest is not an edit.
+/// A workspace this app changed or added keeps this app's version — also when the other Mac
+/// changed it too, so a tab just split here for a spawn survives — and everything else takes
+/// theirs. The other Mac then adopts the result: its copy of each workspace is unchanged from
+/// its base, so it takes ours and no further write follows.
 nonisolated enum WorkspaceLayoutMerge {
-    static func merge(base: [Workspace], ours: [Workspace], theirs: [Workspace]) -> [Workspace] {
+    static func merge(
+        base: [Workspace], ours: [Workspace], theirs: [Workspace], oursBase: [Workspace]? = nil
+    ) -> [Workspace] {
         let baseById = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let oursBaseById = Dictionary((oursBase ?? base).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let oursById = Dictionary(ours.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let theirIds = Set(theirs.map(\.id))
         var result: [Workspace] = []
         for their in theirs {
-            let original = baseById[their.id]
             if let mine = oursById[their.id] {
-                result.append(mine != original ? mine : their)
-            } else if their != original {
+                result.append(mine != oursBaseById[their.id] ? mine : their)
+            } else if their != baseById[their.id] {
                 result.append(their)  // removed here, changed there: keep it
             }
         }
         // Added here, or changed here and removed there.
-        result.append(contentsOf: ours.filter { !theirIds.contains($0.id) && $0 != baseById[$0.id] })
+        result.append(contentsOf: ours.filter { !theirIds.contains($0.id) && $0 != oursBaseById[$0.id] })
         return result
     }
 }

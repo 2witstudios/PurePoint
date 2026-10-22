@@ -471,6 +471,19 @@ struct WorkspaceReconcilerTests {
         #expect(WorkspaceLayoutMerge.merge(base: [a], ours: [], theirs: [changed]) == [changed])
     }
 
+    @Test func givenWorkspaceClosedHereAndUntouchedThereMergeShouldNotBringItBack() {
+        // Closed here: its agent is already gone from this app's live list, so the base as this
+        // app reconciles it holds only the file tab. The other Mac's copy is the base document.
+        var closed = Workspace.adopting(agentId: "ag-x", container: .projectRoot)
+        closed.newTab(leafId: 0, content: .file(path: "/p/README.md"))
+        var reconciledHere = closed
+        _ = reconciledHere.removeSurfaces { $0.content == .agent("ag-x") }
+
+        let merged = WorkspaceLayoutMerge.merge(base: [closed], ours: [], theirs: [closed], oursBase: [reconciledHere])
+
+        #expect(merged.isEmpty)
+    }
+
     @Test func givenPointGuardPlacementFromAnotherMacShouldBeRekeyedToThisApp() {
         let agent = LiveAgent(
             id: "ag-new", container: .projectRoot,

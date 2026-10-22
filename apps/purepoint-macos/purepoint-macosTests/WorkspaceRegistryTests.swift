@@ -296,6 +296,25 @@ struct WorkspaceRegistryTests {
         #expect(!registry.hasPendingSave(projectRoot: project))
     }
 
+    @Test func givenAnotherMacsLayoutNamesAnAgentThisMacHasNotSeenYetItsTabShouldWaitForTheManifest() throws {
+        let project = root + "-unseen"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a"])
+        registry.saveAll()
+        var theirs = try #require(registry.workspace(id: "ws-ag-a"))
+        theirs.split(leafId: 0, axis: .vertical, content: .agent("ag-new"))
+        try writeLayoutFromAnotherMac([theirs], projectRoot: project)
+
+        registry.adoptLocalLayoutIfChanged(projectRoot: project)  // the file watcher, before the manifest
+
+        #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a", "ag-new"])
+        registry.reconcile(projectRoot: project, rootAgents: [agent("ag-a"), agent("ag-new")], worktrees: [])
+        #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a", "ag-new"])
+        // A manifest without it means the agent exited: its tab goes.
+        registry.reconcile(projectRoot: project, rootAgents: [agent("ag-a")], worktrees: [])
+        #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a"])
+    }
+
     @Test func givenAgentSpawnedIntoPointGuardOnAnotherMacShouldLandInThisMacsPointGuard() throws {
         let project = root + "-pg"
         defer { try? FileManager.default.removeItem(atPath: project) }

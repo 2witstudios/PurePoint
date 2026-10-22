@@ -74,6 +74,10 @@ final class WorkspaceRegistry {
     /// Each project's layout document as this app last read or wrote it, in its decoded form:
     /// the base for merging a document another Mac wrote (`WorkspaceLayoutMerge`).
     @ObservationIgnored private var layoutBases: [String: [Workspace]] = [:]
+    /// Agents a document adopted from another Mac places in tabs before this app's manifest
+    /// lists them (that Mac saw the spawn first). They count as live until the next manifest,
+    /// so their tabs — and the split holding them — are not dropped as dead in the meantime.
+    @ObservationIgnored private var unconfirmedAgents: [String: [LiveAgent]] = [:]
 
     init(loadWorkspaces: @escaping (String) throws -> [Workspace] = { try WorkspacePersistence.loadForRegistry(projectRoot: $0) }) {
         self.loadWorkspaces = loadWorkspaces
@@ -108,14 +112,22 @@ final class WorkspaceRegistry {
         saveWorkItems[projectId]?.cancel()
         saveWorkItems[projectId] = nil
         pendingSaves.remove(projectId)
-        // The base as the reconciler would show it now: the grouping it derives from the
-        // manifest comes out the same on every Mac, so only what the user did here is "ours".
-        var base = layoutBases[projectId] ?? []
-        if let live = liveByProject[projectId] {
-            base = decoded(WorkspaceReconciler.reconcile(stored: base, live: live), projectId: projectId)
-        }
+        // Ours are measured against the base as the reconciler would show it now: the grouping it
+        // derives from the manifest comes out the same on every Mac, so it is not an edit here.
+        let base = layoutBases[projectId] ?? []
         let merged = WorkspaceLayoutMerge.merge(
-            base: base, ours: decoded(workspacesByProject[projectId] ?? [], projectId: projectId), theirs: workspaces)
+            base: base, ours: decoded(workspacesByProject[projectId] ?? [], projectId: projectId), theirs: workspaces,
+            oursBase: liveByProject[projectId].map {
+                decoded(WorkspaceReconciler.reconcile(stored: base, live: $0), projectId: projectId)
+            })
+        if let live = liveByProject[projectId] {
+            let known = Set(live.map(\.id))
+            unconfirmedAgents[projectId] = workspaces.flatMap { workspace in
+                workspace.agentIds.filter { !known.contains($0) }.map {
+                    LiveAgent(id: $0, container: workspace.container)
+                }
+            }
+        }
         layoutBases[projectId] = workspaces
         workspacesByProject[projectId] = merged
         pruneActiveSelection()
@@ -274,11 +286,15 @@ final class WorkspaceRegistry {
         // A Mac working on this project over SSH may have just written the tab this new agent
         // was spawned for; take its layout first so the agent lands there.
         adoptLocalLayoutIfChanged(projectRoot: projectRoot)
+        // This manifest is current: an agent a document names that it lacks has exited.
+        unconfirmedAgents[projectRoot] = nil
         publish(projectRoot: projectRoot, stored: workspacesByProject[projectRoot] ?? [], live: live)
     }
 
     /// Reconcile `stored` against `live` and publish the result if it changed.
     private func publish(projectRoot: String, stored: [Workspace], live: [LiveAgent]) {
+        let known = Set(live.map(\.id))
+        let live = live + (unconfirmedAgents[projectRoot] ?? []).filter { !known.contains($0.id) }
         let reconciled = WorkspaceReconciler.reconcile(
             stored: stored, live: deferringReservedAgents(projectRoot: projectRoot, stored: stored, live: live),
             reserved: reservedWorkspaceIds(projectRoot: projectRoot))
@@ -718,6 +734,7 @@ final class WorkspaceRegistry {
         remoteSavers[projectRoot] = nil
         localLayoutStamps[projectRoot] = nil
         layoutBases[projectRoot] = nil
+        unconfirmedAgents[projectRoot] = nil
         pruneActiveSelection()
     }
 }
