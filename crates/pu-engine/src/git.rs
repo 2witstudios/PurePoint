@@ -15,6 +15,13 @@ async fn git_output(args: &[&str], cwd: &Path) -> Result<std::process::Output, s
         // An empty GIT_ASKPASS makes git skip core.askPass and SSH_ASKPASS,
         // so an inherited credential helper cannot prompt either.
         .env("GIT_ASKPASS", "")
+        .env(
+            "PATH",
+            git_path(
+                std::env::var("PATH").ok().as_deref(),
+                std::env::var("HOME").ok().as_deref(),
+            ),
+        )
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();
@@ -26,6 +33,31 @@ async fn git_output(args: &[&str], cwd: &Path) -> Result<std::process::Output, s
                 format!("git {} timed out", args.join(" ")),
             )
         })?
+}
+
+/// The daemon may run under launchd with a minimal PATH, so hooks git runs
+/// (e.g. Git LFS's post-checkout calling `git-lfs`) cannot find Homebrew
+/// tools. Append the same fallback dirs agents get.
+fn git_path(current: Option<&str>, home: Option<&str>) -> String {
+    let mut dirs: Vec<String> = current
+        .unwrap_or_default()
+        .split(':')
+        .filter(|d| !d.is_empty())
+        .map(String::from)
+        .collect();
+    let home_dirs = home
+        .filter(|h| !h.is_empty())
+        .map(|h| [format!("{h}/.local/bin"), format!("{h}/.cargo/bin")])
+        .into_iter()
+        .flatten();
+    let fallbacks = home_dirs
+        .chain(["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"].map(String::from));
+    for dir in fallbacks {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs.join(":")
 }
 
 async fn run_git(args: &[&str], cwd: &Path) -> Result<String, std::io::Error> {
@@ -261,6 +293,29 @@ pub async fn delete_remote_branch(repo_root: &Path, branch: &str) -> Result<(), 
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn given_launchd_path_should_append_homebrew_and_user_bins() {
+        let path = git_path(Some("/usr/bin:/bin:/usr/sbin:/sbin"), Some("/Users/me"));
+        assert_eq!(
+            path,
+            "/usr/bin:/bin:/usr/sbin:/sbin:/Users/me/.local/bin:/Users/me/.cargo/bin:/usr/local/bin:/opt/homebrew/bin"
+        );
+    }
+
+    #[test]
+    fn given_path_with_homebrew_should_keep_order_without_duplicates() {
+        let path = git_path(Some("/opt/homebrew/bin:/usr/bin:/bin"), None);
+        assert_eq!(path, "/opt/homebrew/bin:/usr/bin:/bin:/usr/local/bin");
+    }
+
+    #[test]
+    fn given_no_path_should_use_fallbacks() {
+        assert_eq!(
+            git_path(None, None),
+            "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+        );
+    }
 
     fn init_git_repo(dir: &std::path::Path) {
         std::process::Command::new("git")
