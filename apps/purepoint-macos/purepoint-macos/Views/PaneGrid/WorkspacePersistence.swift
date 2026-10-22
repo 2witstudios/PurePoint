@@ -107,7 +107,7 @@ nonisolated private struct PersistedVersionProbe: Decodable {
 }
 
 /// Legacy `.pu/grid-layout.json` — a single app-wide grid owned by one agent.
-private struct LegacyPersistedGridLayout: Codable {
+private nonisolated struct LegacyPersistedGridLayout: Codable {
     let ownerAgentId: String?
     let tree: GridLayoutNode
 }

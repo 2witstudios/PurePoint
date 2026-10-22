@@ -16,8 +16,8 @@ final class AppActivity {
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private let backgroundTasks: any BackgroundTaskRunner
 
-    init(backgroundTasks: any BackgroundTaskRunner = UIApplication.shared) {
-        self.backgroundTasks = backgroundTasks
+    init(backgroundTasks: (any BackgroundTaskRunner)? = nil) {
+        self.backgroundTasks = backgroundTasks ?? UIApplication.shared
     }
 
     /// Apply a scene phase. Returns true when the app returned from the background.

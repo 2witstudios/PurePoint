@@ -172,7 +172,7 @@ class CoreTextBodyView: UIView, UIEditMenuInteractionDelegate, UIGestureRecogniz
         let index = layout.characterIndex(at: gesture.location(in: self))
         switch gesture.state {
         case .began:
-            becomeFirstResponder()
+            _ = becomeFirstResponder()
             let word = layout.wordRange(at: index)
             selectionAnchor = word
             select(word)
@@ -189,25 +189,25 @@ class CoreTextBodyView: UIView, UIEditMenuInteractionDelegate, UIGestureRecogniz
 
     @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
         let layout = textLayout(forWidth: bounds.width)
-        becomeFirstResponder()
+        _ = becomeFirstResponder()
         select(layout.wordRange(at: layout.characterIndex(at: gesture.location(in: self))))
         showEditMenu(at: gesture.location(in: self))
     }
 
     @objc private func handleTripleTap(_ gesture: UITapGestureRecognizer) {
         let layout = textLayout(forWidth: bounds.width)
-        becomeFirstResponder()
+        _ = becomeFirstResponder()
         select(layout.paragraphRange(at: layout.characterIndex(at: gesture.location(in: self))))
         showEditMenu(at: gesture.location(in: self))
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-        becomeFirstResponder()
+        _ = becomeFirstResponder()
         select(nil)
     }
 
     @objc private func handleSecondaryClick(_ gesture: UITapGestureRecognizer) {
-        becomeFirstResponder()
+        _ = becomeFirstResponder()
         showEditMenu(at: gesture.location(in: self))
     }
 
@@ -216,7 +216,7 @@ class CoreTextBodyView: UIView, UIEditMenuInteractionDelegate, UIGestureRecogniz
         let index = layout.characterIndex(at: gesture.location(in: self))
         switch gesture.state {
         case .began:
-            becomeFirstResponder()
+            _ = becomeFirstResponder()
             let start = layout.characterIndex(at: CGPoint(
                 x: gesture.location(in: self).x - gesture.translation(in: self).x,
                 y: gesture.location(in: self).y - gesture.translation(in: self).y))
