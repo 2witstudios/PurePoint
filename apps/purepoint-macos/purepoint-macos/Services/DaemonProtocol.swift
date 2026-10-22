@@ -676,7 +676,7 @@ nonisolated enum DaemonResponse: Decodable {
     case channelMessage(ChannelMutation)
     case healthReport(pid: Int, uptimeSeconds: Int, protocolVersion: Int, agentCount: Int)
     case initResult(created: Bool)
-    case projectRemoved(projectRoot: String, removed: Bool, suspended: [String])
+    case projectRemoved(projectRoot: String, removed: Bool, suspended: [String], killed: [String])
     case projectsSubscribed
     case projectsChanged(projects: [String])
     case statusReport(worktrees: [WorktreeEntry], agents: [AgentStatusReport])
@@ -745,7 +745,8 @@ nonisolated enum DaemonResponse: Decodable {
             self = .initResult(created: p.created)
         case "project_removed":
             let p = try ProjectRemovedPayload(from: decoder)
-            self = .projectRemoved(projectRoot: p.projectRoot, removed: p.removed, suspended: p.suspended)
+            self = .projectRemoved(
+                projectRoot: p.projectRoot, removed: p.removed, suspended: p.suspended, killed: p.killed ?? [])
         case "projects_subscribed":
             self = .projectsSubscribed
         case "projects_changed":
@@ -1055,11 +1056,14 @@ private nonisolated struct ProjectRemovedPayload: Decodable {
     let projectRoot: String
     let removed: Bool
     let suspended: [String]
+    /// Sessions the manifest did not list, stopped rather than suspended.
+    let killed: [String]?
 
     enum CodingKeys: String, CodingKey {
         case projectRoot = "project_root"
         case removed
         case suspended
+        case killed
     }
 }
 

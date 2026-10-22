@@ -161,7 +161,15 @@ export function workspaceConnection({
     check();
     const metadata = await projectMetadata(machine, { signal });
     check();
-    if (metadata.metadataStatus !== "complete")
+    // Removal needs only the project list: a registered project whose manifest
+    // cannot be read leaves worktree metadata partial, and must stay removable.
+    if (
+      metadata.metadataStatus !== "complete" &&
+      !(
+        r.op === "workspace.removeProject" &&
+        metadata.metadataStatus === "partial"
+      )
+    )
       fail("unsupported", "Complete authoritative project metadata required");
     const project = metadata.projects.find((p) => p.id === r.projectId);
     // An unavailable project can still be removed; nothing else runs in one.

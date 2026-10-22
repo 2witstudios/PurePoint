@@ -334,13 +334,13 @@ struct DaemonProjectHostRequestTests {
         }
         #expect(projects == ["/a", "/b"])
         guard
-            case .projectRemoved(let root, let removed, let suspended) = decode(
-                #"{"type":"project_removed","project_root":"/a","removed":true,"suspended":["ag-1"]}"#)
+            case .projectRemoved(let root, let removed, let suspended, let killed) = decode(
+                #"{"type":"project_removed","project_root":"/a","removed":true,"suspended":["ag-1"],"killed":["sh-2"]}"#)
         else {
             Issue.record("project_removed did not decode")
             return
         }
-        #expect(root == "/a" && removed && suspended == ["ag-1"])
+        #expect(root == "/a" && removed && suspended == ["ag-1"] && killed == ["sh-2"])
     }
 
     @Test func givenInventoryShouldAskForEveryRegisteredProject() throws {

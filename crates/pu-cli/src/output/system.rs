@@ -47,7 +47,7 @@ pub(crate) fn print_project_removed(
             killed.len()
         );
     }
-    println!("  Files, including .pu/, were not changed");
+    println!("  Project files and .pu/ were kept (suspending agents only updates the manifest)");
 }
 
 pub(crate) fn print_config_report(default_agent: &str, agents: &[AgentConfigInfo]) {

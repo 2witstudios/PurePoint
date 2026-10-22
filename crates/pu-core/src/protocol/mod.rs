@@ -93,8 +93,9 @@ pub enum Request {
     Init {
         project_root: String,
     },
-    /// Forget a registered project on this daemon. Files, including `.pu/`, are
-    /// untouched, so a later `Init` brings the project back as it was.
+    /// Forget a registered project on this daemon. Its files and `.pu/` are kept
+    /// (suspending agents only updates the manifest), so a later `Init` brings
+    /// the project back as it was.
     RemoveProject {
         project_root: String,
         /// Suspend the project's live agents instead of refusing the removal.

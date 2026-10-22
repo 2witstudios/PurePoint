@@ -105,7 +105,7 @@ Add a project: create `.pu/manifest.json` if needed and register the root. This 
 
 ### RemoveProject
 
-Forget a project on this daemon, for every client. Its files, including `.pu/`, are not touched, so a later `init` brings it back with its worktrees and agents. Live agents refuse the removal with `PROJECT_HAS_LIVE_AGENTS` unless `suspend_agents` is true (default false), which suspends them so they can be resumed once the project is added again. An unregistered root answers `removed: false`.
+Forget a project on this daemon, for every client. Its files and `.pu/` are kept (suspending agents only updates the manifest), so a later `init` brings it back with its worktrees and agents. Live agents refuse the removal with `PROJECT_HAS_LIVE_AGENTS` unless `suspend_agents` is true (default false), which suspends them so they can be resumed once the project is added again. An unregistered root answers `removed: false`.
 
 **Request**: `{"type": "remove_project", "project_root": "/path/to/project", "suspend_agents": true}`
 

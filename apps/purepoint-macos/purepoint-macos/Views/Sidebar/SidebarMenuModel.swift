@@ -237,7 +237,7 @@ extension SidebarConfirmation {
         return SidebarConfirmation(
             title: machine.map { "Remove \(project.projectName) from \($0)?" } ?? "Remove \(project.projectName)?",
             message: "It disappears from PurePoint on \(machine ?? "this Mac") and every device connected to it."
-                + agents + " The folder, including .pu/, is not changed."
+                + agents + " Any other session in the folder is stopped. The folder and .pu/ are kept."
                 + unsavedWarning(unsavedFileNames(in: project)),
             confirmTitle: "Remove")
     }

@@ -159,19 +159,20 @@ impl Engine {
         let registry = self.project_registry_path.clone();
         let removed = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<String>> {
             let _update = update;
-            let (removed, next): (Vec<_>, Vec<_>) = {
-                let current = projects
-                    .lock()
-                    .map_err(|_| std::io::Error::other("project registry lock poisoned"))?;
-                current.iter().cloned().partition(|root| {
-                    roots.contains(root)
-                        && (mode == Unregister::Always || was_removed(Path::new(root)))
-                })
-            };
+            // Snapshot under the registry mutex, then stat without it: a stale
+            // mount must not block readers. The update lock keeps writers out.
+            let current: Vec<String> = projects
+                .lock()
+                .map_err(|_| std::io::Error::other("project registry lock poisoned"))?
+                .iter()
+                .cloned()
+                .collect();
+            let (removed, mut next): (Vec<_>, Vec<_>) = current.into_iter().partition(|root| {
+                roots.contains(root) && (mode == Unregister::Always || was_removed(Path::new(root)))
+            });
             if removed.is_empty() {
                 return Ok(removed);
             }
-            let mut next = next;
             next.sort();
             if let Some(path) = registry {
                 write_registry(&path, &next)?;

@@ -947,12 +947,18 @@ test("project removal needs confirmation and a daemon that can forget projects f
   f.protocolVersion(13);
   const removed = await remove("remove-0003", { confirm: true });
   assert.equal(removed.state, "succeeded");
+  // Partial worktree metadata (an unreadable manifest) does not block removal.
+  f.partial(true);
+  assert.equal(
+    (await remove("remove-0004", { confirm: true })).state,
+    "succeeded",
+  );
+  f.partial(false);
   const sent = f.requests.filter((r) => r.type === "remove_project");
-  assert.deepEqual(sent, [
-    {
-      type: "remove_project",
-      project_root: "/registered",
-      suspend_agents: true,
-    },
-  ]);
+  const expected = {
+    type: "remove_project",
+    project_root: "/registered",
+    suspend_agents: true,
+  };
+  assert.deepEqual(sent, [expected, expected]);
 });
