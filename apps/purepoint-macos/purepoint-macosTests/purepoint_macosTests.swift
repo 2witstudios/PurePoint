@@ -20,7 +20,7 @@ struct GlobalAgentSettingsTests {
                 case .getGlobalAgentSettings:
                     calls.append("load")
                     return .globalAgentSettingsReport(agentStatusTracking: true)
-                case .updateGlobalAgentSettings(let tracking, _):
+                case .updateGlobalAgentSettings(let tracking, _, _, _):
                     calls.append("save")
                     return .globalAgentSettingsReport(agentStatusTracking: tracking ?? true)
                 default:
@@ -77,7 +77,7 @@ struct GlobalAgentSettingsTests {
         let state = AgentConfigState(
             ensureDaemon: {},
             sendRequest: { request in
-                guard case .updateGlobalAgentSettings(_, let launchArgs) = request else {
+                guard case .updateGlobalAgentSettings(_, let launchArgs, _, _) = request else {
                     return .error(code: "TEST", message: "Unexpected request")
                 }
                 return .globalAgentSettingsReport(agentStatusTracking: true, launchArgs: launchArgs ?? [:])
@@ -139,12 +139,74 @@ struct GlobalAgentSettingsTests {
         #expect(json["launch_args"] == nil)
         // Daemons from before Codex YOLO was removed still send `codex_yolo`; it is ignored.
         let response = try JSONDecoder().decode(DaemonResponse.self, from: Data(#"{"type":"global_agent_settings_report","codex_yolo":true}"#.utf8))
-        guard case .globalAgentSettingsReport(let tracking, let launchArgs) = response else {
+        guard case .globalAgentSettingsReport(let tracking, let launchArgs, let commands) = response else {
             Issue.record("Expected global settings response")
             return
         }
         #expect(tracking, "Older daemons always track status")
         #expect(launchArgs == nil, "Older daemons have no machine launch args")
+        #expect(commands == nil, "Older daemons have no machine commands")
+    }
+
+    @Test func projectAgentSaveSendsCommandAndArgsTogether() throws {
+        let data = try JSONEncoder().encode(DaemonRequest.updateAgentConfig(
+            projectRoot: "/p", agentName: "codex", launchArgs: "--search", command: "scripts/agent-launch.sh codex"))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["command"] as? String == "scripts/agent-launch.sh codex")
+        #expect(json["launch_args"] as? String == "--search")
+        #expect(json["remove"] == nil)
+        let removed = try JSONEncoder().encode(DaemonRequest.updateAgentConfig(
+            projectRoot: "/p", agentName: "aider", launchArgs: nil, remove: true))
+        let removedJson = try #require(JSONSerialization.jsonObject(with: removed) as? [String: Any])
+        #expect(removedJson["remove"] as? Bool == true)
+        #expect(removedJson["command"] == nil, "Left out, the project command is kept")
+    }
+
+    @Test func addedMachineAgentIsNamedAfterItsCommandAndOffered() async {
+        var sent: DaemonRequest?
+        let state = AgentConfigState(
+            ensureDaemon: {},
+            sendRequest: { request in
+                sent = request
+                guard case .updateGlobalAgentSettings(_, let launchArgs, let commands, _) = request else {
+                    return .error(code: "TEST", message: "Unexpected request")
+                }
+                return .globalAgentSettingsReport(
+                    agentStatusTracking: true, launchArgs: launchArgs ?? [:], commands: commands ?? [:])
+            }
+        )
+        await state.addMachineAgent(command: "npx aider", launchArgs: "--yes", projectRoot: nil)
+        guard case .updateGlobalAgentSettings(_, let launchArgs, let commands, _) = sent else {
+            Issue.record("Expected a machine settings save")
+            return
+        }
+        #expect(commands == ["aider": "npx aider"])
+        #expect(launchArgs == ["aider": "--yes"])
+        #expect(state.machineAgentNames == ["claude", "codex", "opencode", "aider"])
+        #expect(AgentVariant.allVariants.contains { $0.id == "aider" && $0.subtitle == "npx aider" })
+        AgentVariant.addedAgents = []
+    }
+
+    @Test func newAgentNamesComeFromTheProgramTheyRun() {
+        #expect(AgentLaunchDefaults.agentName(for: "aider", taken: []) == "aider")
+        #expect(AgentLaunchDefaults.agentName(for: "scripts/agent-launch.sh goose", taken: []) == "goose")
+        #expect(AgentLaunchDefaults.agentName(for: "~/bin/My-Tool --fast", taken: []) == "my-tool")
+        #expect(AgentLaunchDefaults.agentName(for: "run-agent.sh", taken: []) == "run-agent")
+        #expect(AgentLaunchDefaults.agentName(for: "claude --model opus", taken: ["claude"]) == "claude-2")
+        #expect(AgentLaunchDefaults.agentName(for: "--", taken: []) == "agent")
+    }
+
+    @Test func configReportDecodesCommandsAndOrigin() throws {
+        let json = #"{"type":"config_report","default_agent":"claude","agents":[{"id":"aider","name":"aider","command":"aider","launch_args":null,"resolved_launch_args":[],"interactive":true,"resolved_command":"aider","project_command":"aider","inherited_command":"aider","origin":"project"}]}"#
+        let response = try JSONDecoder().decode(DaemonResponse.self, from: Data(json.utf8))
+        guard case .configReport(_, let agents) = response, let aider = agents.first else {
+            Issue.record("Expected config report")
+            return
+        }
+        #expect(aider.agentType == "aider")
+        #expect(aider.projectCommand == "aider")
+        #expect(aider.inheritedCommand == "aider")
+        #expect(aider.origin == "project")
     }
 
     @Test func statusTrackingUpdateSendsOnlyItsOwnField() async throws {

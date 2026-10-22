@@ -58,6 +58,16 @@ struct AgentVariant: Identifiable {
         kind: .worktree
     )
 
-    static let allVariants: [AgentVariant] = [claude, codex, opencode, terminal]
-    static let variantsWithWorktree: [AgentVariant] = allVariants + [worktree]
+    /// Agents the user added in Settings › Agents; `AgentConfigState` keeps this current.
+    static var addedAgents: [AgentVariant] = []
+
+    /// An agent the user added: its type is its name, and it runs `command`.
+    static func added(name: String, command: String) -> AgentVariant {
+        AgentVariant(
+            id: name, displayName: name, icon: "chevron.left.forwardslash.chevron.right", subtitle: command,
+            promptPlaceholder: "Enter prompt...", kind: .agent)
+    }
+
+    static var allVariants: [AgentVariant] { [claude, codex, opencode] + addedAgents + [terminal] }
+    static var variantsWithWorktree: [AgentVariant] { allVariants + [worktree] }
 }

@@ -10,6 +10,11 @@ pub struct GlobalAgentSettings {
     /// Observe agent status (working/idle/question) through the native adapters.
     #[serde(default = "crate::serde_defaults::default_true")]
     pub agent_status_tracking: bool,
+    /// Per-agent command for every project on this machine, used when a
+    /// project's `.pu/config.yaml` leaves `command` unset. An agent type that
+    /// is not built in is an agent the user added.
+    #[serde(default, skip_serializing_if = "indexmap::IndexMap::is_empty")]
+    pub commands: indexmap::IndexMap<String, String>,
     /// Per-agent-type launch args for every project on this machine, used when a
     /// project's `.pu/config.yaml` leaves `launchArgs` unset.
     #[serde(default, skip_serializing_if = "indexmap::IndexMap::is_empty")]
@@ -20,6 +25,7 @@ impl Default for GlobalAgentSettings {
     fn default() -> Self {
         Self {
             agent_status_tracking: true,
+            commands: indexmap::IndexMap::new(),
             launch_args: indexmap::IndexMap::new(),
         }
     }
@@ -29,8 +35,28 @@ impl Default for GlobalAgentSettings {
 #[derive(Debug, Default)]
 pub struct GlobalAgentSettingsUpdate {
     pub agent_status_tracking: Option<bool>,
+    /// Machine-level command per agent type; a blank string removes it.
+    pub commands: indexmap::IndexMap<String, String>,
     /// Machine-level launch args string per agent type; a blank string removes it.
     pub launch_args: indexmap::IndexMap<String, String>,
+    /// Agent types whose machine-level command and launch args are removed.
+    pub remove_agents: Vec<String>,
+}
+
+fn check_agent_name(name: &str) -> Result<(), PuError> {
+    if crate::types::is_valid_agent_name(name) {
+        Ok(())
+    } else {
+        Err(PuError::InvalidArgument(format!(
+            "invalid agent name {name:?}: use lowercase letters, digits, - and _"
+        )))
+    }
+}
+
+/// A blank string means "unset"; anything else is trimmed.
+fn non_blank(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 pub fn load_global_agent_settings() -> Result<GlobalAgentSettings, PuError> {
@@ -48,14 +74,16 @@ pub fn save_global_agent_settings(
 ) -> Result<GlobalAgentSettings, PuError> {
     use fs4::FileExt;
     // Validate before touching the file so a bad value never replaces a good one.
-    let defaults = crate::types::default_agents();
+    for agent in update
+        .commands
+        .keys()
+        .chain(update.launch_args.keys())
+        .chain(&update.remove_agents)
+    {
+        check_agent_name(agent)?;
+    }
     let mut launch_args = Vec::with_capacity(update.launch_args.len());
     for (agent, text) in update.launch_args {
-        if !defaults.contains_key(&agent) {
-            return Err(PuError::InvalidArgument(format!(
-                "unknown agent type: {agent}"
-            )));
-        }
         let args = if text.trim().is_empty() {
             None
         } else {
@@ -73,6 +101,16 @@ pub fn save_global_agent_settings(
     if let Some(enabled) = update.agent_status_tracking {
         settings.agent_status_tracking = enabled;
     }
+    for (agent, command) in update.commands {
+        match non_blank(&command) {
+            Some(command) => {
+                settings.commands.insert(agent, command);
+            }
+            None => {
+                settings.commands.shift_remove(&agent);
+            }
+        }
+    }
     for (agent, args) in launch_args {
         match args {
             Some(args) => {
@@ -83,6 +121,10 @@ pub fn save_global_agent_settings(
             }
         }
     }
+    for agent in update.remove_agents {
+        settings.commands.shift_remove(&agent);
+        settings.launch_args.shift_remove(&agent);
+    }
     let yaml = serde_yaml_ng::to_string(&settings)?;
     let tmp_path = path.with_extension("yaml.tmp");
     let mut tmp = std::fs::File::create(&tmp_path)?;
@@ -92,11 +134,21 @@ pub fn save_global_agent_settings(
     Ok(settings)
 }
 
+/// Add the machine's agents and settings to a project config, then resolve each
+/// agent's command: project, else machine, else the built-in default.
 fn apply_global_agent_settings(config: &mut Config, settings: &GlobalAgentSettings) {
-    for (name, args) in &settings.launch_args {
-        if let Some(agent) = config.agents.get_mut(name) {
-            agent.machine_launch_args = Some(args.0.clone());
+    for name in settings.commands.keys().chain(settings.launch_args.keys()) {
+        if !config.agents.contains_key(name) {
+            config.agents.insert(name.clone(), AgentConfig::named(name));
         }
+    }
+    for (name, agent) in config.agents.iter_mut() {
+        agent.machine_command = settings.commands.get(name).cloned();
+        agent.machine_launch_args = settings.launch_args.get(name).map(|args| args.0.clone());
+        agent.command = agent
+            .project_command
+            .clone()
+            .unwrap_or_else(|| agent.inherited_command(name));
     }
 }
 
@@ -113,6 +165,9 @@ fn load_config_result(project_root: &Path) -> Result<Config, PuError> {
     let mut config = match std::fs::read_to_string(&path) {
         Ok(content) => {
             let mut config: Config = serde_yaml_ng::from_str(&content)?;
+            for agent in config.agents.values_mut() {
+                agent.project_command = non_blank(&std::mem::take(&mut agent.command));
+            }
             // Fill in any agents missing from file with code defaults
             for (name, agent) in crate::types::default_agents() {
                 config.agents.entry(name).or_insert(agent);
@@ -130,23 +185,26 @@ pub fn resolve_agent<'a>(config: &'a Config, name: &str) -> Option<&'a AgentConf
     config.agents.get(name)
 }
 
-/// Update a specific agent's launch_args in the project config.
+/// Changes to one agent in a project config.
+#[derive(Debug, Default)]
+pub struct AgentConfigUpdate {
+    /// `None` keeps the stored command; a blank string clears it.
+    pub command: Option<String>,
+    /// The launch args to store; `None` clears them.
+    pub launch_args: Option<Vec<String>>,
+    /// Drop the agent's entry from the project config.
+    pub remove: bool,
+}
+
+/// Update one agent's command and launch args in the project config.
 /// Loads existing config, modifies the named agent, writes back to YAML.
 /// Returns the updated (merged) config.
-///
-/// Only known agent types (from `default_agents()`) are accepted.
-/// Unknown agent names return an error to prevent config pollution.
 pub fn update_agent_config(
     project_root: &Path,
     agent_name: &str,
-    launch_args: Option<Vec<String>>,
+    update: AgentConfigUpdate,
 ) -> Result<Config, PuError> {
-    let defaults = crate::types::default_agents();
-    if !defaults.contains_key(agent_name) {
-        return Err(PuError::InvalidArgument(format!(
-            "unknown agent type: {agent_name}"
-        )));
-    }
+    check_agent_name(agent_name)?;
     let path = paths::config_path(project_root);
 
     // Hold an exclusive lock across the read-modify-write so overlapping updates
@@ -168,23 +226,19 @@ pub fn update_agent_config(
         Err(e) => return Err(PuError::Io(e)),
     };
 
-    // Ensure the agent entry exists
-    let agent = raw_config
-        .agents
-        .entry(agent_name.to_string())
-        .or_insert_with(|| {
-            let defaults = crate::types::default_agents();
-            defaults.get(agent_name).cloned().unwrap_or(AgentConfig {
-                name: agent_name.to_string(),
-                command: agent_name.to_string(),
-                prompt_flag: None,
-                interactive: true,
-                launch_args: None,
-                machine_launch_args: None,
-            })
-        });
-
-    agent.launch_args = launch_args;
+    if update.remove {
+        raw_config.agents.shift_remove(agent_name);
+    } else {
+        // Only what the user sets is written: an unset command stays inherited.
+        let agent = raw_config
+            .agents
+            .entry(agent_name.to_string())
+            .or_insert_with(|| AgentConfig::named(agent_name));
+        if let Some(command) = update.command {
+            agent.command = non_blank(&command).unwrap_or_default();
+        }
+        agent.launch_args = update.launch_args;
+    }
 
     // Write back to YAML atomically: temp file, fsync, rename. A plain truncating
     // write can leave a torn file (e.g. a duplicated `envFiles:` tail) that fails
@@ -217,9 +271,11 @@ envFiles:
 #
 # To set your own default for every project on this machine instead, put it in
 # ~/.pu/agent-settings.yaml:
+#   commands:
+#     claude: "claude"
 #   launchArgs:
 #     claude: "--dangerously-skip-permissions"
-# A project launchArgs (even "") takes precedence over the machine default.
+# A project command or launchArgs (even "") takes precedence over the machine default.
 # agents:
 #   claude:
 #     name: claude
@@ -606,6 +662,113 @@ agents:
     }
 
     #[test]
+    fn given_machine_command_should_apply_where_the_project_leaves_it_unset() {
+        // given
+        let home = TestHome::new();
+        write_machine_settings(
+            &home,
+            "commands:\n  claude: scripts/agent-launch.sh claude\n  codex: scripts/agent-launch.sh codex\n",
+        );
+        let project = TempDir::new().unwrap();
+        std::fs::create_dir_all(paths::pu_dir(project.path())).unwrap();
+        std::fs::write(
+            paths::config_path(project.path()),
+            "agents:\n  claude:\n    name: claude\n    launchArgs: --model opus\n  codex:\n    name: codex\n    command: codex\n",
+        )
+        .unwrap();
+        // when
+        let config = load_config_strict(project.path()).unwrap();
+        // then — the project's command wins, a missing one inherits
+        let claude = &config.agents["claude"];
+        assert_eq!(claude.command, "scripts/agent-launch.sh claude");
+        assert_eq!(claude.project_command, None);
+        let codex = &config.agents["codex"];
+        assert_eq!(codex.command, "codex");
+        assert_eq!(codex.project_command.as_deref(), Some("codex"));
+        assert_eq!(
+            codex.inherited_command("codex"),
+            "scripts/agent-launch.sh codex"
+        );
+        assert_eq!(config.agents["opencode"].command, "opencode");
+    }
+
+    #[test]
+    fn given_added_machine_agent_should_load_in_every_project() {
+        // given
+        let _home = TestHome::new();
+        save_global_agent_settings(GlobalAgentSettingsUpdate {
+            commands: [("aider".to_string(), "aider".to_string())]
+                .into_iter()
+                .collect(),
+            launch_args: [("aider".to_string(), "--yes".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        })
+        .unwrap();
+        let project = TempDir::new().unwrap();
+        // when
+        let config = load_config_strict(project.path()).unwrap();
+        // then
+        assert_eq!(config.agents["aider"].command, "aider");
+        assert_eq!(resolved(&config, "aider"), ["--yes"]);
+        // when — the agent is removed
+        save_global_agent_settings(GlobalAgentSettingsUpdate {
+            remove_agents: vec!["aider".into()],
+            ..Default::default()
+        })
+        .unwrap();
+        // then
+        let config = load_config_strict(project.path()).unwrap();
+        assert!(!config.agents.contains_key("aider"));
+    }
+
+    #[test]
+    fn given_invalid_agent_name_should_refuse_machine_save() {
+        let _home = TestHome::new();
+        let result = save_global_agent_settings(GlobalAgentSettingsUpdate {
+            commands: [("My Agent".to_string(), "x".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        });
+        assert_eq!(result.unwrap_err().code(), "INVALID_ARGUMENT");
+    }
+
+    #[test]
+    fn given_update_agent_config_command_should_set_clear_and_remove() {
+        // given
+        let _home = TestHome::new();
+        let project = TempDir::new().unwrap();
+        let root = project.path();
+        std::fs::create_dir_all(paths::pu_dir(root)).unwrap();
+        let update = |command: Option<&str>, remove: bool| AgentConfigUpdate {
+            command: command.map(str::to_string),
+            launch_args: Some(vec!["--yes".into()]),
+            remove,
+        };
+        // when — only args are set, the command stays inherited
+        update_agent_config(root, "claude", update(None, false)).unwrap();
+        let written = std::fs::read_to_string(paths::config_path(root)).unwrap();
+        assert!(!written.contains("command:"), "{written}");
+        // when — a command is set
+        let config = update_agent_config(root, "aider", update(Some(" aider "), false)).unwrap();
+        assert_eq!(config.agents["aider"].command, "aider");
+        assert_eq!(
+            config.agents["aider"].project_command.as_deref(),
+            Some("aider")
+        );
+        // when — the command is cleared
+        let config = update_agent_config(root, "aider", update(Some(""), false)).unwrap();
+        assert_eq!(config.agents["aider"].project_command, None);
+        assert_eq!(config.agents["aider"].command, "aider");
+        // when — the agent is removed
+        let config = update_agent_config(root, "aider", update(None, true)).unwrap();
+        assert!(!config.agents.contains_key("aider"));
+        assert_eq!(resolved(&config, "claude"), ["--yes"]);
+    }
+
+    #[test]
     fn given_malformed_machine_launch_args_should_fail_config_resolution() {
         let home = TestHome::new();
         write_machine_settings(
@@ -653,13 +816,20 @@ agents:
         };
         save_global_agent_settings(update("claude", "--verbose")).unwrap();
         let bad_quote = save_global_agent_settings(update("claude", "--x 'oops")).unwrap_err();
-        let unknown = save_global_agent_settings(update("nope", "--verbose")).unwrap_err();
+        let bad_name = save_global_agent_settings(update("No Pe", "--verbose")).unwrap_err();
         assert_eq!(bad_quote.code(), "INVALID_ARGUMENT");
-        assert_eq!(unknown.code(), "INVALID_ARGUMENT");
+        assert_eq!(bad_name.code(), "INVALID_ARGUMENT");
         assert_eq!(
             load_global_agent_settings().unwrap().launch_args["claude"].0,
             ["--verbose"]
         );
+    }
+
+    fn args(launch_args: Option<Vec<String>>) -> AgentConfigUpdate {
+        AgentConfigUpdate {
+            launch_args,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -674,11 +844,11 @@ agents:
         let config = update_agent_config(
             root,
             "claude",
-            Some(vec![
+            args(Some(vec![
                 "--verbose".to_string(),
                 "--model".to_string(),
                 "opus".to_string(),
-            ]),
+            ])),
         )
         .unwrap();
 
@@ -714,7 +884,10 @@ agents:
         update_agent_config(
             root,
             "claude",
-            Some(vec!["--append-system-prompt".into(), "be terse".into()]),
+            args(Some(vec![
+                "--append-system-prompt".into(),
+                "be terse".into(),
+            ])),
         )
         .unwrap();
 
@@ -733,7 +906,7 @@ agents:
         let yaml = "defaultAgent: claude\nagents:\n  claude:\n    name: claude\n    command: claude\n    launchArgs:\n      - '--verbose'\n";
         std::fs::write(crate::paths::config_path(root), yaml).unwrap();
 
-        let config = update_agent_config(root, "claude", None).unwrap();
+        let config = update_agent_config(root, "claude", args(None)).unwrap();
         let claude = &config.agents["claude"];
         assert!(claude.launch_args.is_none());
     }
@@ -748,7 +921,7 @@ agents:
         std::fs::write(crate::paths::config_path(root), yaml).unwrap();
 
         let config =
-            update_agent_config(root, "claude", Some(vec!["--verbose".to_string()])).unwrap();
+            update_agent_config(root, "claude", args(Some(vec!["--verbose".to_string()]))).unwrap();
 
         // Claude should have new args
         assert_eq!(
@@ -763,12 +936,13 @@ agents:
     }
 
     #[test]
-    fn given_update_agent_config_with_unknown_agent_should_error() {
+    fn given_update_agent_config_with_invalid_agent_name_should_error() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
 
-        let result = update_agent_config(root, "unknown-agent", Some(vec!["--verbose".into()]));
+        let result =
+            update_agent_config(root, "Not An Agent", args(Some(vec!["--verbose".into()])));
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code(), "INVALID_ARGUMENT");
@@ -783,7 +957,10 @@ agents:
         let config = update_agent_config(
             root,
             "claude",
-            Some(vec!["--permission-mode".to_string(), "plan".to_string()]),
+            args(Some(vec![
+                "--permission-mode".to_string(),
+                "plan".to_string(),
+            ])),
         )
         .unwrap();
 
@@ -808,10 +985,10 @@ agents:
                 let root = root.clone();
                 std::thread::spawn(move || {
                     let agent = ["claude", "codex", "opencode", "terminal"][i % 4];
-                    let args: Vec<String> = (0..=i).map(|n| format!("--flag-{n}")).collect();
+                    let flags: Vec<String> = (0..=i).map(|n| format!("--flag-{n}")).collect();
                     for _ in 0..20 {
-                        update_agent_config(&root, agent, Some(args.clone())).unwrap();
-                        update_agent_config(&root, agent, None).unwrap();
+                        update_agent_config(&root, agent, args(Some(flags.clone()))).unwrap();
+                        update_agent_config(&root, agent, args(None)).unwrap();
                     }
                 })
             })

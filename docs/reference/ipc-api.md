@@ -155,7 +155,9 @@ Read agent configuration for a project.
       "interactive": true,
       "project_launch_args": null,
       "machine_launch_args": "--model opus",
-      "resolved_command": "claude --model opus"
+      "resolved_command": "claude --model opus",
+      "inherited_command": "claude",
+      "origin": "builtin"
     }
   ]
 }
@@ -168,16 +170,24 @@ machine-level values in their string form, omitted when unset.
 append (project, else machine, else none), and `resolved_command`
 previews the command line. The three string
 fields were added additively; older clients ignore them.
+`project_command` is the project's `command` (omitted when unset),
+`inherited_command` is the command used when the project leaves it unset
+(machine-level, else built-in), and `origin` is where the agent is defined:
+`builtin`, `machine` or `project`. These are additive too.
 
 ### UpdateAgentConfig
 
-Set or clear the project launch args for an agent type.
+Set or clear the project command and launch args for an agent type, or remove
+the agent from the project.
 
 **Request**: `{"type": "update_agent_config", "project_root": "/path", "agent_name": "claude", "launch_args": "--model opus --append-system-prompt 'be terse'"}`
 
 `launch_args` is a shell-style string or a list of strings; `null` clears the
 project value so the machine-level args (or none) apply. An unbalanced quote is
-rejected. The project config is written with the string form.
+rejected. The project config is written with the string form. Optional
+`command` sets the project command (a blank string clears it; left out keeps
+it) and `"remove": true` drops the agent's entry. `agent_name` may be any agent
+type of lowercase letters, digits, `-` and `_`; a new one adds that agent.
 
 **Response**: `config_report` for the updated config.
 
@@ -188,9 +198,12 @@ Read or update the machine settings in `~/.pu/agent-settings.yaml`.
 **Request**: `{"type": "update_global_agent_settings", "launch_args": {"claude": "--dangerously-skip-permissions"}}`
 
 All fields are optional and omitted ones keep their stored value:
-`agent_status_tracking` (bool) and `launch_args` (agent type →
-launch args string; a blank string removes that agent's entry, unknown agent
-types and unbalanced quotes are rejected without saving).
+`agent_status_tracking` (bool), `launch_args` (agent type →
+launch args string; a blank string removes that agent's entry), `commands`
+(agent type → command; a blank string removes it, and a type that isn't built
+in adds that agent) and `remove_agents` (agent types whose command and launch
+args are removed). Invalid agent type names and unbalanced quotes are rejected
+without saving.
 
 A `codex_yolo` field sent by older clients is ignored; Codex full access is now
 a launch arg (`--dangerously-bypass-approvals-and-sandbox`).
@@ -200,7 +213,9 @@ a launch arg (`--dangerously-bypass-approvals-and-sandbox`).
 `codex_yolo` is deprecated and always `false`. It is still sent so protocol-12
 apps that require it can decode the report; clients should ignore it.
 `launch_args` defaults to `{}`. A daemon that omits it predates protocol v11
-and does not save machine-level launch args.
+and does not save machine-level launch args. The report also carries
+`commands` (agent type → command); a daemon that omits it predates
+machine-level commands.
 
 **Protocol v11:** `update_agent_config.launch_args` takes a shell-style string
 (v10 daemons accept only a list), `update_global_agent_settings` and

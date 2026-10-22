@@ -65,16 +65,20 @@ form.
 
 To opt into auto mode yourself without changing any project, set machine-level
 launch args in `~/.pu/agent-settings.yaml`, or in the macOS app under
-**Settings → Agents → Machine Settings → Launch args for all projects**:
+**Settings → Agents → Agents — All Projects**:
 
 ```yaml
+commands:
+  claude: "claude"   # optional; defaults to the agent's name
 launchArgs:
   claude: "--dangerously-skip-permissions"
   codex: "--sandbox workspace-write --ask-for-approval on-request"
 ```
 
 These apply to every project on this machine that doesn't set its own
-`launchArgs`, including projects created later. Changes apply to new and resumed
+`command` or `launchArgs`, including projects created later. An agent type under
+`commands` that isn't built in (for example `aider: "npx aider"`) adds that agent
+to every project. Changes apply to new and resumed
 agents without restarting the daemon; restart running agents to apply them.
 A malformed file (bad YAML or an unbalanced quote) makes config resolution fail
 with an error. PurePoint never falls back to permission-skipping flags.
@@ -112,8 +116,7 @@ launchArgs:
 
 ### Launching bare in one project
 
-In Settings, an empty project field means "use the launch args for all
-projects". To launch the bare command in one project even though you set
+In Settings, an empty project field means "use the value for all projects". To launch the bare command in one project even though you set
 machine-level args, set `launchArgs` to an empty string in its config:
 
 ```yaml
