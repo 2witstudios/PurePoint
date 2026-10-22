@@ -51,11 +51,6 @@ final class AgentConfigState {
         return AgentLaunchDefaults.builtIns + added.sorted()
     }
 
-    /// Save the machine-level launch args for one agent type; a blank string removes them.
-    func updateMachineLaunchArgs(agentName: String, launchArgs: String, projectRoot: String?) async {
-        await saveMachineSettings(.updateGlobalAgentSettings(launchArgs: [agentName: launchArgs]), projectRoot: projectRoot)
-    }
-
     /// Save one agent's machine-level command and launch args; blank strings remove them.
     func updateMachineAgent(agentName: String, command: String, launchArgs: String, projectRoot: String?) async {
         await saveMachineSettings(
@@ -65,8 +60,13 @@ final class AgentConfigState {
 
     /// Add an agent for every project; its type is named after the command.
     func addMachineAgent(command: String, launchArgs: String, projectRoot: String?) async {
-        let name = AgentLaunchDefaults.agentName(for: command, taken: Set(machineAgentNames + agents.map(\.agentType)))
+        let name = newAgentName(for: command)
         await updateMachineAgent(agentName: name, command: command, launchArgs: launchArgs, projectRoot: projectRoot)
+    }
+
+    /// A type for a new agent that no agent at either level uses yet.
+    private func newAgentName(for command: String) -> String {
+        AgentLaunchDefaults.agentName(for: command, taken: Set(machineAgentNames + agents.map(\.agentType)))
     }
 
     func removeMachineAgent(agentName: String, projectRoot: String?) async {
@@ -138,11 +138,6 @@ final class AgentConfigState {
         isLoading = false
     }
 
-    /// Save the project's launch args string; `nil` clears it so the machine default applies.
-    func updateLaunchArgs(projectRoot: String, agentName: String, launchArgs: String?) async {
-        await sendProjectUpdate(.updateAgentConfig(projectRoot: projectRoot, agentName: agentName, launchArgs: launchArgs))
-    }
-
     /// Save one agent's project command and launch args; a blank value clears it so the
     /// All Projects value applies.
     func updateProjectAgent(projectRoot: String, agentName: String, command: String, launchArgs: String) async {
@@ -162,7 +157,7 @@ final class AgentConfigState {
 
     /// Add an agent to this project only; its type is named after the command.
     func addProjectAgent(projectRoot: String, command: String, launchArgs: String) async {
-        let name = AgentLaunchDefaults.agentName(for: command, taken: Set(machineAgentNames + agents.map(\.agentType)))
+        let name = newAgentName(for: command)
         await updateProjectAgent(projectRoot: projectRoot, agentName: name, command: command, launchArgs: launchArgs)
     }
 

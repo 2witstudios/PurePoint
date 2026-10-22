@@ -152,7 +152,7 @@ struct SettingsAgentsContentView: View {
 // MARK: - Launch table
 
 /// One agent in a launch table: what is stored at this level, and what runs when it is empty.
-struct AgentLaunchRowModel: Identifiable, Equatable {
+struct AgentLaunchRowModel: Identifiable {
     let agentType: String
     let command: String
     let launchArgs: String

@@ -77,14 +77,16 @@ struct GlobalAgentSettingsTests {
         let state = AgentConfigState(
             ensureDaemon: {},
             sendRequest: { request in
-                guard case .updateGlobalAgentSettings(_, let launchArgs, _, _) = request else {
+                guard case .updateGlobalAgentSettings(_, let launchArgs, let commands, _) = request else {
                     return .error(code: "TEST", message: "Unexpected request")
                 }
-                return .globalAgentSettingsReport(agentStatusTracking: true, launchArgs: launchArgs ?? [:])
+                return .globalAgentSettingsReport(
+                    agentStatusTracking: true, launchArgs: launchArgs ?? [:], commands: commands ?? [:])
             }
         )
-        await state.updateMachineLaunchArgs(agentName: "claude", launchArgs: "--model opus", projectRoot: nil)
+        await state.updateMachineAgent(agentName: "claude", command: "", launchArgs: "--model opus", projectRoot: nil)
         #expect(state.machineLaunchArgs == ["claude": "--model opus"])
+        #expect(state.globalError == nil)
     }
 
     @Test func oldDaemonMachineLaunchArgsSaveReportsUpdateNeeded() async {
@@ -101,7 +103,7 @@ struct GlobalAgentSettingsTests {
             }
         )
         await state.loadGlobalSettings()
-        await state.updateMachineLaunchArgs(agentName: "claude", launchArgs: "--model sonnet", projectRoot: nil)
+        await state.updateMachineAgent(agentName: "claude", command: "", launchArgs: "--model sonnet", projectRoot: nil)
         #expect(state.globalError?.contains("Update the PurePoint daemon") == true)
         #expect(state.machineLaunchArgs == ["claude": "--model opus"], "An old daemon's report must not wipe the field")
     }
@@ -114,7 +116,7 @@ struct GlobalAgentSettingsTests {
         )
         await state.load(projectRoot: "/p")
         #expect(state.error?.contains("Update the PurePoint daemon") == true)
-        await state.updateLaunchArgs(projectRoot: "/p", agentName: "claude", launchArgs: "--model opus")
+        await state.updateProjectAgent(projectRoot: "/p", agentName: "claude", command: "", launchArgs: "--model opus")
         #expect(state.error?.contains("Update the PurePoint daemon") == true)
     }
 
