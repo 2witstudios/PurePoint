@@ -148,7 +148,7 @@ struct PointGuardScreen: View {
                 .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .padding(.horizontal, 12).padding(.top, 6)
             }
-            if model.chatGrant.canRead { transcript } else { chatLocked }
+            if !model.chatGrant.canRead { chatLocked } else if showsCourt { court } else { transcript }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if model.chatGrant.canSend { composer } else if model.chatGrant.canRead { readOnlyNotice }
@@ -226,14 +226,21 @@ struct PointGuardScreen: View {
     }
     private func newConversation() { let token = model.selectionToken; if model.busy { confirmNew = true } else { Task { if model.isSelected(token) { await model.changeSession(selection: token) } } } }
 
+    /// A new conversation shows the court in place of the transcript, so there is nothing to scroll and no Latest button.
+    private var showsCourt: Bool {
+        (model.snapshot?.messages ?? []).isEmpty && (model.snapshot?.notices ?? []).isEmpty && !model.busy
+    }
+    private var court: some View {
+        PlaysHero(enabled: model.chatGrant.canSend) { prompt in model.draft = prompt; composerFocused = false }
+            .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
+            .onAppear { following = true }
+    }
+
     private var transcript: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        if (model.snapshot?.messages ?? []).isEmpty {
-                            PlaysHero(enabled: model.chatGrant.canSend) { prompt in model.draft = prompt; composerFocused = false }
-                        }
                         ForEach(model.transcriptRows) { row in TranscriptRowView(row: row).equatable() }
                         if model.busy { TypingIndicatorBubble() }
                         ForEach(Array((model.snapshot?.notices ?? []).enumerated()), id: \.offset) { _, notice in Text(notice).font(.footnote).foregroundStyle(Theme.muted).textSelection(.enabled) }
@@ -386,7 +393,7 @@ struct PointGuardScreen: View {
     }
 }
 
-/// New-conversation court: four plays and a ball you can drag onto one to call it.
+/// New-conversation court: four plays to call. Put a thumb on the logo and a ball appears under it to pass to one.
 struct PlaysHero: View {
     let enabled: Bool
     let call: (String) -> Void
@@ -394,7 +401,7 @@ struct PlaysHero: View {
     @State private var dragging = false
     @State private var target: Int?
     @State private var passed: Int?
-    @State private var pulse = false
+    @State private var passTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Play { let label: String; let icon: String; let prompt: String }
@@ -405,70 +412,100 @@ struct PlaysHero: View {
         Play(label: "Tidy my desktop", icon: "square.grid.2x2", prompt: "Organize my desktop — group the files into folders that make sense and clear the clutter. Show me the plan before you move anything."),
         Play(label: "What's running?", icon: "waveform.path.ecg", prompt: "What's running on my machine right now? Agents, apps, and anything using a lot of memory or CPU."),
     ]
-    private static let height: CGFloat = 470
+    /// How close the ball must be for a play to light up.
+    private static let reach: CGFloat = 72
 
     var body: some View {
+        // Fills the screen under the toolbar and composer so the court lines run edge to edge; the plays stay in the open space between.
         GeometryReader { geometry in
-            let width = geometry.size.width
-            let logo = CGPoint(x: width / 2, y: 64)
-            let rest = CGPoint(x: width / 2 + 40, y: 106)
-            let spots = [CGPoint(x: width * 0.27, y: 318), CGPoint(x: width * 0.73, y: 318), CGPoint(x: width * 0.27, y: 420), CGPoint(x: width * 0.73, y: 420)]
-            let position = ball ?? (passed.map { spots[$0] } ?? rest)
-            let engaged = dragging || passed != nil
-            let lean = engaged ? max(-8, min(8, (position.x / width * 100 - 50) * 0.18)) : 0
-            let flip: CGFloat = engaged && position.x < width * 0.4 ? -1 : 1
+            let size = geometry.size
+            let top = geometry.safeAreaInsets.top
+            let height = size.height - top - geometry.safeAreaInsets.bottom
+            let column = min(size.width, 520)
+            let logo = CGPoint(x: size.width / 2, y: top + height * 0.22)
+            let spots = [
+                CGPoint(x: size.width / 2 - column * 0.29, y: top + height * 0.63), CGPoint(x: size.width / 2 + column * 0.29, y: top + height * 0.63),
+                CGPoint(x: size.width / 2 - 65, y: top + height * 0.83), CGPoint(x: size.width / 2 + 65, y: top + height * 0.83),
+            ]
+            let lean = dragging && !reduceMotion ? max(-8, min(8, ((ball?.x ?? logo.x) / size.width * 100 - 50) * 0.18)) : 0
+            let flip: CGFloat = dragging && !reduceMotion && (ball?.x ?? logo.x) < size.width * 0.4 ? -1 : 1
+            let court = Court(logo: logo, top: top)
             ZStack {
-                Court(center: logo).stroke(Color.white.opacity(0.065), lineWidth: 1.25)
-                if dragging {
-                    Path { path in path.move(to: rest); path.addLine(to: target.map { spots[$0] } ?? position) }
+                court.stroke(Color.white.opacity(0.065), lineWidth: 1.25)
+                if dragging, let ball {
+                    let center = UnitPoint(x: ball.x / size.width, y: ball.y / size.height)
+                    RadialGradient(colors: [Theme.accent.opacity(0.08), .clear], center: center, startRadius: 0, endRadius: 320)
+                    court.stroke(Theme.accent, lineWidth: 1.5)
+                        .mask(RadialGradient(colors: [.black, .clear], center: center, startRadius: 0, endRadius: 200))
+                    Path { path in path.move(to: logo); path.addLine(to: target.map { spots[$0] } ?? ball) }
                         .stroke(target == nil ? Color.white.opacity(0.22) : Theme.accent, style: StrokeStyle(lineWidth: target == nil ? 1 : 1.75, lineCap: .round, dash: target == nil ? [2, 7] : []))
                 }
                 LogoRing(size: 96)
                     .rotation3DEffect(.degrees(flip < 0 ? 180 : 0), axis: (x: 0, y: 1, z: 0))
                     .rotationEffect(.degrees(lean))
                     .animation(.spring(response: 0.4, dampingFraction: 0.8), value: flip)
-                    .position(logo)
-                Text("What play do you\nwant to run?").font(.system(size: 30, weight: .bold)).tracking(-0.6)
-                    .multilineTextAlignment(.center).foregroundStyle(Color(hex: 0xF4F4F5))
-                    .position(x: width / 2, y: 178)
-                ForEach(Self.plays.indices, id: \.self) { index in
-                    spot(index, lit: index == (target ?? passed)).position(x: spots[index].x, y: spots[index].y + 12)
-                }
-                Circle()
-                    .fill(RadialGradient(colors: [Color.white.opacity(0.55), Theme.accent], center: UnitPoint(x: 0.35, y: 0.3), startRadius: 0, endRadius: 9))
-                    .frame(width: 18, height: 18)
-                    .scaleEffect(dragging ? 1.25 : 1)
-                    .background(Circle().fill(Theme.accent.opacity(pulse ? 0 : 0.45)).scaleEffect(pulse ? 1.9 : 1))
-                    .frame(width: 44, height: 44).contentShape(Circle())
-                    .opacity(passed != nil && !dragging ? 0 : 1)
-                    .position(position)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: lean)
+                    .contentShape(Circle())
                     .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("court"))
                         .onChanged { value in
                             guard enabled else { return }
+                            passTask?.cancel(); passTask = nil
                             dragging = true; passed = nil; ball = value.location
                             target = spots.indices.min { distance(spots[$0], value.location) < distance(spots[$1], value.location) }
-                                .flatMap { distance(spots[$0], value.location) < 64 ? $0 : nil }
+                                .flatMap { distance(spots[$0], value.location) < Self.reach ? $0 : nil }
                         }
                         .onEnded { _ in
+                            guard dragging else { return }
                             dragging = false
-                            withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
-                                if let target { pass(target) } else { ball = nil }
-                                target = nil
-                            }
+                            if let target { pass(target, to: spots[target]) } else { ball = nil }
+                            target = nil
                         })
-                    .accessibilityHidden(true)
+                    .position(logo)
+                Text("What play do you\nwant to run?").font(.system(size: 30, weight: .bold)).tracking(-0.6)
+                    .multilineTextAlignment(.center).foregroundStyle(Color(hex: 0xF4F4F5))
+                    .position(x: size.width / 2, y: top + height * 0.443)
+                ForEach(Self.plays.indices, id: \.self) { index in
+                    spot(index, lit: index == (target ?? passed)) { pass(index, to: spots[index]) }
+                        .position(x: spots[index].x, y: spots[index].y + 13)
+                }
+                if let ball {
+                    ZStack {
+                        Circle().fill(Color.white.opacity(0.07)).frame(width: 56, height: 56)
+                        Circle()
+                            .fill(RadialGradient(colors: [Color.white.opacity(0.55), Theme.accent], center: UnitPoint(x: 0.35, y: 0.3), startRadius: 0, endRadius: 9))
+                            .frame(width: 18, height: 18).scaleEffect(1.25)
+                            .shadow(color: Theme.accent.opacity(0.6), radius: 8)
+                    }
+                    .position(ball)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+                }
             }
             .coordinateSpace(name: "court")
         }
-        .frame(height: Self.height)
-        .onAppear { guard !reduceMotion else { return }; withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: false)) { pulse = true } }
+        .ignoresSafeArea(.container, edges: .vertical)
+        .ignoresSafeArea(.keyboard)
+        .sensoryFeedback(trigger: target) { _, new in new == nil ? nil : .selection }
+        .sensoryFeedback(trigger: passed) { _, new in new == nil ? nil : .impact(weight: .light) }
+        .onDisappear { passTask?.cancel() }
     }
 
     private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
-    private func pass(_ index: Int) { ball = nil; passed = index; call(Self.plays[index].prompt) }
-    private func spot(_ index: Int, lit: Bool) -> some View {
+    /// Lights the play and, when the ball is in hand, flies it there before calling.
+    private func pass(_ index: Int, to spot: CGPoint) {
+        let prompt = Self.plays[index].prompt
+        passTask?.cancel(); passTask = nil
+        withAnimation(.easeOut(duration: 0.2)) { passed = index }
+        guard ball != nil, !reduceMotion else { ball = nil; call(prompt); return }
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { ball = spot }
+        passTask = Task {
+            // A pass interrupted by the court going away or a new grab never calls.
+            guard (try? await Task.sleep(for: .milliseconds(450))) != nil, !Task.isCancelled else { return }
+            ball = nil; passTask = nil; call(prompt)
+        }
+    }
+    private func spot(_ index: Int, lit: Bool, action: @escaping () -> Void) -> some View {
         let play = Self.plays[index]
-        return Button { withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { pass(index) } } label: {
+        return Button(action: action) {
             VStack(spacing: 10) {
                 Image(systemName: play.icon).font(.system(size: 16, weight: .medium))
                     .foregroundStyle(lit ? Theme.ground : Theme.muted)
@@ -486,17 +523,29 @@ struct PlaysHero: View {
     }
 }
 
-/// Faint half-court lines behind the plays, centered on the logo.
+/// Faint half-court lines matching the desktop court: midcourt and center circles on the logo,
+/// the far three-point line under the toolbar, and the basket end behind the composer.
 private struct Court: Shape {
-    let center: CGPoint
+    let logo: CGPoint
+    /// Where the open court starts, below the toolbar.
+    let top: CGFloat
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: center.y)); path.addLine(to: CGPoint(x: rect.maxX, y: center.y))
-        path.addEllipse(in: CGRect(x: center.x - 86, y: center.y - 86, width: 172, height: 172))
-        let arc = CGPoint(x: rect.midX, y: rect.maxY + 20)
-        path.move(to: CGPoint(x: rect.minX + 26, y: rect.maxY)); path.addLine(to: CGPoint(x: rect.minX + 26, y: arc.y - 10))
-        path.addArc(center: arc, radius: rect.midX - 26, startAngle: .degrees(180), endAngle: .degrees(360), clockwise: false)
-        path.addLine(to: CGPoint(x: rect.maxX - 26, y: rect.maxY))
+        let edge = rect.insetBy(dx: 12, dy: 12)
+        path.addRoundedRect(in: edge, cornerSize: CGSize(width: 6, height: 6))
+        path.move(to: CGPoint(x: edge.minX, y: logo.y)); path.addLine(to: CGPoint(x: edge.maxX, y: logo.y))
+        path.addEllipse(in: CGRect(x: logo.x - 86, y: logo.y - 86, width: 172, height: 172))
+        path.addEllipse(in: CGRect(x: logo.x - 30, y: logo.y - 30, width: 60, height: 60))
+        path.move(to: CGPoint(x: rect.width * 0.18, y: top))
+        path.addQuadCurve(to: CGPoint(x: rect.width * 0.82, y: top), control: CGPoint(x: rect.midX, y: top + 60))
+        // Three-point line, lane and free-throw circle at the basket end.
+        let arc = CGPoint(x: rect.midX, y: edge.maxY - 92)
+        let radius = min(rect.midX - 22, 240)
+        path.move(to: CGPoint(x: arc.x - radius, y: edge.maxY)); path.addLine(to: CGPoint(x: arc.x - radius, y: arc.y))
+        path.addArc(center: arc, radius: radius, startAngle: .degrees(180), endAngle: .degrees(360), clockwise: false)
+        path.addLine(to: CGPoint(x: arc.x + radius, y: edge.maxY))
+        path.addRect(CGRect(x: rect.midX - 60, y: edge.maxY - 150, width: 120, height: 150))
+        path.addEllipse(in: CGRect(x: rect.midX - 60, y: edge.maxY - 210, width: 120, height: 120))
         return path
     }
 }
