@@ -11,7 +11,7 @@ pub async fn run(socket: &Path, action: ProjectsAction) -> Result<(), CliError> 
             crate::commands::inventory::run(socket, InventoryKind::Projects, None, json).await
         }
         ProjectsAction::Add { path, json } => {
-            let root = resolve(path, Default::Init)?;
+            let root = resolve(path, RootDefault::Init)?;
             if crate::machine_target::remote_machine().is_none() {
                 // Locally, adding is `pu init`: it also writes the agent context file.
                 return crate::commands::init::run_at(socket, root, json).await;
@@ -23,7 +23,7 @@ pub async fn run(socket: &Path, action: ProjectsAction) -> Result<(), CliError> 
             suspend_agents,
             json,
         } => {
-            let project_root = resolve(path, Default::Explicit)?;
+            let project_root = resolve(path, RootDefault::Explicit)?;
             send(
                 socket,
                 Request::RemoveProject {
@@ -45,7 +45,7 @@ async fn send(socket: &Path, request: Request, json: bool) -> Result<(), CliErro
 }
 
 /// Where a command without a path argument looks for its project.
-enum Default {
+enum RootDefault {
     /// As `pu init`: --project, then PU_PROJECT_ROOT (set for agents), then cwd.
     Init,
     /// --project, then cwd. Removal ignores an inherited PU_PROJECT_ROOT, so it
@@ -55,11 +55,11 @@ enum Default {
 
 /// A path argument wins over --project and the current directory. On another
 /// machine the root must be absolute: a local relative path means nothing there.
-fn resolve(path: Option<String>, default: Default) -> Result<String, CliError> {
+fn resolve(path: Option<String>, default: RootDefault) -> Result<String, CliError> {
     let path = match (path, default) {
         (Some(path), _) => path,
-        (None, Default::Init) => crate::commands::project_root_string()?,
-        (None, Default::Explicit) => match crate::commands::explicit_project() {
+        (None, RootDefault::Init) => crate::commands::project_root_string()?,
+        (None, RootDefault::Explicit) => match crate::commands::explicit_project() {
             Some(root) => root,
             None => match crate::machine_target::remote_machine() {
                 Some(machine) => return Err(crate::commands::remote_project_required(machine)),

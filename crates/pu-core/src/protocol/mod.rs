@@ -522,7 +522,7 @@ pub enum Response {
         project_root: String,
         /// False when the root was not registered.
         removed: bool,
-        /// Agents suspended so they resume when the project is added again.
+        /// Agents suspended so they can be resumed once the project is added again.
         suspended: Vec<String>,
         /// Live sessions the manifest did not list, which cannot be resumed.
         #[serde(default)]

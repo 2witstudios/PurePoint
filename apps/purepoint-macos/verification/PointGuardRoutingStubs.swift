@@ -25,6 +25,7 @@ struct DaemonWorkspaceService: WorkspaceService {
 struct DaemonClient {
     init(socketPath: String? = nil) {}
     func send(_ request: DaemonRequest) async throws -> DaemonResponse { .ok }
+    func removeProject(root: String, suspendAgents: Bool, daemonName: String) async throws {}
 }
 // Project hosts: only the local, file-free surface AppState and persistence name.
 struct HostFileData { let data: Data; let modifiedMs: Int64; let truncated: Bool }

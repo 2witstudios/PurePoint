@@ -115,7 +115,7 @@ struct SidebarMenuModelTests {
                 == SidebarConfirmation(
                     title: "Remove confirm from Machine?",
                     message: "It disappears from PurePoint on Machine and every device connected to it."
-                        + " Its 1 running agent is suspended and resumes when the project is added again."
+                        + " Its 1 running agent is suspended and can be resumed once the project is added again."
                         + " The folder, including .pu/, is not changed.",
                     confirmTitle: "Remove"))
     }

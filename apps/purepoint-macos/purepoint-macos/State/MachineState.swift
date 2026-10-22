@@ -327,7 +327,6 @@ final class MachineState: Identifiable {
         }
     }
 
-    /// Discover the daemon's registered projects (`inventory`, kind projects, all roots).
     private func stopRefreshing() {
         refreshTask?.cancel()
         refreshTask = nil
@@ -336,6 +335,7 @@ final class MachineState: Identifiable {
         Task { await subscription?.stop() }
     }
 
+    /// Discover the daemon's registered projects (`inventory`, kind projects, all roots).
     func refreshProjects() async {
         let client = endpoint.makeClient()
         let response: DaemonResponse

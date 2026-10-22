@@ -949,6 +949,10 @@ test("project removal needs confirmation and a daemon that can forget projects f
   assert.equal(removed.state, "succeeded");
   const sent = f.requests.filter((r) => r.type === "remove_project");
   assert.deepEqual(sent, [
-    { type: "remove_project", project_root: "/registered", suspend_agents: true },
+    {
+      type: "remove_project",
+      project_root: "/registered",
+      suspend_agents: true,
+    },
   ]);
 });

@@ -586,7 +586,7 @@ enum TabAction {
 
 #[derive(Subcommand)]
 enum InventoryAction {
-    /// List all registered projects by default; --project narrows the scope
+    /// List across all registered projects by default; --project narrows the scope
     List {
         #[arg(long, conflicts_with = "project")]
         global: bool,

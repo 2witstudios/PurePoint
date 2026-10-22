@@ -10,25 +10,27 @@ actor DaemonProjectsSubscription {
     private var stopped = false
     private let client: DaemonClient
 
+    private static let initialBackoff: UInt64 = 500_000_000  // 0.5s
+
     init(client: DaemonClient) {
         self.client = client
     }
 
     /// Delivers each list of roots until `stop()`. Reconnects with backoff after a failure.
     func start(onChange: @escaping @MainActor ([String]) -> Void) async {
-        var backoff: UInt64 = 500_000_000  // 0.5s
+        var backoff = Self.initialBackoff
         let maxBackoff: UInt64 = 10_000_000_000  // 10s
         while !stopped {
             do {
                 try await run(onChange: onChange)
-                backoff = 500_000_000
+                backoff = Self.initialBackoff
             } catch is CancellationError {
                 return
             } catch {
                 #if os(iOS)
                 if await AppActivity.shared.isInBackground {
                     await AppActivity.shared.untilForeground()
-                    backoff = 500_000_000
+                    backoff = Self.initialBackoff
                     continue
                 }
                 #endif

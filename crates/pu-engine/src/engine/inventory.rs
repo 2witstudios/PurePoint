@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use pu_core::error::PuError;
 use pu_core::manifest;
 use pu_core::protocol::*;
 use pu_core::types::{AgentEntry, AgentStatus};
@@ -63,9 +62,7 @@ impl Engine {
         for root in self.registered_projects() {
             reads.spawn(async move {
                 let path = PathBuf::from(&root);
-                let read = tokio::task::spawn_blocking(move || {
-                    was_removed(&path, &manifest::read_manifest(&path))
-                });
+                let read = tokio::task::spawn_blocking(move || was_removed(&path));
                 let removed = matches!(
                     tokio::time::timeout(Duration::from_secs(2), read).await,
                     Ok(Ok(true))
@@ -83,7 +80,7 @@ impl Engine {
         // stale since must not keep the projects stream closed.
         match tokio::time::timeout(
             Duration::from_secs(5),
-            self.unregister_projects(removed, true),
+            self.unregister_projects(removed, Unregister::IfRemoved),
         )
         .await
         {
@@ -151,14 +148,12 @@ impl Engine {
     }
 
     /// Removes registered roots and returns the ones that were registered.
-    /// With `only_if_removed`, each root is re-checked under the update lock
-    /// and kept unless its folder still exists without a manifest, so one
-    /// reopened since it was seen missing stays.
     async fn unregister_projects(
         &self,
         roots: Vec<String>,
-        only_if_removed: bool,
+        mode: Unregister,
     ) -> std::io::Result<Vec<String>> {
+        let roots: HashSet<String> = roots.into_iter().collect();
         let update = self.project_registry_updates.clone().lock_owned().await;
         let projects = self.registered_projects.clone();
         let registry = self.project_registry_path.clone();
@@ -170,10 +165,7 @@ impl Engine {
                     .map_err(|_| std::io::Error::other("project registry lock poisoned"))?;
                 current.iter().cloned().partition(|root| {
                     roots.contains(root)
-                        && (!only_if_removed || {
-                            let root = Path::new(root);
-                            was_removed(root, &manifest::read_manifest(root))
-                        })
+                        && (mode == Unregister::Always || was_removed(Path::new(root)))
                 })
             };
             if removed.is_empty() {
@@ -256,7 +248,10 @@ impl Engine {
                 killed = rest;
             }
         }
-        match self.unregister_projects(vec![root.clone()], false).await {
+        match self
+            .unregister_projects(vec![root.clone()], Unregister::Always)
+            .await
+        {
             Ok(removed) => Response::ProjectRemoved {
                 removed: !removed.is_empty(),
                 project_root: root,
@@ -363,16 +358,11 @@ impl Engine {
         for root in roots {
             reads.spawn(async move {
                 let path = PathBuf::from(&root);
-                let read = tokio::task::spawn_blocking(move || {
-                    let result = manifest::read_manifest(&path);
-                    let removed = was_removed(&path, &result);
-                    (result, removed)
-                });
-                // The flag marks a project removed from this machine.
+                let read = tokio::task::spawn_blocking(move || manifest::read_manifest(&path));
                 let result = match tokio::time::timeout(Duration::from_secs(2), read).await {
-                    Ok(Ok((result, removed))) => result.map_err(|e| (removed, e.to_string())),
-                    Ok(Err(e)) => Err((false, e.to_string())),
-                    Err(_) => Err((false, "project manifest read timed out".into())),
+                    Ok(Ok(result)) => result.map_err(|e| e.to_string()),
+                    Ok(Err(e)) => Err(e.to_string()),
+                    Err(_) => Err("project manifest read timed out".into()),
                 };
                 (root, result)
             });
@@ -385,22 +375,15 @@ impl Engine {
             }
         }
         manifests.sort_by(|a, b| a.0.cmp(&b.0));
-        let registered: HashSet<String> = self.registered_projects().into_iter().collect();
+        // A global query read every registered root; a scoped one needs the registry.
+        let registered: HashSet<String> = if report.project_root.is_none() {
+            manifests.iter().map(|(root, _)| root.clone()).collect()
+        } else {
+            self.registered_projects().into_iter().collect()
+        };
         let sessions = self.sessions.lock().await;
         let mut observed_sessions = HashSet::new();
-        let mut removed = Vec::new();
         for (root, result) in manifests {
-            // A registry-wide query forgets a project whose manifest is gone,
-            // unless an agent this daemon runs still claims it.
-            if report.project_root.is_none()
-                && matches!(result, Err((true, _)))
-                && !sessions
-                    .values()
-                    .any(|h| h.project_root.as_deref() == Some(root.as_str()))
-            {
-                removed.push(root);
-                continue;
-            }
             let mut project = ProjectInventoryEntry {
                 name: Path::new(&root)
                     .file_name()
@@ -417,7 +400,7 @@ impl Engine {
             };
             let m = match result {
                 Ok(m) => m,
-                Err((_, error)) => {
+                Err(error) => {
                     report.complete = false;
                     project.error = Some(error);
                     report.projects.push(project);
@@ -571,11 +554,6 @@ impl Engine {
             }
         }
         drop(sessions);
-        if !removed.is_empty()
-            && let Err(e) = self.unregister_projects(removed, true).await
-        {
-            tracing::warn!("failed to unregister removed projects: {e}");
-        }
         report.summary = standalone;
         report.summary.projects = report.projects.len();
         for p in &report.projects {
@@ -769,10 +747,18 @@ pub(super) fn project_root_not_allowed(root: &str) -> Response {
     }
 }
 
-/// A project folder whose manifest is gone was removed from PurePoint. A
+/// A project folder whose manifest is gone was removed by an older client. A
 /// missing folder is only unavailable: it may be on an unmounted volume.
-fn was_removed(root: &Path, read: &Result<pu_core::types::Manifest, PuError>) -> bool {
-    matches!(read, Err(PuError::NotInitialized)) && root.is_dir()
+fn was_removed(root: &Path) -> bool {
+    root.is_dir() && !pu_core::paths::manifest_path(root).exists()
+}
+
+/// Whether `unregister_projects` re-checks, under the update lock, that each
+/// root is still a removed folder: one reopened since it was seen stays.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Unregister {
+    Always,
+    IfRemoved,
 }
 
 fn write_registry(path: &Path, projects: &[String]) -> std::io::Result<()> {
@@ -1243,7 +1229,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn given_registered_project_whose_manifest_was_deleted_should_drop_it_from_inventory_and_registry()
+    async fn given_manifest_deleted_while_running_should_report_it_unavailable_until_the_next_prune()
      {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("registry.json");
@@ -1253,10 +1239,14 @@ mod tests {
         // What the app does when a project is removed from the sidebar.
         std::fs::remove_file(pu_core::paths::manifest_path(Path::new(&removed))).unwrap();
 
+        // Inventory is a read: it never changes the registry.
         let report = inventory(&engine, InventoryKind::Projects).await;
-        assert!(report.complete);
-        let roots: Vec<_> = report.projects.iter().map(|p| &p.project_root).collect();
-        assert_eq!(roots, vec![&kept]);
+        assert!(!report.complete);
+        let unavailable: Vec<_> = report.projects.iter().filter(|p| !p.available).collect();
+        assert_eq!(unavailable.len(), 1);
+        assert_eq!(unavailable[0].project_root, removed);
+        assert_eq!(engine.registered_projects().len(), 2);
+        engine.prune_removed_projects().await;
         assert_eq!(engine.registered_projects(), vec![kept.clone()]);
         drop(engine);
         assert_eq!(
@@ -1327,7 +1317,7 @@ mod tests {
         let engine = Engine::with_project_registry(tmp.path().join("registry.json")).unwrap();
         let root = init(&engine, &tmp.path().join("project")).await;
         std::fs::remove_file(pu_core::paths::manifest_path(Path::new(&root))).unwrap();
-        inventory(&engine, InventoryKind::Projects).await;
+        engine.prune_removed_projects().await;
         assert!(engine.registered_projects().is_empty());
 
         init(&engine, Path::new(&root)).await;
@@ -1444,7 +1434,7 @@ mod tests {
         let agent = manifest::read_manifest(Path::new(&root)).unwrap().agents[&id].clone();
         assert!(
             agent.suspended,
-            "suspended agents resume when the project is added again"
+            "suspended agents can be resumed once the project is added again"
         );
         engine.kill_all_sessions(Duration::from_millis(10)).await;
     }
@@ -1461,7 +1451,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         engine
-            .unregister_projects(vec![root.clone()], false)
+            .unregister_projects(vec![root.clone()], Unregister::Always)
             .await
             .unwrap();
         let report = inventory(&engine, InventoryKind::Agents).await;

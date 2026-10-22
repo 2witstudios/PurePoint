@@ -37,7 +37,7 @@ pub(crate) fn print_project_removed(
     println!("{} {project_root}", "Removed".green());
     if !suspended.is_empty() {
         println!(
-            "  Suspended {} agent(s); they resume when the project is added again",
+            "  Suspended {} agent(s); they can be resumed once the project is added again",
             suspended.len()
         );
     }

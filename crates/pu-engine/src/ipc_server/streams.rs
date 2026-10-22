@@ -307,8 +307,7 @@ pub(super) async fn handle_status_stream(
 }
 
 async fn send_projects(writer: &mut IpcWriter, engine: &Engine) -> bool {
-    let mut projects = engine.registered_projects();
-    projects.sort();
+    let projects = engine.registered_projects();
     write_response(writer, &Response::ProjectsChanged { projects })
         .await
         .is_ok()

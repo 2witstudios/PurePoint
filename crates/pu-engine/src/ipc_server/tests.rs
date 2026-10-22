@@ -1459,8 +1459,11 @@ async fn assert_invalid_bytes_close_stream(sock_path: &std::path::Path, subscrib
     write_line(&mut writer, &request).await;
     let first = read_response(&mut reader).await;
     assert!(subscribed(&first), "{first:?}");
-    writer.write_all(b"\xff{}\n").await.unwrap();
-    write_line(&mut writer, &Request::Health).await;
+    // One write: the daemon may close as soon as it reads the bad line, and a
+    // second write would then race it and fail with a broken pipe.
+    let mut bytes = b"\xff{}\n".to_vec();
+    bytes.extend_from_slice((serde_json::to_string(&Request::Health).unwrap() + "\n").as_bytes());
+    writer.write_all(&bytes).await.unwrap();
     let responses = responses_until_close(&mut reader).await;
     assert!(
         !responses

@@ -561,7 +561,7 @@ struct HomeView: View {
                 removing = nil
             }
         } message: {
-            Text(removing.map { "It disappears from PurePoint on every device connected to \($0.machineName). Its agents are suspended and resume when the project is added again; a session the project does not record is stopped. Files, including .pu/, are not changed." } ?? "")
+            Text(removing.map { "It disappears from PurePoint on every device connected to \($0.machineName). Its agents are suspended and can be resumed once the project is added again; a session the project does not record is stopped. Files, including .pu/, are not changed." } ?? "")
         }
         .onChange(of: model.bridgeIdentity) { _, _ in collapsed = []; launchTarget = nil; renaming = nil; stopping = nil; removing = nil }
     }

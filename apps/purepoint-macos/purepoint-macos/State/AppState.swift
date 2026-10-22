@@ -118,15 +118,14 @@ final class AppState {
     /// Follows the local daemon's registered projects, which decide this Mac's sidebar.
     @ObservationIgnored private var localProjectsSubscription: DaemonProjectsSubscription?
     /// The local daemon's projects as last reported, to tell a removal from a project
-    /// whose `init` has not reached the daemon yet.
-    @ObservationIgnored private var lastLocalProjects = Set<String>()
+    /// whose `init` has not reached the daemon yet; nil until the first report.
+    @ObservationIgnored private var lastLocalProjects: Set<String>?
+    /// Each opened root's canonical path, resolved once rather than on every report.
+    @ObservationIgnored private var canonicalRoots: [String: String] = [:]
     #endif
     /// Point Guard folders the user also opened as sidebar projects. Other Point Guard
     /// folders stay out of the sidebar even though the daemon has them registered.
     @ObservationIgnored private var shownPointGuardFolders = Set<String>()
-    /// Until the local daemon first reports its projects, a saved workspace selection may
-    /// belong to one that has not opened yet.
-    @ObservationIgnored private var awaitingLocalProjects = false
     /// Whether the first local project list reopens last session's sidebar, whose agents
     /// this app suspended on quit and resumes. Projects that join later keep theirs paused.
     @ObservationIgnored private var resumesOnFirstLocalList = false
@@ -310,23 +309,16 @@ final class AppState {
     /// Mac's sidebar, since Point Guard needs it registered.
     func removeProject(_ project: ProjectState) async throws {
         if project.isRemote {
-            guard let machine = machines.first(where: { $0.machine.id == project.key.machineId }) else { return }
+            guard let machine = machine(for: project) else { return }
             try await machine.removeProject(root: project.key.root, suspendAgents: true)
             if activeProjectRoot == project.projectId { activeProjectRoot = projects.first?.projectRoot }
             return
         }
         let root = project.projectRoot
         if !isPointGuardFolder(root) {
-            let client = DaemonEndpoint.local.makeClient()
             // The daemon registered the canonical path; a symlinked one may name a deleted folder.
-            switch try await client.send(.removeProject(projectRoot: Self.canonicalPath(root), suspendAgents: true)) {
-            case .projectRemoved:
-                break
-            case .error(_, let message):
-                throw MachineOpenProjectError(message: message)
-            default:
-                throw MachineOpenProjectError(message: "The daemon did not remove \(root).")
-            }
+            try await DaemonEndpoint.local.makeClient().removeProject(
+                root: Self.canonicalPath(root), suspendAgents: true, daemonName: "The daemon")
         }
         closeProject(root)
     }
@@ -399,7 +391,6 @@ final class AppState {
         guard localProjectsSubscription == nil else { return }
         let subscription = DaemonProjectsSubscription(client: DaemonEndpoint.local.makeClient())
         localProjectsSubscription = subscription
-        awaitingLocalProjects = true
         Task {
             // The daemon holds the project list, so it runs even before any project opens.
             try? await DaemonLifecycle.ensureDaemon()
@@ -416,11 +407,13 @@ final class AppState {
         let registered = Set(roots)
         // The daemon reports canonical roots; a project may have been opened by another path.
         let canonical = Dictionary(
-            projects.map { (Self.canonicalPath($0.projectRoot), $0.projectRoot) }, uniquingKeysWith: { first, _ in first })
-        for root in lastLocalProjects.subtracting(registered) {
-            if let owner = projectState(forRoot: canonical[root] ?? root) ?? pointGuardProjects.first(where: {
-                Self.canonicalPath($0.key) == root
-            })?.value, isPointGuardFolder(owner.projectRoot) {
+            projects.map { (canonicalRoot(of: $0.projectRoot), $0.projectRoot) }, uniquingKeysWith: { first, _ in first })
+        let pointGuard = Dictionary(
+            pointGuardProjects.map { (canonicalRoot(of: $0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
+        for root in (lastLocalProjects ?? []).subtracting(registered) {
+            if let owner = canonical[root].flatMap({ projectState(forRoot: $0) }) ?? pointGuard[root],
+                isPointGuardFolder(owner.projectRoot)
+            {
                 // Removed elsewhere, but Point Guard works in this folder: register it again,
                 // leaving the agents the removal suspended paused.
                 owner.keepsSuspendedAgentsOnNextOpen = true
@@ -431,15 +424,38 @@ final class AppState {
         }
         let resuming = resumesOnFirstLocalList
         resumesOnFirstLocalList = false
-        let hidden = Set(pointGuardProjects.keys.filter { !shownPointGuardFolders.contains($0) }.map(Self.canonicalPath))
         for root in roots where canonical[root] == nil {
+            // A Point Guard folder the user has not opened stays out of the sidebar.
+            if let owner = pointGuard[root], !shownPointGuardFolders.contains(owner.projectRoot) { continue }
             guard FileManager.default.fileExists(atPath: root), !isTooBroadProjectRoot(root) else { continue }
-            if hidden.contains(root) { continue }
             openProject(root, resumingSuspendedAgents: resuming)
         }
         lastLocalProjects = registered
-        awaitingLocalProjects = false
         #endif
+    }
+
+    #if os(macOS)
+    private func canonicalRoot(of root: String) -> String {
+        if let known = canonicalRoots[root] { return known }
+        let resolved = Self.canonicalPath(root)
+        canonicalRoots[root] = resolved
+        return resolved
+    }
+    #endif
+
+    /// Until the local daemon first reports its projects, a saved workspace selection may
+    /// belong to one that has not opened yet.
+    private var awaitingLocalProjects: Bool {
+        #if os(macOS)
+        localProjectsSubscription != nil && lastLocalProjects == nil
+        #else
+        false
+        #endif
+    }
+
+    /// The machine a remote project lives on; nil for a local one.
+    func machine(for project: ProjectState) -> MachineState? {
+        machines.first { $0.machine.id == project.key.machineId }
     }
 
     /// The path with symlinks resolved, as the daemon's `canonicalize` reports it (unlike

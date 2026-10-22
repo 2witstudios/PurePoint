@@ -80,25 +80,27 @@ extension SidebarOutlineView {
             project.killAllAgents()
         }
 
-        // Hiding is this device's choice: the project and its agents stay on the machine.
-        vc.onHideProject = { [viewCache] project in
+        let dropTerminalViews = { [viewCache] (project: ProjectState) in
             for agent in project.allAgents {
                 viewCache.remove(agentId: agent.id)
             }
+        }
+
+        // Hiding is this device's choice: the project and its agents stay on the machine.
+        vc.onHideProject = { project in
+            dropTerminalViews(project)
             appState.closeProject(project.projectId)
         }
 
         // The machine's daemon forgets the project, so it leaves every device's sidebar. Its
         // files, including .pu/, stay: adding the folder again brings the project back.
-        vc.onRemoveProject = { [viewCache] project in
+        vc.onRemoveProject = { project in
             Task { @MainActor in
                 do {
                     try await appState.removeProject(project)
                 } catch {
                     let message = "Could not remove \(project.projectName): \(error.localizedDescription)"
-                    if let machine = appState.machines.first(where: { $0.machine.id == project.key.machineId }),
-                        project.isRemote
-                    {
+                    if project.isRemote, let machine = appState.machine(for: project) {
                         machine.actionError = message
                     } else {
                         appState.daemonError = message
@@ -107,9 +109,7 @@ extension SidebarOutlineView {
                 }
                 // Point Guard may still own a local folder; its terminal views stay attached.
                 guard appState.projectState(forRoot: project.projectId) == nil else { return }
-                for agent in project.allAgents {
-                    viewCache.remove(agentId: agent.id)
-                }
+                dropTerminalViews(project)
             }
         }
 

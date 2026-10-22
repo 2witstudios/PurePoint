@@ -5,8 +5,6 @@ export const workspaceFeatures = Object.freeze({
   inventory: true,
   management: true,
   operationStatus: true,
-  // Daemons at protocol 13 or later can forget a project for every device.
-  projectRemoval: true,
 });
 export const workspaceOperations = [
   "workspace.catalog",
@@ -167,10 +165,7 @@ export function workspaceConnection({
       fail("unsupported", "Complete authoritative project metadata required");
     const project = metadata.projects.find((p) => p.id === r.projectId);
     // An unavailable project can still be removed; nothing else runs in one.
-    if (
-      !project ||
-      (!project.available && r.op !== "workspace.removeProject")
-    )
+    if (!project || (!project.available && r.op !== "workspace.removeProject"))
       fail("target", "Registered available project required");
     return { machine, metadata, project };
   };
@@ -352,13 +347,19 @@ export function workspaceConnection({
       } else if (r.op === "workspace.removeProject") {
         if (r.confirm !== true)
           fail("invalid", "Explicit removal confirmation required");
-        const { version } = await daemons.inspect(machine, {
-          signal: abort.signal,
-        });
+        // Health alone carries the version; inspect would also read every manifest.
+        const health = await daemonRequest(
+          machine.socket,
+          { type: "health" },
+          { signal: abort.signal },
+        );
         check();
-        if (version < 13)
+        if (
+          !Number.isInteger(health.protocol_version) ||
+          health.protocol_version < 13
+        )
           fail("unsupported", "Update the machine's daemon to remove projects");
-        // The project's agents are suspended so they resume if it is added again; only a
+        // The project's agents are suspended so they can be resumed once it is added again; only a
         // session its manifest does not record is stopped (reported as `killed`).
         ipc = {
           type: "remove_project",
