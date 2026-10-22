@@ -4,6 +4,7 @@ struct DetailView: View {
     @Binding var selection: SidebarSelection?
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
+    @Environment(\.titlebarClearance) private var titlebarClearance
 
     var body: some View {
         Group {
@@ -13,7 +14,18 @@ struct DetailView: View {
                 placeholderContent
             }
         }
+        // A view without a top strip of its own starts below the traffic lights instead.
+        .padding(.top, drawsTopStrip ? 0 : titlebarClearance.height)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Workspaces and the dashboard open with a pane tab strip, which moves its own contents
+    /// aside for the traffic lights.
+    private var drawsTopStrip: Bool {
+        switch selection {
+        case .workspace, .nav(.dashboard): true
+        default: false
+        }
     }
 
     private var placeholderContent: some View {
