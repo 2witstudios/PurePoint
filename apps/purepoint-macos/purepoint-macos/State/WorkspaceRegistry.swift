@@ -114,15 +114,18 @@ final class WorkspaceRegistry {
         pendingSaves.remove(projectId)
         // Ours are measured against the base as the reconciler would show it now: the grouping it
         // derives from the manifest comes out the same on every Mac, so it is not an edit here.
+        // `ours` was published with the unconfirmed agents, so the base is reconciled with them too.
         let base = layoutBases[projectId] ?? []
         let merged = WorkspaceLayoutMerge.merge(
             base: base, ours: decoded(workspacesByProject[projectId] ?? [], projectId: projectId), theirs: workspaces,
             oursBase: liveByProject[projectId].map {
-                decoded(WorkspaceReconciler.reconcile(stored: base, live: $0), projectId: projectId)
+                decoded(
+                    WorkspaceReconciler.reconcile(stored: base, live: withUnconfirmed($0, projectRoot: projectId)),
+                    projectId: projectId)
             })
         if let live = liveByProject[projectId] {
             let known = Set(live.map(\.id))
-            unconfirmedAgents[projectId] = workspaces.flatMap { workspace in
+            unconfirmedAgents[projectId] = merged.flatMap { workspace in
                 workspace.agentIds.filter { !known.contains($0) }.map {
                     LiveAgent(id: $0, container: workspace.container)
                 }
@@ -291,10 +294,15 @@ final class WorkspaceRegistry {
         publish(projectRoot: projectRoot, stored: workspacesByProject[projectRoot] ?? [], live: live)
     }
 
+    /// `live` plus the agents an adopted document placed before the manifest listed them.
+    private func withUnconfirmed(_ live: [LiveAgent], projectRoot: String) -> [LiveAgent] {
+        let known = Set(live.map(\.id))
+        return live + (unconfirmedAgents[projectRoot] ?? []).filter { !known.contains($0.id) }
+    }
+
     /// Reconcile `stored` against `live` and publish the result if it changed.
     private func publish(projectRoot: String, stored: [Workspace], live: [LiveAgent]) {
-        let known = Set(live.map(\.id))
-        let live = live + (unconfirmedAgents[projectRoot] ?? []).filter { !known.contains($0.id) }
+        let live = withUnconfirmed(live, projectRoot: projectRoot)
         let reconciled = WorkspaceReconciler.reconcile(
             stored: stored, live: deferringReservedAgents(projectRoot: projectRoot, stored: stored, live: live),
             reserved: reservedWorkspaceIds(projectRoot: projectRoot))

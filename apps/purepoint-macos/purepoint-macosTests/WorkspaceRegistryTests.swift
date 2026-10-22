@@ -315,6 +315,27 @@ struct WorkspaceRegistryTests {
         #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a"])
     }
 
+    @Test func givenAnotherMacSplitsAgainBeforeTheManifestCatchesUpItsNewTabShouldSurvive() throws {
+        let project = root + "-unseen-twice"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a"])
+        registry.saveAll()
+        var theirs = try #require(registry.workspace(id: "ws-ag-a"))
+        theirs.split(leafId: 0, axis: .vertical, content: .agent("ag-z"))
+        try writeLayoutFromAnotherMac([theirs], projectRoot: project)
+        registry.adoptLocalLayoutIfChanged(projectRoot: project)
+        // Before this Mac's manifest lists ag-z, the other Mac splits again for its next spawn.
+        theirs.split(leafId: theirs.focusedLeafId, axis: .horizontal)
+        let tab = try #require(theirs.focusedSurface).id
+        try writeLayoutFromAnotherMac([theirs], projectRoot: project)
+
+        registry.adoptLocalLayoutIfChanged(projectRoot: project)
+
+        #expect(registry.workspace(id: "ws-ag-a")?.surface(id: tab)?.content == .empty)
+        #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a", "ag-z"])
+        #expect(!registry.hasPendingSave(projectRoot: project))
+    }
+
     @Test func givenAgentSpawnedIntoPointGuardOnAnotherMacShouldLandInThisMacsPointGuard() throws {
         let project = root + "-pg"
         defer { try? FileManager.default.removeItem(atPath: project) }
