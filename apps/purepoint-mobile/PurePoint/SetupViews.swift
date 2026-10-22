@@ -266,7 +266,7 @@ struct ConversationView: View {
                     .safeAreaInset(edge: .bottom) {
                         Button(model.busy ? "Stop and resume this conversation" : "Resume this conversation") {
                             if model.busy { confirmResume = true } else { Task { await model.changeSession(to: history.sessionId, selection: selection); if model.browsing == nil { finish() } } }
-                        }.buttonStyle(NeutralPrimaryButtonStyle()).disabled(!model.connected || model.demo || model.changingSession || !model.chatGrant.canSend).padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity).background(Theme.ground)
+                        }.buttonStyle(NeutralPrimaryButtonStyle()).disabled(!model.connected || model.demo || model.changingSession || !model.chatGrant.canSend).padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity).background(Theme.ground.ignoresSafeArea(edges: .bottom))
                     }
             } else {
                 List {
@@ -284,7 +284,7 @@ struct ConversationView: View {
                         if model.busy { confirmNew = true } else { Task { await model.changeSession(selection: selection); finish() } }
                     } label: { Label("New conversation", systemImage: "square.and.pencil").font(.body.weight(.semibold)).foregroundStyle(Theme.ink).frame(maxWidth: .infinity, minHeight: 50).background(Theme.surface, in: RoundedRectangle(cornerRadius: 14)) }
                         .buttonStyle(.plain).disabled(!model.connected || model.demo || model.changingSession || !model.chatGrant.canSend)
-                        .padding(.horizontal, 12).padding(.vertical, 10).background(Theme.ground)
+                        .padding(.horizontal, 12).padding(.vertical, 10).background(Theme.ground.ignoresSafeArea(edges: .bottom))
                 }
             }
         }
