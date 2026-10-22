@@ -42,6 +42,8 @@ build/
 # Agent and PurePoint runtime state
 .claude/
 .pu/
+# Legacy runtime state from older Point Guard checkouts
+.ppg/
 
 # Tree-sitter local overrides (cloned per-developer, not project source)
 apps/purepoint-macos/LocalPackages/

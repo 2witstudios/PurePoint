@@ -12,4 +12,4 @@
 | [`research/`](research/) | Background research cited by specs. |
 | [`images/`](images/) | Screenshots used by the README and guides. |
 
-[`spec-system.md`](spec-system.md) explains how specs are organized and how they mature. [`vision.md`](vision.md) explains why PurePoint exists.
+[`spec-system.md`](spec-system.md) explains how specs are organized and how they mature. [`vision.md`](../vision.md) explains why PurePoint exists.

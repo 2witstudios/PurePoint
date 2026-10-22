@@ -4,7 +4,7 @@
 
 An agent-first coding workspace. IDEs were built for humans writing code — PurePoint is built for a world where agents write code and humans direct the work. You describe what needs to happen; PurePoint sets up isolated workstations (git worktrees with live agents) and orchestrates parallel execution.
 
-See `docs/vision.md` for the full product vision.
+See `vision.md` for the full product vision.
 
 ## Key Conventions
 
