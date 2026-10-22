@@ -137,14 +137,23 @@ enum PointGuardCourtGeometry {
 
     enum Layout: Equatable { case wide, portrait, stacked }
 
+    /// The iPad docks the composer under the court; the Mac keeps it in the court's centred column.
+    #if os(iOS)
+        static let docksComposer = true
+    #else
+        static let docksComposer = false
+    #endif
+
     /// Below this a tall pane can't hold the portrait court above a docked composer.
     static let portraitMinimumSize = CGSize(width: 340, height: 480)
 
     /// The court for a pane of `size`. A docked composer (the iPad's, under the court rather than in its column)
-    /// lets a tall pane run the portrait court; the composer's own slot is never part of this choice.
-    static func layout(for size: CGSize, compact: Bool, docked: Bool) -> Layout {
+    /// lets a tall pane run the portrait court; the composer's own slot is never part of this choice. `resting` is
+    /// the pane without the keyboard, so raising the keyboard over a portrait court never turns it wide.
+    static func layout(for size: CGSize, resting: CGSize? = nil, compact: Bool, docked: Bool) -> Layout {
         if compact { return .stacked }
-        if docked && size.height > size.width && size.width >= portraitMinimumSize.width
+        let tall = resting.map { $0.height > $0.width } ?? (size.height > size.width)
+        if docked && tall && size.width >= portraitMinimumSize.width
             && size.height >= portraitMinimumSize.height
         {
             return .portrait
@@ -167,8 +176,13 @@ enum PointGuardCourtGeometry {
             // The blocks keep a row's gap under the wings, as far as the pane allows.
             let floor = index < 2 ? belowHeading : belowHeading + 96
             let y = min(max(size.height * anchor.y, floor), size.height - 40)
-            let x = min(max(size.width * anchor.x, inset), size.width - inset)
-            return CGPoint(x: x, y: y)
+            var x = size.width * anchor.x
+            if index >= 2 {
+                // The low blocks sit side by side, so a narrow pane spreads them a play's width apart.
+                let spread = max(abs(x - size.width / 2), labelHalfWidth + 4)
+                x = size.width / 2 + (anchor.x < 0.5 ? -spread : spread)
+            }
+            return CGPoint(x: min(max(x, inset), size.width - inset), y: y)
         }
     }
 

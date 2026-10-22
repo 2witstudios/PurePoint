@@ -62,9 +62,8 @@ struct PiPointGuardChatView: View {
                             .frame(height: 24).allowsHitTesting(false)
                     }
                 }
-                if let error = model.error {
-                    InlineErrorBanner(message: error) { model.error = nil }
-                }
+                // The iPad court docks its composer under the court and shows the banner over it, as a conversation does.
+                if !(showsCourt && PointGuardCourtGeometry.docksComposer) { errorBanner }
                 if model.browsing == nil && !showsCourt { composer }
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
@@ -329,7 +328,13 @@ struct PiPointGuardChatView: View {
     private var court: some View {
         PointGuardCourtView(
             plays: playbook.plays, prompts: playbook.prompts ?? [], canRun: model.canSendPlay && !fetchingPlay,
-            connected: model.connected, compact: compact, composer: { composer },
+            connected: model.connected, compact: compact,
+            composer: {
+                VStack(spacing: 0) {
+                    if PointGuardCourtGeometry.docksComposer { errorBanner }
+                    composer
+                }
+            },
             onRun: { [session = model.snapshot?.sessionId] play in runPlay(play, in: session) },
             onAssign: { playbook.assign(slot: $0, prompt: $1) }, onReset: { playbook.reset(slot: $0) },
             onOpenSettings: { appState.showSettings = true }
@@ -410,6 +415,12 @@ struct PiPointGuardChatView: View {
                     if let error = message.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                 }
             }
+        }
+    }
+
+    @ViewBuilder private var errorBanner: some View {
+        if let error = model.error {
+            InlineErrorBanner(message: error) { model.error = nil }
         }
     }
 

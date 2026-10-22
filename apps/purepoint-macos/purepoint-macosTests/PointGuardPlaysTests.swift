@@ -128,6 +128,16 @@ struct PointGuardPlaysTests {
         #expect(PointGuardCourtGeometry.layout(for: portrait, compact: false, docked: false) == .stacked)
     }
 
+    @Test func theKeyboardNeverTurnsAPortraitCourtWide() {
+        // An 11" iPad in portrait: the keyboard leaves a pane wider than tall, but the resting pane decides.
+        let underKeyboard = CGSize(width: 834, height: 640)
+        let resting = CGSize(width: 834, height: 1090)
+        #expect(
+            PointGuardCourtGeometry.layout(for: underKeyboard, resting: resting, compact: false, docked: true)
+                == .portrait)
+        #expect(PointGuardCourtGeometry.layout(for: underKeyboard, compact: false, docked: true) == .wide)
+    }
+
     @Test func aWidePaneKeepsTheWideCourt() {
         let landscape = CGSize(width: 900, height: 700)
         #expect(PointGuardCourtGeometry.layout(for: landscape, compact: false, docked: true) == .wide)
@@ -158,6 +168,7 @@ struct PointGuardPlaysTests {
         #expect(positions[0] == CGPoint(x: 78, y: 388))
         #expect(positions[1] == CGPoint(x: 282, y: 388))
         #expect(positions[2].y == 480)
+        #expect(positions[3].x - positions[2].x >= 2 * PointGuardCourtGeometry.labelHalfWidth)
         #expect(positions.allSatisfy { $0.x - PointGuardCourtGeometry.labelHalfWidth >= 0 })
         #expect(positions.allSatisfy { $0.x + PointGuardCourtGeometry.labelHalfWidth <= size.width })
     }
