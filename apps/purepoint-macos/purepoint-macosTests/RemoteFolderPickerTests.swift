@@ -302,4 +302,35 @@ struct MachineOpenProjectTests {
     }
 }
 
+@MainActor
+struct MachineRemoveProjectTests {
+    private let machine = Machine(
+        id: UUID(uuidString: "6F1C2B3A-1111-4222-8333-944455556667")!, name: "studio", sshHost: "me@studio")
+
+    @Test func givenAProjectShouldAskTheMachineDaemonToForgetItAndSuspendItsAgents() async throws {
+        let state = MachineState(machine: machine, appState: nil, registry: nil)
+        state.hideProject(root: "/home/me/code/app")
+        let daemon = CannedDaemon(replies: [
+            #"{"type":"project_removed","project_root":"/home/me/code/app","removed":true,"suspended":[]}"#
+        ])
+        try await state.removeProject(
+            root: "/home/me/code/app", suspendAgents: true, client: DaemonClient(transport: daemon))
+        #expect(daemon.requests.first?["type"] as? String == "remove_project")
+        #expect(daemon.requests.first?["project_root"] as? String == "/home/me/code/app")
+        #expect(daemon.requests.first?["suspend_agents"] as? Bool == true)
+        // Removed from the machine, it no longer needs hiding on this device.
+        #expect(state.hiddenProjectCount == 0)
+    }
+
+    @Test func givenTheDaemonRefusesShouldThrowItsMessage() async {
+        let state = MachineState(machine: machine, appState: nil, registry: nil)
+        let daemon = CannedDaemon(replies: [
+            #"{"type":"error","code":"PROJECT_HAS_LIVE_AGENTS","message":"/srv/app has 1 live agent"}"#
+        ])
+        await #expect(throws: MachineOpenProjectError(message: "/srv/app has 1 live agent")) {
+            try await state.removeProject(root: "/srv/app", suspendAgents: false, client: DaemonClient(transport: daemon))
+        }
+    }
+}
+
 #endif

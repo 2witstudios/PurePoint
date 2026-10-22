@@ -27,6 +27,9 @@ final class ProjectState: Identifiable {
     /// A remote project kept in the sidebar while its machine is unreachable, because it has
     /// file tabs with unsaved edits. Nothing is watched until the daemon is back.
     var isUnavailable = false
+    /// Leaves suspended agents paused on the next open: a project another device or the CLI
+    /// added was not suspended by this app's quit, so its benched agents stay benched.
+    @ObservationIgnored var keepsSuspendedAgentsOnNextOpen = false
 
     let channel: ChannelState
 
@@ -129,6 +132,9 @@ final class ProjectState: Identifiable {
         let root = projectRoot
         let svc = service
         let client = self.client
+        // One open only, whether or not it succeeds.
+        let keepsSuspendedAgents = keepsSuspendedAgentsOnNextOpen
+        keepsSuspendedAgentsOnNextOpen = false
 
         openTask?.cancel()
         refreshTask?.cancel()
@@ -194,7 +200,7 @@ final class ProjectState: Identifiable {
                 self.appState?.daemonError = error.localizedDescription
                 return
             }
-            self.resumeSuspendedAgents()
+            if !keepsSuspendedAgents { self.resumeSuspendedAgents() }
         }
         #else
         startWatchingRemote()

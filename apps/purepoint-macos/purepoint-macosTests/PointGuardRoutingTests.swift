@@ -13,10 +13,10 @@ private struct PointGuardRoutingService: WorkspaceService {
     private func withState(_ body: (AppState, WorkspaceRegistry, String) throws -> Void) rethrows {
         let root = NSTemporaryDirectory() + "point-guard-routing-" + UUID().uuidString
         let defaults = UserDefaults.standard
-        let keys = ["PurePointPointGuardFolders", "PurePointOpenProjects"]
+        let keys = ["PurePointPointGuardFolders", "PurePointOpenProjects", "PurePointShownPointGuardFolders"]
         let saved = keys.map { defaults.object(forKey: $0) }
         let registry = WorkspaceRegistry()
-        let state = AppState(service: PointGuardRoutingService(), startProject: { _ in })
+        let state = AppState(service: PointGuardRoutingService(), startProject: { _ in }, followsLocalDaemon: false)
         state.registry = registry
         state.updatePointGuardRoot(root)
         defer {
@@ -224,5 +224,115 @@ private struct PointGuardRoutingService: WorkspaceService {
             #expect(state.projects.isEmpty)
             #expect(state.projectState(forRoot: root) === owner)
         }
+    }
+
+    // MARK: - The local daemon's projects decide the sidebar
+
+    @Test func registeredProjectsOpenAndOnesRemovedElsewhereClose() throws {
+        try withState { state, _, root in
+            for path in [root + "-project", root + "-next"] {
+                try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+            }
+            // The daemon reports canonical roots (`/private/var/...` for a temporary folder).
+            let project = AppState.canonicalPath(root + "-project"), next = AppState.canonicalPath(root + "-next")
+            state.applyLocalProjects([next, project])
+            #expect(Set(state.projects.map(\.projectRoot)) == [project, next])
+            // Removed on another device, or with `pu projects remove`.
+            state.applyLocalProjects([project])
+            #expect(state.projects.map(\.projectRoot) == [project])
+        }
+    }
+
+    @Test func projectOpenedBeforeTheDaemonListsItStaysOpen() throws {
+        try withState { state, _, root in
+            try FileManager.default.createDirectory(atPath: root + "-project", withIntermediateDirectories: true)
+            // Its `init` has not reached the daemon yet: absent from a list it was never in.
+            state.openProject(root + "-project")
+            state.applyLocalProjects([])
+            #expect(state.projects.map(\.projectRoot) == [root + "-project"])
+            // Opened by another path, it is the same project once the daemon lists it.
+            state.applyLocalProjects([AppState.canonicalPath(root + "-project")])
+            #expect(state.projects.map(\.projectRoot) == [root + "-project"])
+        }
+    }
+
+    @Test func pointGuardFolderStaysOutOfTheSidebarUnlessOpened() throws {
+        try withState { state, _, root in
+            try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+            UserDefaults.standard.removeObject(forKey: "PurePointOpenProjects")
+            UserDefaults.standard.set([root], forKey: "PurePointPointGuardFolders")
+            UserDefaults.standard.removeObject(forKey: "PurePointShownPointGuardFolders")
+            state.restoreProjects()
+            state.applyLocalProjects([AppState.canonicalPath(root)])
+            #expect(state.projects.isEmpty)
+            #expect(state.projectState(forRoot: root) != nil)
+            state.openProject(root)
+            #expect(UserDefaults.standard.stringArray(forKey: "PurePointShownPointGuardFolders") == [root])
+        }
+    }
+
+    @Test func legacySidebarListIsImportedOnceThenDeleted() throws {
+        try withState { state, _, root in
+            try FileManager.default.createDirectory(atPath: root + "-project", withIntermediateDirectories: true)
+            UserDefaults.standard.set([root + "-project"], forKey: "PurePointOpenProjects")
+            state.restoreProjects()
+            #expect(state.projects.map(\.projectRoot) == [root + "-project"])
+            #expect(UserDefaults.standard.stringArray(forKey: "PurePointOpenProjects") == nil)
+        }
+    }
+
+    @Test func projectsJoiningAfterLaunchKeepTheirSuspendedAgentsPaused() throws {
+        try withState { state, _, root in
+            for path in [root + "-project", root + "-next"] {
+                try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+            }
+            UserDefaults.standard.removeObject(forKey: "PurePointOpenProjects")
+            state.restoreProjects()
+            // Last session's sidebar: this app suspended its agents on quit and resumes them.
+            let project = AppState.canonicalPath(root + "-project"), next = AppState.canonicalPath(root + "-next")
+            state.applyLocalProjects([project])
+            #expect(state.projectState(forRoot: project)?.keepsSuspendedAgentsOnNextOpen == false)
+            // Added later, by another device or the CLI.
+            state.applyLocalProjects([next, project])
+            #expect(state.projectState(forRoot: next)?.keepsSuspendedAgentsOnNextOpen == true)
+        }
+    }
+
+    @Test func legacyEntryOnAnUnmountedVolumeStillResumesLastSession() throws {
+        try withState { state, _, root in
+            try FileManager.default.createDirectory(atPath: root + "-project", withIntermediateDirectories: true)
+            UserDefaults.standard.set([root + "-unmounted"], forKey: "PurePointOpenProjects")
+            state.restoreProjects()
+            #expect(UserDefaults.standard.stringArray(forKey: "PurePointOpenProjects") == [root + "-unmounted"])
+            let project = AppState.canonicalPath(root + "-project")
+            state.applyLocalProjects([project])
+            #expect(state.projectState(forRoot: project)?.keepsSuspendedAgentsOnNextOpen == false)
+        }
+    }
+
+    @Test func pointGuardFolderRemovedElsewhereIsRegisteredAgain() throws {
+        var started: [String] = []
+        let root = NSTemporaryDirectory() + "point-guard-reregister-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let saved = UserDefaults.standard.object(forKey: "PurePointPointGuardFolders")
+        let savedShown = UserDefaults.standard.object(forKey: "PurePointShownPointGuardFolders")
+        defer {
+            UserDefaults.standard.set(saved, forKey: "PurePointPointGuardFolders")
+            UserDefaults.standard.set(savedShown, forKey: "PurePointShownPointGuardFolders")
+        }
+        let state = AppState(
+            service: PointGuardRoutingService(), startProject: { started.append($0.projectRoot) },
+            followsLocalDaemon: false)
+        state.updatePointGuardRoot(root)
+        state.openProject(root)
+        let canonical = AppState.canonicalPath(root)
+        state.applyLocalProjects([canonical])
+        started.removeAll()
+        state.applyLocalProjects([])
+        #expect(started == [root])
+        #expect(state.projects.map(\.projectRoot) == [root])
+        // The agents the removal suspended stay paused.
+        #expect(state.projectState(forRoot: root)?.keepsSuspendedAgentsOnNextOpen == true)
     }
 }

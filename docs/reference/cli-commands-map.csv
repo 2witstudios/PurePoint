@@ -1,5 +1,7 @@
 Command,IPC Request,Tier,Notes
 pu init,Init,1,Creates .pu/ directory and pu.db
+pu projects add,Init,1,Adds a folder as a project (same as pu init)
+pu projects remove,RemoveProject,1,Removes a project for every device; files are kept
 pu spawn,Spawn,1,Most complex command — worktree + agents
 pu status,Status,1,Returns full workspace state from daemon
 pu kill,Kill,1,Stop agents; optionally remove worktrees

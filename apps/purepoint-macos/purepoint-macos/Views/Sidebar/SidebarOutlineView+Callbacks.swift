@@ -80,33 +80,37 @@ extension SidebarOutlineView {
             project.killAllAgents()
         }
 
-        vc.onRemoveProject = { [viewCache] project in
-            let projectRoot = project.projectRoot
-
-            // A remote project is only hidden here: its files and agents stay on the machine.
-            if project.isRemote {
-                for agent in project.allAgents {
-                    viewCache.remove(agentId: agent.id)
-                }
-                appState.closeProject(project.projectId)
-                return
-            }
-
-            // Point Guard can still own this folder after it leaves the project sidebar.
-            // Preserve both daemon files and attached terminal views in that case.
-            guard appState.closeProject(projectRoot) else { return }
-
+        let dropTerminalViews = { [viewCache] (project: ProjectState) in
             for agent in project.allAgents {
                 viewCache.remove(agentId: agent.id)
             }
+        }
 
-            // Clean up .pu directory: delete manifest.json and agents/
-            let puDir = URL(fileURLWithPath: projectRoot).appendingPathComponent(".pu")
-            let manifestURL = puDir.appendingPathComponent("manifest.json")
-            let agentsDirURL = puDir.appendingPathComponent("agents")
+        // Hiding is this device's choice: the project and its agents stay on the machine.
+        vc.onHideProject = { project in
+            dropTerminalViews(project)
+            appState.closeProject(project.projectId)
+        }
 
-            try? FileManager.default.removeItem(at: manifestURL)
-            try? FileManager.default.removeItem(at: agentsDirURL)
+        // The machine's daemon forgets the project, so it leaves every device's sidebar. Its
+        // files, including .pu/, stay: adding the folder again brings the project back.
+        vc.onRemoveProject = { project in
+            Task { @MainActor in
+                do {
+                    try await appState.removeProject(project)
+                } catch {
+                    let message = "Could not remove \(project.projectName): \(error.localizedDescription)"
+                    if project.isRemote, let machine = appState.machine(for: project) {
+                        machine.actionError = message
+                    } else {
+                        appState.daemonError = message
+                    }
+                    return
+                }
+                // Point Guard may still own a local folder; its terminal views stay attached.
+                guard appState.projectState(forRoot: project.projectId) == nil else { return }
+                dropTerminalViews(project)
+            }
         }
 
         vc.onRemoveMachine = { [viewCache] machine in

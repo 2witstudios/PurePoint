@@ -41,12 +41,15 @@ final class MachineState: Identifiable {
     @ObservationIgnored private var connection: MachineConnection!
     @ObservationIgnored private var connectionGeneration = 0
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    /// Pushes the daemon's project list on every add or remove; the poll is the fallback.
+    @ObservationIgnored private var projectsSubscription: DaemonProjectsSubscription?
     @ObservationIgnored private var hiddenRoots: Set<String>
     /// Closing the forward after pending layout saves were flushed; a reconnect waits for it.
     @ObservationIgnored private var disconnectTask: Task<Void, Never>?
     @ObservationIgnored private var isUserDisconnecting = false
 
-    /// How often the project list is re-read while the daemon is up.
+    /// How often the project list is re-read while the daemon is up, in case a pushed
+    /// change was missed.
     private static let refreshInterval: Duration = .seconds(30)
 
     var endpoint: DaemonEndpoint { .machine(machine.id) }
@@ -147,8 +150,7 @@ final class MachineState: Identifiable {
     func disconnect(remember: Bool = false, keepUnsaved: Bool = false) {
         if remember { Self.setUserDisconnected(machine.id, true) }
         isUserDisconnecting = true
-        refreshTask?.cancel()
-        refreshTask = nil
+        stopRefreshing()
         let savers = removeAllProjects(keepingUnsaved: keepUnsaved)
         state = .disconnected
         let connection = self.connection!
@@ -166,8 +168,7 @@ final class MachineState: Identifiable {
     /// Quit: write pending layout saves synchronously (bounded), then close the forward.
     func disconnectForTermination(deadline: DispatchTime) {
         isUserDisconnecting = true
-        refreshTask?.cancel()
-        refreshTask = nil
+        stopRefreshing()
         for saver in removeAllProjects(keepingUnsaved: false) { saver.flush(until: deadline) }
         state = .disconnected
         let connection = self.connection!
@@ -291,8 +292,7 @@ final class MachineState: Identifiable {
         if newState.isDaemonRunning {
             if !wasRunning { startRefreshing() }
         } else {
-            refreshTask?.cancel()
-            refreshTask = nil
+            stopRefreshing()
             // An incompatible daemon gets no further requests; a stopped one (after several
             // failed probes) has nothing to stream. Projects come back with the daemon. While
             // only the SSH link is down (connecting/offline) they stay, as do projects with
@@ -305,7 +305,15 @@ final class MachineState: Identifiable {
     // MARK: - Projects
 
     private func startRefreshing() {
-        refreshTask?.cancel()
+        stopRefreshing()
+        let subscription = DaemonProjectsSubscription(client: endpoint.makeClient())
+        projectsSubscription = subscription
+        Task {
+            await subscription.start { [weak self] roots in
+                guard let self, self.projectsSubscription === subscription, self.state.isDaemonRunning else { return }
+                self.setProjects(roots: roots)
+            }
+        }
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
                 #if os(iOS)
@@ -317,6 +325,14 @@ final class MachineState: Identifiable {
                 do { try await Task.sleep(for: Self.refreshInterval) } catch { return }
             }
         }
+    }
+
+    private func stopRefreshing() {
+        refreshTask?.cancel()
+        refreshTask = nil
+        let subscription = projectsSubscription
+        projectsSubscription = nil
+        Task { await subscription?.stop() }
     }
 
     /// Discover the daemon's registered projects (`inventory`, kind projects, all roots).
@@ -389,7 +405,8 @@ final class MachineState: Identifiable {
         return project
     }
 
-    /// Remove a project from this app only. Nothing on the machine is deleted or stopped.
+    /// Hide a project on this device only. Nothing on the machine is deleted or stopped, and
+    /// other devices still show it; `removeProject` removes it from the machine instead.
     /// Pending layout saves are written, not dropped. Callers confirm discarding unsaved file
     /// tabs first.
     func hideProject(root: String) {
