@@ -2131,6 +2131,17 @@ fn given_legacy_update_global_agent_settings_with_codex_yolo_should_ignore_it() 
 }
 
 #[test]
+fn given_global_agent_settings_report_should_still_send_codex_yolo_false_for_protocol_12_apps() {
+    let report = Response::GlobalAgentSettingsReport {
+        codex_yolo: false,
+        agent_status_tracking: true,
+        launch_args: IndexMap::new(),
+    };
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["codex_yolo"], serde_json::Value::Bool(false));
+}
+
+#[test]
 fn given_legacy_global_agent_settings_report_should_default_launch_args() {
     let json = r#"{"type":"global_agent_settings_report","codex_yolo":false}"#;
     match serde_json::from_str::<Response>(json).unwrap() {

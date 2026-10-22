@@ -324,6 +324,7 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::GlobalAgentSettingsReport {
             agent_status_tracking,
             launch_args,
+            ..
         } => {
             println!("Agent status tracking: {agent_status_tracking}");
             for (agent, args) in launch_args {

@@ -172,8 +172,10 @@ types and unbalanced quotes are rejected without saving).
 A `codex_yolo` field sent by older clients is ignored; Codex full access is now
 a launch arg (`--dangerously-bypass-approvals-and-sandbox`).
 
-**Response**: `{"type": "global_agent_settings_report", "agent_status_tracking": true, "launch_args": {"claude": "--dangerously-skip-permissions"}}`
+**Response**: `{"type": "global_agent_settings_report", "codex_yolo": false, "agent_status_tracking": true, "launch_args": {"claude": "--dangerously-skip-permissions"}}`
 
+`codex_yolo` is deprecated and always `false`. It is still sent so protocol-12
+apps that require it can decode the report; clients should ignore it.
 `launch_args` defaults to `{}`. A daemon that omits it predates protocol v11
 and does not save machine-level launch args.
 

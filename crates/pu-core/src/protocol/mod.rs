@@ -651,6 +651,11 @@ pub enum Response {
         created_at: DateTime<Utc>,
     },
     GlobalAgentSettingsReport {
+        /// Deprecated and always `false`: Codex YOLO was removed. Still sent so
+        /// protocol-12 apps that require the field can decode the report; drop it
+        /// with the next protocol version bump.
+        #[serde(default)]
+        codex_yolo: bool,
         #[serde(default = "crate::serde_defaults::default_true")]
         agent_status_tracking: bool,
         /// Machine-level launch args string per agent type.

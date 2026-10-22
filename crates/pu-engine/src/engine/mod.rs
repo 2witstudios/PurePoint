@@ -910,6 +910,7 @@ impl Engine {
             };
             match result {
                 Ok(settings) => Response::GlobalAgentSettingsReport {
+                    codex_yolo: false,
                     agent_status_tracking: settings.agent_status_tracking,
                     launch_args: settings
                         .launch_args
