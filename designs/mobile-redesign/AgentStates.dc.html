@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent options and states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.pill{font-size:10px;font-weight:600;padding:1px 5px;border-radius:4px;white-space:nowrap;line-height:15px}
+.mi{display:flex;align-items:center;gap:12px;height:44px;padding:0 16px;width:100%;box-sizing:border-box;font-size:16px}
+.sep{height:1px;background:rgba(255,255,255,0.08)}
+.term p{margin:0;white-space:pre-wrap}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #18181B; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, Inter, system-ui, sans-serif; font-size: 13px; display: flex; flex-direction: column">
+  <div style="height: 54px; flex-shrink: 0; background: #121214"></div>
+  <header style="display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 4px; flex-shrink: 0; background: #121214">
+    <span style="width: 44px; height: 44px; display: grid; place-items: center; color: #FF8A3D"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></span>
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center">
+      <span style="display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 600"><span style="width: 7px; height: 7px; border-radius: 4px; background: #0A84FF"></span>review-auth<span class="pill" style="background: rgba(10,132,255,0.18); color: #7AB6FF">Working</span></span>
+      <span class="mono" style="font-size: 10.5px; color: #A1A1AA">jono-mbp · purepoint · pu/auth-hardening</span>
+    </div>
+    <span style="width: 44px; height: 44px; display: grid; place-items: center; border-radius: 22px; background: rgba(255,255,255,0.1)"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg></span>
+  </header>
+  <div role="status" style="display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px; background: rgba(255,159,10,0.12); font-size: 12.5px; line-height: 1.4">
+    <svg class="ico" style="width: 14px; height: 14px; color: #FFB340; margin-top: 2px" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 20h20zM12 10v4M12 17h.01"/></svg>
+    Legacy daemon: replay may be incomplete and the screen size may be inexact.
+  </div>
+  <section class="mono term" aria-label="Terminal" style="flex: 1; min-height: 0; padding: 10px; font-size: 11px; line-height: 15.5px; overflow: hidden">
+    <p><span style="color: #B887DB">●</span> Reading crates/pu-engine/src/tls.rs</p>
+    <p><span style="color: #85858D">  ⎿  Read 212 lines</span></p>
+    <p><span style="color: #B887DB">●</span> The pin check now returns Rotated. I'll</p>
+    <p>  confirm pairing.rs handles it.</p>
+  </section>
+
+  <footer style="flex-shrink: 0; background: #121214; border-top: 1px solid rgba(255,255,255,0.06); padding: 6px 8px 30px; display: flex; flex-direction: column; gap: 6px">
+    <button style="display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 6px; font-size: 12.5px; font-weight: 600; color: #FF8A3D"><svg class="ico" style="width: 15px; height: 15px" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h5l2 3h4l2-3h5M5 5h14l2 8v6H3v-6z"/></svg>2 saved prompts</button>
+    <div style="font-size: 12px; color: #FFB340; padding: 0 6px">Delivery uncertain · connection dropped before the Mac confirmed</div>
+    <div style="display: flex; align-items: flex-end; gap: 6px">
+      <div style="flex: 1; display: flex; align-items: center; min-height: 40px; padding: 0 12px; border-radius: 20px; background: #222226; border: 1px solid rgba(255,255,255,0.07); color: #7C7C85; font-size: 14px">Message review-auth</div>
+      <span style="width: 40px; height: 40px; border-radius: 20px; background: #303034; display: grid; place-items: center; color: #85858D"><svg class="ico" style="width: 14px; height: 14px" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 6px">
+      <div class="mono" style="flex: 1; display: flex; align-items: center; min-height: 38px; padding: 0 12px; border-radius: 12px; background: #222226; color: #7C7C85; font-size: 12.5px">Raw text · typed without Enter</div>
+      <button style="height: 38px; padding: 0 14px; border-radius: 10px; background: #2A2A2F; font-weight: 600; font-size: 13.5px">Type</button>
+    </div>
+  </footer>
+
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: rgba(0,0,0,0.3)"></div>
+  <div role="menu" aria-label="Agent options" style="position: absolute; right: 8px; top: 102px; width: 262px; background: #2A2A2F; border-radius: 14px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.55)">
+    <div style="padding: 10px 16px; font-size: 12.5px; color: #A1A1AA; line-height: 1.45">purepoint · pu/auth-hardening<br>Working · Terminal 52 × 38</div>
+    <div class="sep"></div>
+    <button role="menuitemcheckbox" aria-checked="true" class="mi"><svg class="ico" style="width: 15px; height: 15px; color: #FF8A3D; stroke-width: 2.4" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg><span style="flex: 1">Raw typing</span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg></button>
+    <div class="sep"></div>
+    <button role="menuitem" class="mi"><span style="width: 15px"></span><span style="flex: 1">Rename…</span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>
+    <div class="sep"></div>
+    <button role="menuitem" class="mi"><span style="width: 15px"></span><span style="flex: 1">Refresh</span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></button>
+    <div style="height: 8px; background: rgba(0,0,0,0.25)"></div>
+    <button role="menuitem" class="mi" style="color: #FF7A70"><span style="width: 15px"></span><span style="flex: 1">Stop agent…</span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></button>
+  </div>
+
+  <div style="position: absolute; left: 12px; right: 12px; bottom: 214px; display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-radius: 12px; background: #222226; font-size: 13px; color: #A1A1AA; box-shadow: 0 10px 30px rgba(0,0,0,0.4)">
+    <svg class="ico" style="width: 16px; height: 16px" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+    This board shows Control. On a view-only phone the keys, message box and raw row are replaced by one line: Terminal access is view only.
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

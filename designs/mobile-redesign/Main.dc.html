@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sidebar home</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+a{color:inherit;text-decoration:none}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.sm{width:15px;height:15px}
+.pill{font-size:10px;font-weight:600;padding:1px 5px;border-radius:4px;white-space:nowrap;line-height:15px}
+.trunc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.badge{font-size:10.5px;font-weight:600;min-width:18px;height:18px;border-radius:6px;display:grid;place-items:center;padding:0 5px;box-sizing:border-box}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #18181B; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; font-size: 14px; display: flex; flex-direction: column">
+
+  <div style="height: 54px; flex-shrink: 0"></div>
+
+  <nav aria-label="Workspace" style="flex: 1; min-height: 0; overflow: hidden; padding: 4px 8px 0">
+
+    <a href="PointGuard.dc.html" style="display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 10px; border-radius: 8px">
+      <img src="/_blob/bd0b706e9a0d4e080c883a84280dd95d" alt="" style="width: 22px; height: 22px">
+      <span style="font-size: 16px; font-weight: 650; flex: 1">Point Guard</span>
+      <span style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: #7AB6FF"><span style="width: 6px; height: 6px; border-radius: 3px; background: #0A84FF"></span>Working</span>
+      <svg class="ico" style="width: 13px; height: 13px; color: #85858D" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+    </a>
+
+    <div style="font-size: 11px; font-weight: 650; letter-spacing: 0.04em; color: #A1A1AA; padding: 16px 12px 4px">MACHINES</div>
+    <div style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 6px; border-radius: 8px">
+      <button aria-label="Collapse jono-mbp" style="width: 20px; height: 40px; display: grid; place-items: center; color: #85858D"><svg class="ico" style="width: 11px; height: 11px" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+      <span style="width: 7px; height: 7px; border-radius: 4px; background: #30D158"></span>
+      <svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true" style="color: #A8A8B0"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg>
+      <span class="trunc" style="flex: 1; font-size: 13.5px; font-weight: 600">jono-mbp</span>
+      <span style="font-size: 11.5px; color: #A1A1AA">Online</span>
+    </div>
+
+    <sc-for list="{{projects}}" as="p" hint-placeholder-count="2">
+      <div>
+        <div style="display: flex; align-items: center; height: 40px; border-radius: 8px; padding-left: 16px">
+          <button aria-label="{{p.toggle}}" style="width: 26px; height: 40px; display: grid; place-items: center; color: #85858D">
+            <svg class="ico" style="width: 11px; height: 11px; transform: {{p.rot}}" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 40px">
+            <svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true" style="color: #A1A1AA"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>
+            <span class="trunc" style="font-weight: 650; flex: 1">{{p.name}}</span>
+          </button>
+          <button aria-label="New in {{p.name}}" style="width: 40px; height: 40px; display: grid; place-items: center; color: #A1A1AA"><svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
+        </div>
+
+        <sc-for list="{{p.root}}" as="a" hint-placeholder-count="1">
+          <a href="Agent.dc.html" style="display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 12px 0 58px; border-radius: 8px; background: {{a.sel}}">
+            <span style="width: 7px; height: 7px; border-radius: 4px; background: {{a.dot}}; flex-shrink: 0"></span>
+            <span class="trunc" style="font-size: 13.5px">{{a.name}}</span>
+            <span class="pill" style="background: {{a.pillBg}}; color: {{a.pillFg}}">{{a.state}}</span>
+          </a>
+        </sc-for>
+
+        <sc-for list="{{p.worktrees}}" as="w" hint-placeholder-count="2">
+          <div>
+            <div style="display: flex; align-items: center; height: 40px; padding-left: 32px">
+              <button aria-label="Collapse or expand {{w.branch}}" style="width: 26px; height: 40px; display: grid; place-items: center; color: #85858D">
+                <svg class="ico" style="width: 11px; height: 11px; transform: {{w.rot}}" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <button style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 40px">
+                <svg class="ico" style="width: 14px; height: 14px; color: #A8A8B0" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-11 7.5"/></svg>
+                <span class="trunc" style="font-size: 13.5px; flex: 1">{{w.branch}}</span>
+                <span class="badge" style="background: rgba(255,255,255,0.08); color: #B4B4BC">{{w.count}}</span>
+              </button>
+              <button aria-label="Agent in {{w.branch}}" style="width: 40px; height: 40px; display: grid; place-items: center; color: #A1A1AA"><svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
+            </div>
+            <sc-for list="{{w.agents}}" as="a" hint-placeholder-count="2">
+              <a href="Agent.dc.html" style="display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 12px 0 74px; border-radius: 8px; background: {{a.sel}}">
+                <span style="width: 7px; height: 7px; border-radius: 4px; background: {{a.dot}}; flex-shrink: 0"></span>
+                <span class="trunc" style="font-size: 13.5px">{{a.name}}</span>
+                <span class="pill" style="background: {{a.pillBg}}; color: {{a.pillFg}}">{{a.state}}</span>
+              </a>
+            </sc-for>
+          </div>
+        </sc-for>
+      </div>
+    </sc-for>
+
+    <sc-for list="{{machines}}" as="m" hint-placeholder-count="2">
+      <div style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 6px; border-radius: 8px">
+        <svg class="ico" style="width: 11px; height: 11px; color: #85858D; transform: rotate(-90deg); margin: 0 5px 0 2px" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        <span style="width: 7px; height: 7px; border-radius: 4px; background: {{m.dot}}"></span>
+        <svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true" style="color: #A8A8B0"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg>
+        <span class="trunc" style="flex: 1; font-size: 13.5px">{{m.name}}</span>
+        <span style="font-size: 11.5px; color: #A1A1AA">{{m.status}}</span>
+      </div>
+    </sc-for>
+  </nav>
+
+  <footer style="flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 4px 8px 30px; border-top: 1px solid rgba(255,255,255,0.06)">
+    <a href="Connections.dc.html" style="display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 8px; color: #ECECEE; font-size: 14px; font-weight: 500">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" style="color: #A1A1AA"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v4M12 11l-6 6M12 11l6 6"/></svg>Connections
+    </a>
+    <span style="flex: 1"></span>
+    <button aria-label="Refresh" style="width: 44px; height: 44px; display: grid; place-items: center; color: #A1A1AA">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>
+    </button>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const S = {
+      Permission: ['#FF9F0A', 'rgba(255,159,10,0.16)', '#FFB340'],
+      Question: ['#FF9F0A', 'rgba(255,159,10,0.16)', '#FFB340'],
+      Working: ['#0A84FF', 'rgba(10,132,255,0.18)', '#7AB6FF'],
+      Idle: ['#6A6A72', 'rgba(255,255,255,0.07)', '#A8A8B0'],
+      Finished: ['#30D158', 'rgba(48,209,88,0.14)', '#5DD879'],
+      Error: ['#FF453A', 'rgba(255,69,58,0.16)', '#FF7A70']
+    };
+    const ag = (name, state, panes, sel) => ({ name, state, panes, dot: S[state][0], pillBg: S[state][1], pillFg: S[state][2], sel: sel ? 'rgba(255,255,255,0.07)' : 'transparent' });
+    return {
+      projects: [
+        { name: 'purepoint', unread: 0, rot: 'none', toggle: 'Collapse purepoint',
+          root: [ag('release-notes', 'Idle', '', false)],
+          worktrees: [
+            { branch: 'pu/auth-hardening', count: 3, rot: 'none', agents: [
+              ag('fix-auth', 'Permission', '', true),
+              ag('review-auth', 'Working', '2 panes', false),
+              ag('shell', 'Idle', '', false)
+            ] },
+            { branch: 'pu/ipad-polish', count: 1, rot: 'none', agents: [ag('ipad-polish', 'Working', '', false)] },
+            { branch: 'pu/mobile-redesign', count: 1, rot: 'rotate(-90deg)', agents: [] }
+          ] },
+        { name: 'pagespace', unread: 3, rot: 'rotate(-90deg)', toggle: 'Expand pagespace', root: [], worktrees: [] },
+        { name: 'dotfiles', unread: 0, rot: 'rotate(-90deg)', toggle: 'Expand dotfiles', root: [], worktrees: [] }
+      ],
+      machines: [
+        { name: 'build-box', status: 'Online', dot: '#30D158' },
+        { name: 'studio-mac', status: 'Offline', dot: '#FF453A' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

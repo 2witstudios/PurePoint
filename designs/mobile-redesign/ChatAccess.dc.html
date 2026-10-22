@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chat access states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+p{margin:0}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #18181B; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, Inter, system-ui, sans-serif; font-size: 15px; display: flex; flex-direction: column">
+  <div style="height: 54px; flex-shrink: 0"></div>
+  <header style="display: flex; align-items: center; height: 44px; padding: 0 4px; flex-shrink: 0; border-bottom: 1px solid rgba(255,255,255,0.06)">
+    <span style="width: 44px; height: 44px; display: grid; place-items: center; color: #FF8A3D"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></span>
+    <div style="flex: 1; display: flex; flex-direction: column; align-items: center"><span style="font-size: 15px; font-weight: 600">Point Guard</span><span style="font-size: 10.5px; color: #A1A1AA">jono-mbp · Connected</span></div>
+    <span style="width: 44px"></span>
+  </header>
+
+  <div style="font-size: 11px; font-weight: 650; letter-spacing: 0.04em; color: #7C7C85; padding: 14px 16px 6px">READ ONLY</div>
+  <main style="padding: 4px 14px 0; display: flex; flex-direction: column; gap: 12px">
+    <div style="align-self: flex-end; max-width: 300px; background: #26262B; border-radius: 16px 16px 4px 16px; padding: 9px 12px; line-height: 20px">What's running on build-box?</div>
+    <p style="line-height: 21px">Two agents on build-box: api-migrate is working, and docs-sweep is waiting on a question.</p>
+  </main>
+  <div style="margin: 14px 12px 0; display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: 16px; background: #222226; font-size: 13.5px; line-height: 1.4; color: #A1A1AA">
+    <svg class="ico" style="width: 16px; height: 16px; margin-top: 1px" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+    This phone can read Point Guard. To send, set Agents and terminals to Control in Connect phone on your Mac.
+  </div>
+
+  <div style="height: 1px; background: rgba(255,255,255,0.06); margin: 28px 0 0"></div>
+  <div style="font-size: 11px; font-weight: 650; letter-spacing: 0.04em; color: #7C7C85; padding: 14px 16px 6px">LOCKED</div>
+  <section style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 0 40px 60px; text-align: center">
+    <div style="width: 72px; height: 72px; border-radius: 36px; display: grid; place-items: center; background: #1F1F23; border: 1px solid rgba(255,255,255,0.09); color: #A1A1AA">
+      <svg class="ico" style="width: 26px; height: 26px" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+    </div>
+    <h2 style="margin: 0; font-size: 18px; font-weight: 650">Point Guard chat is locked</h2>
+    <p style="font-size: 14px; line-height: 1.45; color: #A1A1AA">Agents and terminals are Off for this phone. Turn on View or Control in Connect phone on your Mac.</p>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
