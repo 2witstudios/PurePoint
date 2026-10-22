@@ -7,7 +7,7 @@ const { chromium } = require(process.argv[2] || 'playwright');
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}});
     for (const screen of ['channel', 'project', 'worktree']) {
-      await page.setContent(fs.readFileSync(path.join(__dirname, '../../designs/agent-watch/v4-keyboard', screen + '.html'), 'utf8'));
+      await page.setContent(fs.readFileSync(path.join(__dirname, '../../../../docs/design/mockups/agent-watch/v4-keyboard', screen + '.html'), 'utf8'));
       if (screen === 'worktree') await page.locator('#togglechannel').click();
       const more = page.locator('[data-more]').first();
       const id = await more.getAttribute('data-more');
