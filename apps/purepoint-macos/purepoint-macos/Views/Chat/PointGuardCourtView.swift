@@ -53,8 +53,9 @@ struct PointGuardCourtView<Composer: View>: View {
         let near = pointer.flatMap { PointGuardCourtGeometry.nearestSlot(to: $0, among: drifted) }
         let lit = passing ?? near
         let logo = PointGuardCourtGeometry.logoPoint(in: size)
-        // The logo faces the lit play, else the pointer.
-        let facing = lit.map { drifted[$0] } ?? pointer
+        // The logo faces the lit play, else the pointer. A turn is a discrete change, so it follows the raw hover
+        // under Reduce Motion too, just without animating.
+        let facing = lit.map { drifted[$0] } ?? hover
         return ZStack(alignment: .topLeading) {
             CourtLines().stroke(Color.primary.opacity(0.065), lineWidth: 1.25)
             if let pointer {
@@ -74,9 +75,9 @@ struct PointGuardCourtView<Composer: View>: View {
             column(size, pointer: pointer)
         }
         .frame(width: size.width, height: size.height)
-        .onChange(of: facing) { _, target in
-            facesLeft = PointGuardCourtGeometry.facesLeft(toward: target, logoX: logo.x, current: facesLeft)
-        }
+        // A resize can carry the logo past a still pointer, so the logo's position re-decides the facing too.
+        .onChange(of: facing) { _, target in turn(toward: target, logoX: logo.x) }
+        .onChange(of: logo.x) { _, logoX in turn(toward: facing, logoX: logoX) }
         .contentShape(Rectangle())
         .coordinateSpace(.named(courtSpace))
         .onContinuousHover(coordinateSpace: .named(courtSpace)) { phase in
@@ -85,6 +86,10 @@ struct PointGuardCourtView<Composer: View>: View {
             case .ended: hover = nil
             }
         }
+    }
+
+    private func turn(toward target: CGPoint?, logoX: CGFloat) {
+        facesLeft = PointGuardCourtGeometry.facesLeft(toward: target, logoX: logoX, current: facesLeft)
     }
 
     private func passLine(from logo: CGPoint, to target: CGPoint?) -> some View {
