@@ -17,26 +17,17 @@ nonisolated enum ProjectOrder {
     }
 
     /// `items` sorted into the order of `roots`. Items `roots` doesn't list keep their relative
-    /// order after the ones it does. Roots compare by their resolved path, since the daemon
-    /// reports canonical roots and a project may have been opened through a symlink.
+    /// order after the ones it does.
     static func sorted<T>(_ items: [T], by roots: [String], root rootOf: (T) -> String) -> [T] {
         var rank: [String: Int] = [:]
-        for (index, root) in roots.enumerated() where rank[canonical(root)] == nil {
-            rank[canonical(root)] = index
+        for (index, root) in roots.enumerated() where rank[root] == nil {
+            rank[root] = index
         }
         return items.enumerated().sorted { left, right in
-            let l = rank[canonical(rootOf(left.element))] ?? Int.max
-            let r = rank[canonical(rootOf(right.element))] ?? Int.max
+            let l = rank[rootOf(left.element)] ?? Int.max
+            let r = rank[rootOf(right.element)] ?? Int.max
             return l != r ? l < r : left.offset < right.offset
         }.map(\.element)
-    }
-
-    /// The path with symlinks resolved, as the daemon stores it.
-    static func canonical(_ path: String) -> String {
-        // `realpath`, not `resolvingSymlinksInPath`: Foundation strips `/private`, the daemon doesn't.
-        guard let resolved = realpath(path, nil) else { return path }
-        defer { free(resolved) }
-        return String(cString: resolved)
     }
 }
 
@@ -44,9 +35,5 @@ nonisolated enum ProjectOrder {
 extension ProjectOrder {
     static func moving(_ root: String, to index: Int, in projects: [ProjectState]) -> [ProjectState]? {
         moving(root, to: index, in: projects, root: { $0.projectRoot })
-    }
-
-    static func sorted(_ projects: [ProjectState], by roots: [String]) -> [ProjectState] {
-        sorted(projects, by: roots, root: { $0.projectRoot })
     }
 }

@@ -15,6 +15,7 @@ export const workspaceOperations = [
   "workspace.terminal",
   "workspace.rename",
   "workspace.stop",
+  "workspace.removeProject",
   "workspace.reorderProjects",
 ];
 const fail = (code, message) => {
@@ -116,6 +117,7 @@ const fields = {
   "workspace.terminal": ["target", "worktreeId"],
   "workspace.rename": ["agentId", "name"],
   "workspace.stop": ["agentId", "confirm"],
+  "workspace.removeProject": ["confirm"],
   "workspace.reorderProjects": ["projectIds"],
 };
 const fingerprint = (request) =>
@@ -162,10 +164,19 @@ export function workspaceConnection({
     check();
     const metadata = await projectMetadata(machine, { signal });
     check();
-    if (metadata.metadataStatus !== "complete")
+    // Removal needs only the project list: a registered project whose manifest
+    // cannot be read leaves worktree metadata partial, and must stay removable.
+    if (
+      metadata.metadataStatus !== "complete" &&
+      !(
+        r.op === "workspace.removeProject" &&
+        metadata.metadataStatus === "partial"
+      )
+    )
       fail("unsupported", "Complete authoritative project metadata required");
     const project = metadata.projects.find((p) => p.id === r.projectId);
-    if (!project || !project.available)
+    // An unavailable project can still be removed; nothing else runs in one.
+    if (!project || (!project.available && r.op !== "workspace.removeProject"))
       fail("target", "Registered available project required");
     return { machine, metadata, project };
   };
@@ -331,6 +342,21 @@ export function workspaceConnection({
         fail("invalid", "Base requires a bounded git reference");
       let ipc;
       if (r.op === "workspace.reorderProjects") {
+        // Health alone carries the version; an older daemon can't parse the request.
+        const health = await daemonRequest(
+          machine.socket,
+          { type: "health" },
+          { signal: abort.signal },
+        );
+        check();
+        if (
+          !Number.isInteger(health.protocol_version) ||
+          health.protocol_version < 14
+        )
+          fail(
+            "unsupported",
+            "Update the machine's daemon to reorder projects",
+          );
         ipc = { type: "reorder_projects", project_roots: r.projectIds };
       } else if (["workspace.rename", "workspace.stop"].includes(r.op)) {
         if (!identifier(r.agentId)) fail("invalid", "Exact agent required");
@@ -366,6 +392,28 @@ export function workspaceConnection({
             exclude: [],
           };
         }
+      } else if (r.op === "workspace.removeProject") {
+        if (r.confirm !== true)
+          fail("invalid", "Explicit removal confirmation required");
+        // Health alone carries the version; inspect would also read every manifest.
+        const health = await daemonRequest(
+          machine.socket,
+          { type: "health" },
+          { signal: abort.signal },
+        );
+        check();
+        if (
+          !Number.isInteger(health.protocol_version) ||
+          health.protocol_version < 13
+        )
+          fail("unsupported", "Update the machine's daemon to remove projects");
+        // The project's agents are suspended so they can be resumed once it is added again; only a
+        // session its manifest does not record is stopped (reported as `killed`).
+        ipc = {
+          type: "remove_project",
+          project_root: project.id,
+          suspend_agents: true,
+        };
       } else if (r.op === "workspace.createWorktree") {
         if (!bounded(r.name, 80)) fail("invalid", "Worktree name required");
         ipc = {
@@ -467,6 +515,7 @@ export function workspaceConnection({
         "workspace.createWorktree": "create_worktree_result",
         "workspace.rename": "rename_result",
         "workspace.stop": "kill_result",
+        "workspace.removeProject": "project_removed",
         "workspace.reorderProjects": "project_order",
       }[r.op];
       if (reply.type !== expected) throw new Error("Unexpected daemon receipt");

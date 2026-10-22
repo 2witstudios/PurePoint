@@ -33,10 +33,12 @@ Key behaviors:
 
 | Command | Args/Flags | Description |
 |---|---|---|
-| `pu init` | `--json` | Register current project with daemon |
+| `pu init` | `--json` | Add the current project to the daemon (same as `pu projects add`) |
 | `pu spawn [prompt]` | `--agent`, `--name`, `--base`, `--root`, `--worktree`, `--template`, `--file`, `--command`, `--var KEY=VALUE`, `--no-auto`, `--agent-args`, `--plan`, `--no-trigger`, `--trigger`, `--json` | Spawn an agent (in worktree or root) |
 | `pu status` | `--global`, `--agent <id>`, `--json` | Show project, global summary, or agent status |
 | `pu projects list` | `--global`, `--json` | List daemon-known projects |
+| `pu projects add [path]` | `--json` | Add a folder as a project, initializing it if needed; path defaults to `--project`, then cwd. Works with `--machine` given an absolute path |
+| `pu projects remove [path]` | `--suspend-agents`, `--json` | Remove a project from the daemon for every device; files, including `.pu/`, are kept. Refuses while agents run unless `--suspend-agents` |
 | `pu agents list` | `--global`, `--state running\|suspended\|broken\|unknown`, `--json` | List agent instances with ownership |
 | `pu worktrees list` | `--global`, `--json` | List worktrees with ownership |
 | `pu bench [agent_id]` | `--all`, `--json` | Suspend (bench) agents |

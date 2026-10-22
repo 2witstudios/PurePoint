@@ -41,6 +41,10 @@ extension SidebarOutlineViewController {
             }
         case (.retryLayout, .project(let project)):
             project.retryRemoteLayout()
+        case (.hideProject, .project(let project)):
+            showConfirmation(.hideProject(project)) {
+                self.onHideProject?(project)
+            }
         case (.removeProject, .project(let project)):
             showConfirmation(.removeProject(project)) {
                 self.onRemoveProject?(project)

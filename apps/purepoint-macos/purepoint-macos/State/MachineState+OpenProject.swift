@@ -33,6 +33,34 @@ extension MachineState {
     }
 }
 
+extension MachineState {
+    /// Remove a project from the machine for every device (`remove_project`). Its folder and
+    /// `.pu/` are kept, so opening it again brings it back as it was. The daemon refuses while
+    /// agents run unless `suspendAgents`, which suspends them so they can be resumed once it is added again.
+    func removeProject(root: String, suspendAgents: Bool, client: DaemonClient? = nil) async throws {
+        try await (client ?? endpoint.makeClient()).removeProject(
+            root: root, suspendAgents: suspendAgents, daemonName: machine.name)
+        // Nothing left to hide: a later open shows it again everywhere.
+        unhideProject(root: root)
+        if state.isDaemonRunning { await refreshProjects() }
+    }
+}
+
+extension DaemonClient {
+    /// Ask this daemon to forget a project (`remove_project`), throwing its refusal.
+    func removeProject(root: String, suspendAgents: Bool, daemonName: String) async throws {
+        switch try await send(.removeProject(projectRoot: root, suspendAgents: suspendAgents)) {
+        case .projectRemoved:
+            return
+        case .error(_, let message):
+            throw MachineOpenProjectError(message: message)
+        default:
+            throw MachineOpenProjectError(message: "\(daemonName) did not remove \(root).")
+        }
+    }
+}
+
+/// A project action the machine's daemon refused, with its message.
 struct MachineOpenProjectError: LocalizedError, Equatable {
     let message: String
     var errorDescription: String? { message }

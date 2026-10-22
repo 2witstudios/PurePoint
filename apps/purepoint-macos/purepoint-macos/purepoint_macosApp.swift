@@ -46,7 +46,6 @@ struct purepoint_macosApp: App {
                     hotkeyMonitor.start()
                     CLIInstaller.installIfNeeded()
                     openProjectFromArguments()
-                    appState.startLocalProjectOrderRefresh()
                     appState.loadMachines()
                     appState.pointGuardService.start(chat: appState.pointGuardChat)
                     applicationDelegate.pointGuardService = appState.pointGuardService

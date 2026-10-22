@@ -315,7 +315,7 @@ struct HealthProbeTests {
 
 struct DaemonProjectHostRequestTests {
     @Test func givenProtocolShouldBeCurrentVersion() {
-        #expect(DaemonProtocol.version == 13)
+        #expect(DaemonProtocol.version == 14)
     }
 
     @Test func givenReorderProjectsShouldSendTheWholeOrder() throws {
@@ -331,6 +331,31 @@ struct DaemonProjectHostRequestTests {
             return
         }
         #expect(roots == ["/b", "/a"])
+    }
+
+    @Test func givenRemoveProjectShouldNameTheRootAndWhetherToSuspendAgents() throws {
+        let object = try json(.removeProject(projectRoot: "/srv/app", suspendAgents: true))
+        #expect(object["type"] as? String == "remove_project")
+        #expect(object["project_root"] as? String == "/srv/app")
+        #expect(object["suspend_agents"] as? Bool == true)
+        #expect(try json(.subscribeProjects)["type"] as? String == "subscribe_projects")
+    }
+
+    @Test func givenProjectRegistryRepliesShouldDecodeRootsAndRemoval() {
+        guard case .projectsChanged(let projects) = decode(#"{"type":"projects_changed","projects":["/a","/b"]}"#)
+        else {
+            Issue.record("projects_changed did not decode")
+            return
+        }
+        #expect(projects == ["/a", "/b"])
+        guard
+            case .projectRemoved(let root, let removed, let suspended, let killed) = decode(
+                #"{"type":"project_removed","project_root":"/a","removed":true,"suspended":["ag-1"],"killed":["sh-2"]}"#)
+        else {
+            Issue.record("project_removed did not decode")
+            return
+        }
+        #expect(root == "/a" && removed && suspended == ["ag-1"] && killed == ["sh-2"])
     }
 
     @Test func givenInventoryShouldAskForEveryRegisteredProject() throws {

@@ -8,7 +8,7 @@ The PurePoint daemon communicates with clients (CLI, macOS app) via NDJSON over 
 |---|---|
 | Socket path | `~/.pu/daemon.sock` (mode 0600; the daemon keeps `~/.pu` at 0700) |
 | Access | Only processes running as the daemon's user: every accepted connection's peer uid must equal the daemon's effective uid, or it is closed |
-| Protocol version | 11 |
+| Protocol version | 13 |
 | Framing | Newline-delimited JSON (one JSON object per line) |
 | Max message size | 1 MB (1,048,576 bytes); a longer line gets one `FRAME_TOO_LARGE` error and the connection is closed |
 | First request | Must arrive within 30 seconds of connecting, or the connection is closed |
@@ -44,6 +44,7 @@ Responses use the same `"type"` field convention. Error responses have `"type": 
 | `NOT_FOUND` | Template, agent def, swarm def, schedule, or trigger not found |
 | `NOT_INITIALIZED` | Project not initialized (run `pu init`) |
 | `ALREADY_INITIALIZED` | Project already initialized |
+| `PROJECT_HAS_LIVE_AGENTS` | `remove_project` without `suspend_agents` while the project has live agents |
 | `DAEMON_NOT_RUNNING` | Daemon is not running |
 | `DAEMON_CONNECTION_FAILED` | Connection to daemon failed |
 | `PROTOCOL_MISMATCH` | Client/daemon protocol version mismatch |
@@ -74,13 +75,13 @@ Inventory returns `type: inventory`, observation time, optional project scope (n
 
 ResolveAgent returns `type: agent_resolved`, agent_id, project_root and worktree_id. Legacy Status (with agent_id), Kill (single agent), Suspend (single agent), Resume, Rename and AssignTrigger accept an empty project_root for daemon ownership resolution. Explicit roots constrain ownership. Bulk requests require a root. Duplicate durable IDs return AMBIGUOUS_AGENT; a live session owned by another project returns AGENT_OWNERSHIP_CONFLICT; an incomplete durable inventory returns INVENTORY_INCOMPLETE when a known live owner cannot resolve the ID. Standalone shells support status/logs/input/attach/kill and reject resumable project operations with UNSUPPORTED_AGENT_OPERATION.
 
-Production registry: `<socket>.projects.json`, loaded on startup and atomically updated after successful initialization or validated use. `/`, `$HOME` and ancestors of `$HOME` are never registered, even when `~/.pu/manifest.json` makes `$HOME` look initialized; such entries left by older daemons are removed when the registry loads. Requests naming such a root fail with `project_root_not_allowed`, except `status`, `subscribe_status`, `read`, `channel_read` and `kill`, which stay available so agents an older version recorded there can be seen and stopped. Roots are canonical, registration survives restart, and startup does not resume agents. Health returns registered roots and counts only session handles without observed exits.
+Production registry: `<socket>.projects.json`, loaded on startup and atomically updated by `init` (add) and `remove_project` (remove) — nothing else adds a project, so a removed project stays removed even while other clients still use it. A registered root whose folder still exists but has no `.pu/manifest.json` (removed by an older client) is dropped in the background when the daemon starts (inventory itself never changes the registry); a root whose folder is missing stays, reported unavailable, since it may be on an unmounted volume. `/`, `$HOME` and ancestors of `$HOME` are never registered, even when `~/.pu/manifest.json` makes `$HOME` look initialized; such entries left by older daemons are removed when the registry loads. Requests naming such a root fail with `project_root_not_allowed`, except `status`, `subscribe_status`, `read`, `channel_read` and `kill`, which stay available so agents an older version recorded there can be seen and stopped. Roots are canonical, registration survives restart, and startup does not resume agents. Health returns registered roots and counts only session handles without observed exits.
 
 The registry is ordered, and that order is the one every client shows for the machine. New projects are appended; `inventory` (projects) and Health list roots in registry order. Registries written by older daemons, which kept roots sorted by path, load in that order.
 
 ### Reorder projects
 
-Set the order of the registered projects (protocol 13).
+Set the order of the registered projects (protocol 14). A change is pushed to `subscribe_projects` streams.
 
 **Request**: `{"type": "reorder_projects", "project_roots": ["/b", "/a"]}`
 
@@ -100,7 +101,7 @@ Check daemon liveness and protocol version.
   "type": "health_report",
   "pid": 12345,
   "uptime_seconds": 3600,
-  "protocol_version": 13,
+  "protocol_version": 14,
   "projects": ["/path/to/project"],
   "agent_count": 3
 }
@@ -108,11 +109,21 @@ Check daemon liveness and protocol version.
 
 ### Init
 
-Register a project and create `.pu/manifest.json`.
+Add a project: create `.pu/manifest.json` if needed and register the root. This is the only request that registers a project.
 
 **Request**: `{"type": "init", "project_root": "/path/to/project"}`
 
 **Response**: `{"type": "init_result", "created": true}`
+
+### RemoveProject
+
+Forget a project on this daemon, for every client. Its files and `.pu/` are kept (suspending agents only updates the manifest), so a later `init` brings it back with its worktrees and agents. Live agents refuse the removal with `PROJECT_HAS_LIVE_AGENTS` unless `suspend_agents` is true (default false), which suspends them so they can be resumed once the project is added again. An unregistered root answers `removed: false`.
+
+**Request**: `{"type": "remove_project", "project_root": "/path/to/project", "suspend_agents": true}`
+
+**Response**: `{"type": "project_removed", "project_root": "/path/to/project", "removed": true, "suspended": ["ag-abc"], "killed": []}`
+
+`killed` lists live sessions in the folder that the manifest did not record; they are stopped and cannot be resumed. A daemon loading its registry drops, in the background, registered folders that exist without a manifest; `subscribe_projects` sends its first list only after that.
 
 ### Shutdown
 
@@ -404,6 +415,16 @@ Subscribe to workspace status changes.
 **Response**: `{"type": "status_subscribed"}`
 
 Then streams: `{"type": "status_event", "worktrees": [...], "agents": [...]}`
+
+### SubscribeProjects
+
+Follow the registered projects. The full list of roots, in registry order, is sent once on subscribing and again after every `init` that adds a project, every removal and every `reorder_projects` that changes the order, so every client shows the same projects without polling. Any request line ends the stream.
+
+**Request**: `{"type": "subscribe_projects"}`
+
+**Response**: `{"type": "projects_subscribed"}`
+
+Then streams: `{"type": "projects_changed", "projects": ["/path/a", "/path/b"]}`
 
 ## Grid commands
 

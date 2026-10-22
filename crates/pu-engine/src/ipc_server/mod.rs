@@ -50,6 +50,7 @@ enum StreamMode {
     Attach(String, Option<pu_core::protocol::Replay>, Option<String>),
     Grid(String),
     Status(String),
+    Projects,
     Fs { root: String, recursive: bool },
 }
 
@@ -63,6 +64,7 @@ impl StreamMode {
             } => Self::Attach(agent_id.clone(), *replay, client_id.clone()),
             Request::SubscribeGrid { project_root } => Self::Grid(project_root.clone()),
             Request::SubscribeStatus { project_root } => Self::Status(project_root.clone()),
+            Request::SubscribeProjects => Self::Projects,
             Request::SubscribeFs { root, recursive } => Self::Fs {
                 root: root.clone(),
                 recursive: *recursive,
@@ -144,9 +146,12 @@ impl IpcServer {
         // Owner-only whatever the umask. Connections accepted before this are
         // still held to the peer check in `run`.
         std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
+        let engine = Arc::new(engine);
+        // Every served registry is pruned, so the projects stream always opens.
+        engine.start_registry_prune();
         Ok(Self {
             listener,
-            engine: Arc::new(engine),
+            engine,
             shutdown: Arc::new(Notify::new()),
             conn_limit: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
             first_line_timeout: FIRST_LINE_TIMEOUT,
@@ -369,6 +374,11 @@ impl IpcServer {
                         &project_root,
                     )
                     .await;
+                }
+            }
+            StreamMode::Projects => {
+                if matches!(response, Response::ProjectsSubscribed) {
+                    return streams::handle_projects_stream(reader, pending, writer, engine).await;
                 }
             }
             StreamMode::Fs { root, recursive } => {

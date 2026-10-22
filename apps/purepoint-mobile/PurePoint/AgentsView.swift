@@ -171,6 +171,7 @@ struct QuickLaunch: Codable, Identifiable, Equatable {
         case "createWorktree": return "Creating \(name ?? "worktree")"
         case "rename": return "Renaming \(label)"
         case "stop": return "Stopping \(label)"
+        case "removeProject": return "Removing \(label)"
         default: return label
         }
     }
@@ -186,7 +187,7 @@ struct QuickLaunch: Codable, Identifiable, Equatable {
         }
         if let name, kind == "createWorktree" || kind == "rename" { fields["name"] = name }
         if let agentId { fields["agentId"] = agentId }
-        if kind == "stop" { fields["confirm"] = true }
+        if kind == "stop" || kind == "removeProject" { fields["confirm"] = true }
         return fields
     }
 }
@@ -564,6 +565,7 @@ struct HomeView: View {
     @State private var renaming: AgentShortcut?
     @State private var stopping: AgentShortcut?
     @State private var reordering: AgentMachine?
+    @State private var removing: WorkspaceTarget?
 
     var body: some View {
         ScrollView {
@@ -593,7 +595,17 @@ struct HomeView: View {
         }
         .modifier(AgentManagement(model: model, actions: actions, renaming: $renaming, stopping: $stopping, creatingWorktree: $creatingWorktree, open: openAgent))
         .sheet(item: $reordering) { machine in ProjectOrderSheet(model: model, actions: actions, machine: machine) }
-        .onChange(of: model.bridgeIdentity) { _, _ in collapsed = []; launchTarget = nil; renaming = nil; stopping = nil; reordering = nil }
+        .confirmationDialog(removing.map { "Remove \($0.projectName) from \($0.machineName)?" } ?? "", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
+            Button("Remove from \(removing?.machineName ?? "machine")", role: .destructive) {
+                if let target = removing {
+                    actions.run(QuickLaunch(id: UUID().uuidString, host: target.host, machine: target.machine, machineName: target.machineName, project: target.project, projectName: target.projectName, worktree: nil, branch: nil, kind: "removeProject", label: target.projectName), model: model, open: openAgent)
+                }
+                removing = nil
+            }
+        } message: {
+            Text(removing.map { "It disappears from PurePoint on every device connected to \($0.machineName). Its agents are suspended and can be resumed once the project is added again; a session the project does not record is stopped. The folder and .pu/ are kept." } ?? "")
+        }
+        .onChange(of: model.bridgeIdentity) { _, _ in collapsed = []; launchTarget = nil; renaming = nil; stopping = nil; removing = nil; reordering = nil }
     }
 
     // MARK: Rows
@@ -658,7 +670,8 @@ struct HomeView: View {
         }.padding(.trailing, 12).frame(minHeight: 40).contentShape(Rectangle()).onTapGesture { toggle(machineKey) }
         .contextMenu {
             Button("Reorder Projects…", systemImage: "arrow.up.arrow.down") { reordering = machine }
-                .disabled(!online || !model.canReorderProjects || (machine.registeredProjects?.count ?? 0) < 2)
+                .disabled(!online || !model.canReorderProjects || (machine.protocolVersion ?? 0) < 14
+                    || (machine.registeredProjects?.count ?? 0) < 2)
         }
         .opacity(model.connected ? 1 : 0.5).accessibilityElement(children: .combine).accessibilityAddTraits(.isButton)
         if !collapsed.contains(machineKey) {
@@ -694,6 +707,10 @@ struct HomeView: View {
         .contextMenu {
             Button("New…", systemImage: "plus") { launchTarget = target }.disabled(!available || !model.canManage)
             Button("New worktree…", systemImage: "arrow.triangle.branch") { creatingWorktree = target }.disabled(!available || !model.canManage)
+            Divider()
+            // Removes it on the machine for every device; older daemons cannot.
+            Button("Remove from \(machine.name)…", systemImage: "trash", role: .destructive) { removing = target }
+                .disabled(!online || !model.canManage || (machine.protocolVersion ?? 0) < 13)
         }
         if let error = project.error { Text(error).font(.caption).foregroundStyle(Theme.warning).padding(.leading, 58).padding(.bottom, 4) }
         if !collapsed.contains(projectKey) {

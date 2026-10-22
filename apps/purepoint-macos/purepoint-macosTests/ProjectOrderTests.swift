@@ -26,16 +26,4 @@ struct ProjectOrderTests {
         let sorted = ProjectOrder.sorted(["/a", "/x", "/b", "/y"], by: ["/b", "/gone", "/a"], root: { $0 })
         #expect(sorted == ["/b", "/a", "/x", "/y"])
     }
-
-    @Test func givenASymlinkedRootShouldMatchTheDaemonsCanonicalRoot() throws {
-        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: base) }
-        let real = base.appendingPathComponent("real")
-        let link = base.appendingPathComponent("link")
-        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
-        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
-        let other = base.appendingPathComponent("other").path
-        let sorted = ProjectOrder.sorted([other, link.path], by: [ProjectOrder.canonical(real.path)], root: { $0 })
-        #expect(sorted == [link.path, other])
-    }
 }

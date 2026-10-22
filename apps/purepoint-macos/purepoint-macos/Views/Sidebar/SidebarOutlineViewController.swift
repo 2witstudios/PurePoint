@@ -36,8 +36,11 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     /// Callback for killing all agents in a project.
     var onKillAllProjectAgents: ((ProjectState) -> Void)?
 
-    /// Callback for removing a project from the sidebar.
+    /// Callback for removing a project from its machine, for every device.
     var onRemoveProject: ((ProjectState) -> Void)?
+
+    /// Callback for hiding a remote project on this device only.
+    var onHideProject: ((ProjectState) -> Void)?
 
     /// Callback for forgetting a machine (its forward closes; nothing on it changes).
     var onRemoveMachine: ((MachineState) -> Void)?
