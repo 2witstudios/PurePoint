@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Reading a past conversation</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+a{color:inherit;text-decoration:none}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+p{margin:0}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #18181B; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, Inter, system-ui, sans-serif; font-size: 15px; display: flex; flex-direction: column">
+  <div style="height: 54px; flex-shrink: 0"></div>
+  <header style="display: flex; align-items: center; height: 44px; padding: 0 4px; flex-shrink: 0; border-bottom: 1px solid rgba(255,255,255,0.06)">
+    <a href="History.dc.html" aria-label="Back to history" style="width: 44px; height: 44px; display: grid; place-items: center; color: #FF8A3D"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></a>
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center">
+      <span style="font-size: 15px; font-weight: 600">iPad sidebar polish</span>
+      <span style="font-size: 11px; color: #A1A1AA">Read only · 2026-10-20</span>
+    </div>
+    <span style="width: 44px"></span>
+  </header>
+  <main style="flex: 1; min-height: 0; overflow: hidden; padding: 16px 14px 0; display: flex; flex-direction: column; gap: 14px">
+    <div style="align-self: flex-end; max-width: 300px; background: #26262B; border-radius: 16px 16px 4px 16px; padding: 9px 12px; line-height: 20px">Make the iPad sidebar rows match the Mac sizes and fix the keyboard focus ring.</div>
+    <button class="mono" style="display: flex; align-items: center; gap: 7px; height: 30px; font-size: 11.5px; color: #A1A1AA">
+      <svg class="ico" style="width: 11px; height: 11px; transform: rotate(-90deg)" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>6 tool calls
+    </button>
+    <p style="line-height: 21px">Rows now use the shared 24pt metric on iPad. Keyboard focus follows the outline selection, and I opened a follow-up for focus after drag-and-drop.</p>
+    <div style="align-self: flex-end; max-width: 300px; background: #26262B; border-radius: 16px 16px 4px 16px; padding: 9px 12px; line-height: 20px">Merge it.</div>
+    <p style="line-height: 21px">Merged into main.</p>
+  </main>
+  <footer style="flex-shrink: 0; padding: 10px 12px 34px; display: flex; flex-direction: column; gap: 8px">
+    <button style="height: 50px; border-radius: 14px; background: #FF7A1A; color: #18181B; font-size: 16px; font-weight: 650; text-align: center">Resume this conversation</button>
+    <p style="font-size: 12.5px; color: #A1A1AA; text-align: center">While Point Guard is working, this reads "Stop and resume this conversation".</p>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

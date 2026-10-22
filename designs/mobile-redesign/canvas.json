@@ -1,0 +1,226 @@
+{
+ "v": 3,
+ "attachments": {},
+ "boards": {
+  "Agent.dc.html": {
+   "h": 844,
+   "is_interactive": true,
+   "radius": 44,
+   "title": "2 \u00b7 Workspace (tap an agent row)",
+   "w": 390,
+   "x": 470,
+   "y": 0
+  },
+  "Main.dc.html": {
+   "h": 844,
+   "is_interactive": true,
+   "radius": 44,
+   "title": "1 \u00b7 Home = desktop sidebar",
+   "w": 390,
+   "x": 0,
+   "y": 0
+  },
+  "PointGuard.dc.html": {
+   "h": 844,
+   "is_interactive": true,
+   "radius": 44,
+   "title": "3 \u00b7 Point Guard \u2014 new conversation",
+   "w": 390,
+   "x": 940,
+   "y": 0
+  },
+  "PointGuardChat.dc.html": {
+   "h": 844,
+   "is_interactive": true,
+   "radius": 44,
+   "title": "4 \u00b7 Point Guard \u2014 conversation",
+   "w": 390,
+   "x": 1410,
+   "y": 0
+  },
+  "Connections.dc.html": {
+   "x": 0,
+   "y": 1264,
+   "w": 390,
+   "h": 844,
+   "title": "5 \u00b7 Connections",
+   "radius": 44,
+   "is_interactive": true
+  },
+  "PairScanner.dc.html": {
+   "x": 470,
+   "y": 1264,
+   "w": 390,
+   "h": 844,
+   "title": "6 \u00b7 Pair with your Mac",
+   "radius": 44
+  },
+  "NewSheet.dc.html": {
+   "x": 940,
+   "y": 1264,
+   "w": 390,
+   "h": 844,
+   "title": "7 \u00b7 New dialog \u2014 one tap launches",
+   "radius": 44,
+   "is_interactive": true
+  },
+  "NewUncertain.dc.html": {
+   "x": 1410,
+   "y": 1264,
+   "w": 390,
+   "h": 844,
+   "title": "8 \u00b7 Launch couldn't be confirmed (fallback)",
+   "radius": 44
+  },
+  "ManageAgent.dc.html": {
+   "x": 1880,
+   "y": 1264,
+   "w": 390,
+   "h": 844,
+   "title": "9 \u00b7 Rename agent, new worktree, Mac name",
+   "radius": 44
+  },
+  "History.dc.html": {
+   "x": 0,
+   "y": 2528,
+   "w": 390,
+   "h": 844,
+   "title": "10 \u00b7 History",
+   "radius": 44
+  },
+  "HistoryBrowse.dc.html": {
+   "x": 470,
+   "y": 2528,
+   "w": 390,
+   "h": 844,
+   "title": "11 \u00b7 History \u2014 reading a conversation",
+   "radius": 44
+  },
+  "ExtensionDialog.dc.html": {
+   "x": 940,
+   "y": 2528,
+   "w": 390,
+   "h": 844,
+   "title": "12 \u00b7 Point Guard needs your input",
+   "radius": 44
+  },
+  "SavedPrompts.dc.html": {
+   "x": 1410,
+   "y": 2528,
+   "w": 390,
+   "h": 844,
+   "title": "13 \u00b7 Saved prompts",
+   "radius": 44
+  },
+  "Confirmations.dc.html": {
+   "x": 1880,
+   "y": 2528,
+   "w": 390,
+   "h": 844,
+   "title": "14 \u00b7 Stop confirmations",
+   "radius": 44
+  },
+  "ComposerStates.dc.html": {
+   "x": 0,
+   "y": 3792,
+   "w": 390,
+   "h": 844,
+   "title": "15 \u00b7 Composer \u2014 busy, attachments, recovery",
+   "radius": 44
+  },
+  "ChatAccess.dc.html": {
+   "x": 470,
+   "y": 3792,
+   "w": 390,
+   "h": 844,
+   "title": "16 \u00b7 Chat \u2014 read-only & locked",
+   "radius": 44
+  },
+  "HomeStates.dc.html": {
+   "x": 940,
+   "y": 3792,
+   "w": 390,
+   "h": 844,
+   "title": "17 \u00b7 Home \u2014 off, disconnected, offline",
+   "radius": 44
+  },
+  "AgentStates.dc.html": {
+   "x": 1410,
+   "y": 3792,
+   "w": 390,
+   "h": 844,
+   "title": "18 \u00b7 Agent \u2014 options, raw typing, view-only",
+   "radius": 44
+  },
+  "RowMenu.dc.html": {
+   "x": 1880,
+   "y": 3792,
+   "w": 390,
+   "h": 844,
+   "title": "19 \u00b7 Agent row menu",
+   "radius": 44
+  }
+ },
+ "createdOnFiles": {
+  "at": "2026-10-21T18:20:00Z",
+  "v": 1
+ },
+ "designSystems": [],
+ "launch": {
+  "view": "canvas"
+ },
+ "notes": {
+  "title": {
+   "kind": "title1",
+   "maxW": 1800,
+   "text": "PurePoint iPhone \u2014 the sidebar is the app",
+   "w": 240,
+   "x": 0,
+   "y": -300
+  },
+  "row1264": {
+   "kind": "title1",
+   "maxW": 2270,
+   "text": "Sheets",
+   "x": 0,
+   "y": 964
+  },
+  "row2528": {
+   "kind": "title1",
+   "maxW": 2270,
+   "text": "Point Guard sheets & dialogs",
+   "x": 0,
+   "y": 2228
+  },
+  "row3792": {
+   "kind": "title1",
+   "maxW": 2270,
+   "text": "Menus & states",
+   "x": 0,
+   "y": 3492
+  }
+ },
+ "order": [
+  "Main.dc.html",
+  "Agent.dc.html",
+  "PointGuard.dc.html",
+  "PointGuardChat.dc.html",
+  "Connections.dc.html",
+  "PairScanner.dc.html",
+  "NewSheet.dc.html",
+  "NewUncertain.dc.html",
+  "ManageAgent.dc.html",
+  "History.dc.html",
+  "HistoryBrowse.dc.html",
+  "ExtensionDialog.dc.html",
+  "SavedPrompts.dc.html",
+  "Confirmations.dc.html",
+  "ComposerStates.dc.html",
+  "ChatAccess.dc.html",
+  "HomeStates.dc.html",
+  "AgentStates.dc.html",
+  "RowMenu.dc.html"
+ ],
+ "pages": [],
+ "title": "PurePoint iPhone Redesign"
+}

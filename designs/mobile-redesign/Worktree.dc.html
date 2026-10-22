@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Worktree</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+a{color:inherit;text-decoration:none}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.sm{width:14px;height:14px}
+.pill{font-size:10px;font-weight:600;padding:1px 5px;border-radius:4px;white-space:nowrap;line-height:15px}
+.trunc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.diff p{margin:0;white-space:pre;padding:0 8px}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #1C1C1F; color: #D9D9DE; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; font-size: 13px; display: flex; flex-direction: column">
+
+  <div style="height: 54px; flex-shrink: 0"></div>
+
+  <header style="display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 4px; flex-shrink: 0">
+    <a href="Main.dc.html" aria-label="Back to sidebar" style="width: 44px; height: 44px; display: grid; place-items: center; color: #64A8FF">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg>
+    </a>
+    <div style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px">
+      <svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true" style="color: #A8A8B0"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-11 7.5"/></svg>
+      <span style="font-size: 15px; font-weight: 600">auth-hardening</span>
+      <span class="mono trunc" style="font-size: 11px; background: rgba(255,255,255,0.08); border-radius: 4px; padding: 2px 6px; color: #B4B4BC">pu/auth-hardening</span>
+    </div>
+    <button aria-label="New agent in this worktree" style="width: 44px; height: 44px; display: grid; place-items: center; color: #D9D9DE">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+  </header>
+
+  <div style="display: flex; align-items: center; gap: 10px; padding: 0 14px 10px; font-size: 11.5px; color: #9A9AA2; flex-shrink: 0">
+    <span>purepoint · jono-mbp</span><span>·</span><span>4 commits ahead</span><span>·</span>
+    <span class="mono" style="color: #5DD879">+214</span><span class="mono" style="color: #FF7A70">−38</span>
+  </div>
+
+  <section aria-label="Workspaces" style="padding: 0 8px 8px; flex-shrink: 0; border-bottom: 1px solid rgba(255,255,255,0.06)">
+    <sc-for list="{{agents}}" as="a" hint-placeholder-count="3">
+      <a href="Agent.dc.html" style="display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 8px; border-radius: 8px">
+        <span style="width: 7px; height: 7px; border-radius: 4px; background: {{a.dot}}; flex-shrink: 0"></span>
+        <span style="font-size: 13.5px; font-weight: 550">{{a.name}}</span>
+        <span class="pill" style="background: {{a.pillBg}}; color: {{a.pillFg}}">{{a.state}}</span>
+        <span class="mono trunc" style="flex: 1; font-size: 11px; color: #9A9AA2">{{a.line}}</span>
+        <svg class="ico" style="width: 12px; height: 12px; color: #85858D" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+      </a>
+    </sc-for>
+  </section>
+
+  <div role="tablist" style="display: flex; gap: 4px; padding: 8px 14px; flex-shrink: 0">
+    <button role="tab" aria-selected="true" style="height: 30px; padding: 0 12px; border-radius: 7px; background: #303034; font-size: 12.5px; font-weight: 600">Changes 6</button>
+    <button role="tab" aria-selected="false" style="height: 30px; padding: 0 12px; border-radius: 7px; font-size: 12.5px; color: #A8A8B0">Files</button>
+    <button role="tab" aria-selected="false" style="height: 30px; padding: 0 12px; border-radius: 7px; font-size: 12.5px; color: #A8A8B0; display: flex; align-items: center; gap: 6px">Channel <span style="width: 6px; height: 6px; border-radius: 3px; background: #0A84FF"></span></button>
+    <span style="flex: 1"></span>
+    <button style="height: 30px; padding: 0 10px; border-radius: 7px; font-size: 12.5px; color: #64A8FF; font-weight: 600">Review</button>
+  </div>
+
+  <main style="flex: 1; min-height: 0; overflow: hidden; padding: 0 8px">
+    <article style="background: #242426; border-radius: 10px; overflow: hidden; margin-bottom: 6px">
+      <div style="display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; background: #29292B">
+        <svg class="ico" style="width: 11px; height: 11px; color: #85858D" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        <span class="mono trunc" style="flex: 1; font-size: 11.5px">crates/pu-engine/src/tls.rs</span>
+        <span class="mono" style="font-size: 10.5px; color: #5DD879">+18</span><span class="mono" style="font-size: 10.5px; color: #FF7A70">−4</span>
+      </div>
+      <div class="mono diff" style="font-size: 10.5px; line-height: 16px; padding: 4px 0 6px; overflow: hidden">
+        <p style="color: #85858D">@@ -139,7 +139,10 @@ fn verify_leaf</p>
+        <p>    let leaf = chain.first()?;</p>
+        <p style="background: #402121; color: #E68C8C">-   warn!("pin mismatch, retrying");</p>
+        <p style="background: #213826; color: #8CD98C">+   if !pin.matches(&amp;leaf) {</p>
+        <p style="background: #213826; color: #8CD98C">+       return Err(TrustError::Rotated);</p>
+        <p style="background: #213826; color: #8CD98C">+   }</p>
+        <p>    Ok(Verified::new(leaf))</p>
+      </div>
+    </article>
+    <sc-for list="{{files}}" as="f" hint-placeholder-count="5">
+      <button style="display: flex; align-items: center; gap: 8px; width: 100%; height: 38px; padding: 0 10px; border-bottom: 1px solid rgba(255,255,255,0.05)">
+        <svg class="ico" style="width: 11px; height: 11px; color: #85858D; transform: rotate(-90deg)" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        <span class="mono trunc" style="flex: 1; font-size: 11.5px; color: #D9D9DE">{{f.path}}</span>
+        <span class="mono" style="font-size: 10.5px; color: #5DD879">{{f.add}}</span><span class="mono" style="font-size: 10.5px; color: #FF7A70">{{f.del}}</span>
+      </button>
+    </sc-for>
+  </main>
+
+  <footer style="flex-shrink: 0; display: flex; padding: 8px 10px 30px; background: #141417; border-top: 1px solid rgba(255,255,255,0.06)">
+    <button style="flex: 1; height: 40px; border-radius: 9px; background: #0A84FF; color: #FFFFFF; font-weight: 600; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 6px"><svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New</button>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const S = {
+      Permission: ['#FF9F0A', 'rgba(255,159,10,0.16)', '#FFB340'],
+      Working: ['#0A84FF', 'rgba(10,132,255,0.18)', '#7AB6FF'],
+      Idle: ['#6A6A72', 'rgba(255,255,255,0.07)', '#A8A8B0']
+    };
+    const ag = (name, state, line) => ({ name, state, line, dot: S[state][0], pillBg: S[state][1], pillFg: S[state][2] });
+    return {
+      agents: [
+        ag('fix-auth', 'Permission', 'cargo test -p pu-engine'),
+        ag('review-auth', 'Working', 'Reading tls.rs'),
+        ag('shell', 'Idle', '$ git status')
+      ],
+      files: [
+        { path: 'crates/pu-engine/tests/trust.rs', add: '+31', del: '' },
+        { path: 'crates/pu-engine/src/pairing.rs', add: '+96', del: '−22' },
+        { path: 'crates/pu-engine/src/error.rs', add: '+12', del: '' },
+        { path: 'docs/product/point-guard-setup.md', add: '+44', del: '−9' },
+        { path: 'apps/purepoint-mobile/bridge/trust.js', add: '+13', del: '−3' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

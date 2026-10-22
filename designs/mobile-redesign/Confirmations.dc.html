@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stop confirmations</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+.sheet{margin:0 8px;display:flex;flex-direction:column;gap:8px}
+.card{background:#2A2A2F;border-radius:14px;overflow:hidden;text-align:center}
+.card h2{margin:14px 16px 2px;font-size:13px;font-weight:650;color:#A1A1AA}
+.card p{margin:0 16px 12px;font-size:13px;line-height:1.4;color:#A1A1AA}
+.card button{display:block;width:100%;height:52px;font-size:18px;border-top:1px solid rgba(255,255,255,0.1)}
+.cancel{background:#2A2A2F;border-radius:14px;height:54px;font-size:18px;font-weight:650;color:#FF8A3D;width:100%}
+.lbl{font-size:11px;font-weight:650;letter-spacing:.04em;color:#7C7C85;margin:0 16px 2px}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #121214; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, Inter, system-ui, sans-serif; display: flex; flex-direction: column; justify-content: flex-end; gap: 22px; padding-bottom: 30px; box-sizing: border-box">
+
+  <div class="lbl">FROM AN AGENT ROW OR THE AGENT MENU</div>
+  <div role="alertdialog" aria-label="Stop agent" class="sheet">
+    <div class="card">
+      <h2>Stop review-auth?</h2>
+      <p>On jono-mbp in purepoint. Other agents keep running.</p>
+      <button style="color: #FF7A70">Stop agent</button>
+    </div>
+    <button class="cancel">Cancel</button>
+  </div>
+
+  <div class="lbl">NEW CONVERSATION WHILE POINT GUARD IS WORKING</div>
+  <div role="alertdialog" aria-label="Stop Point Guard" class="sheet">
+    <div class="card">
+      <h2>Stop Point Guard before starting a new conversation?</h2>
+      <p>Queued messages will be canceled and recoverable. Delegated workers keep running.</p>
+      <button style="color: #FF7A70">Stop and start new</button>
+    </div>
+    <button class="cancel">Keep working</button>
+  </div>
+
+  <div class="lbl">RESUMING FROM HISTORY WHILE WORKING</div>
+  <div role="alertdialog" aria-label="Stop and resume" class="sheet">
+    <div class="card">
+      <h2>Stop Point Guard and resume this conversation?</h2>
+      <p>Queued messages will be recoverable. Delegated workers keep running.</p>
+      <button style="color: #FF7A70">Stop and resume</button>
+    </div>
+    <button class="cancel">Keep working</button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

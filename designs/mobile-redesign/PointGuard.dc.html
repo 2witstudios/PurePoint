@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Point Guard new conversation</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+a{color:inherit;text-decoration:none}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.pg-textarea::placeholder{color:#7C7C85}
+.pg-textarea:focus{outline:none}
+@keyframes pg-pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,122,26,.45)}50%{box-shadow:0 0 0 8px rgba(255,122,26,0)}}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #18181B; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, Inter, system-ui, sans-serif; display: flex; flex-direction: column">
+
+  <svg aria-hidden="true" viewBox="0 0 390 844" style="position: absolute; inset: 0; width: 390px; height: 844px; pointer-events: none" fill="none" stroke="rgba(255,255,255,0.065)" stroke-width="1.25">
+    <rect x="14" y="14" width="362" height="816" rx="6"></rect>
+    <line x1="14" y1="182" x2="376" y2="182"></line>
+    <circle cx="195" cy="182" r="86"></circle>
+    <path d="M 52 830 L 52 760 A 143 143 0 0 1 338 760 L 338 830"></path>
+    <rect x="140" y="650" width="110" height="180"></rect>
+    <circle cx="195" cy="650" r="55"></circle>
+  </svg>
+
+  <div style="height: 54px; flex-shrink: 0"></div>
+  <header style="position: relative; display: flex; align-items: center; justify-content: space-between; height: 44px; padding: 0 4px; flex-shrink: 0">
+    <a href="Main.dc.html" aria-label="Back to sidebar" style="width: 44px; height: 44px; display: grid; place-items: center; color: #FF8A3D">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"></path></svg>
+    </a>
+    <span style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #A1A1AA"><span style="width: 6px; height: 6px; border-radius: 3px; background: #30D158"></span>jono-mbp · Connected</span>
+    <a href="PointGuardChat.dc.html" aria-label="Conversation history" style="width: 44px; height: 44px; display: grid; place-items: center; color: #ECECEE">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2"></path></svg>
+    </a>
+  </header>
+
+  <main style="position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; padding: 32px 20px 0">
+    <div style="width: 104px; height: 104px; border-radius: 52px; display: grid; place-items: center; background: #1F1F23; border: 1px solid rgba(255,255,255,0.09); box-shadow: 0 0 0 8px rgba(24,24,27,0.9), 0 20px 50px rgba(0,0,0,0.45)">
+      <img src="/_blob/bd0b706e9a0d4e080c883a84280dd95d" alt="PurePoint" style="{{logoStyle}}">
+    </div>
+    <h1 style="margin: 30px 0 0; font-size: 30px; line-height: 1.1; font-weight: 700; letter-spacing: -0.025em; text-align: center; color: #F4F4F5">What play do you<br>want to run?</h1>
+  </main>
+
+  <svg aria-hidden="true" viewBox="0 0 390 844" style="position: absolute; inset: 0; width: 390px; height: 844px; pointer-events: none">
+    <sc-if value="{{aim.on}}" hint-placeholder-val="{{ false }}">
+      <line x1="{{aim.x1}}" y1="{{aim.y1}}" x2="{{aim.x2}}" y2="{{aim.y2}}" stroke="{{aim.color}}" stroke-width="{{aim.width}}" stroke-dasharray="{{aim.dash}}" stroke-linecap="round"></line>
+    </sc-if>
+  </svg>
+
+  <sc-for list="{{plays}}" as="p" hint-placeholder-count="4">
+    <div style="{{p.pos}}">
+      <button onClick="{{p.pick}}" aria-label="{{p.label}}: {{p.prompt}}" style="width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; background: {{p.bg}}; color: {{p.fg}}; border: {{p.border}}; box-shadow: {{p.glow}}; transform: scale({{p.scale}}); transition: all .2s">
+        <sc-if value="{{p.isProjects}}" hint-placeholder-val="{{ false }}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"></path><path d="M3 13l9 5 9-5"></path></svg></sc-if>
+        <sc-if value="{{p.isRunning}}" hint-placeholder-val="{{ false }}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"></path></svg></sc-if>
+        <sc-if value="{{p.isDesktop}}" hint-placeholder-val="{{ false }}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"></rect><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"></rect><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"></rect><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"></rect></svg></sc-if>
+        <sc-if value="{{p.isNext}}" hint-placeholder-val="{{ false }}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M15.5 8.5l-2 5-5 2 2-5z"></path></svg></sc-if>
+      </button>
+      <span style="font-size: 13px; font-weight: {{p.weight}}; color: {{p.labelColor}}; white-space: nowrap; transition: color .2s">{{p.label}}</span>
+    </div>
+  </sc-for>
+
+  <button aria-label="Ball: drag onto a play to call it" onPointerDown="{{onDown}}" onPointerMove="{{onMove}}" onPointerUp="{{onUp}}" onPointerCancel="{{onUp}}" style="{{ballHit}}">
+    <span style="{{ballStyle}}"></span>
+  </button>
+
+  <footer style="position: absolute; left: 0; right: 0; bottom: 0; padding: 0 12px 30px">
+    <div style="background: #222226; border: 1px solid {{composerBorder}}; border-radius: 20px; box-shadow: 0 18px 48px rgba(0,0,0,0.4); padding: 12px 10px 10px 16px; transition: border-color .2s">
+      <label for="pg-msg" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message Point Guard</label>
+      <textarea id="pg-msg" class="pg-textarea" rows="2" placeholder="Call it…" value="{{prompt}}" onChange="{{onType}}" style="width: 100%; box-sizing: border-box; resize: none; border: 0; background: transparent; color: #ECECEE; font: inherit; font-size: 15px; line-height: 1.5; padding: 2px 0"></textarea>
+      <div style="margin-top: 6px; display: flex; align-items: center; justify-content: space-between">
+        <div style="display: flex; align-items: center; gap: 2px; margin-left: -8px">
+          <button aria-label="Attach photo or file" style="width: 40px; height: 40px; border-radius: 10px; color: #A1A1AA; display: grid; place-items: center">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" style="stroke-width: 2"><path d="M12 5v14M5 12h14"></path></svg>
+          </button>
+          <button aria-label="Send options" style="width: 40px; height: 40px; border-radius: 10px; color: #A1A1AA; display: grid; place-items: center">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" style="width: 15px; height: 15px; stroke-width: 2"><path d="M3 7h18M3 12h12M3 17h6"></path></svg>
+          </button>
+        </div>
+        <button aria-label="Send" style="width: 40px; height: 40px; border-radius: 20px; display: grid; place-items: center; background: {{sendBg}}; color: #18181B; transition: background .2s">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" style="width: 16px; height: 16px; stroke-width: 2.4"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
+        </button>
+      </div>
+    </div>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#FF7A1A","options":["#FF7A1A","#4C9DFF","#3DDC97","#C792FF"]},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    // Ball rests on the rim of the logo ring (center circle of the court).
+    this.rest = { x: 252, y: 232 };
+    this.state = { bx: 252, by: 232, dragging: false, target: null, passed: null, prompt: '' };
+    this.spots = [
+      { id: 'projects', label: 'Catch me up', x: 105, y: 440, prompt: 'Give me an update on all my projects — what moved, what is blocked, and what needs me next.' },
+      { id: 'next', label: 'What’s next?', x: 285, y: 440, prompt: 'Look across my projects and tell me what I should work on next, and why.' },
+      { id: 'desktop', label: 'Tidy my desktop', x: 105, y: 548, prompt: 'Organize my desktop — group the files into folders that make sense and clear the clutter.' },
+      { id: 'running', label: 'What’s running?', x: 285, y: 548, prompt: 'What is running on my machine right now? Agents, apps, and anything using a lot of memory or CPU.' }
+    ];
+  }
+  point(e) {
+    const root = e.currentTarget.parentElement.getBoundingClientRect();
+    const scale = root.width / 390 || 1;
+    return { x: (e.clientX - root.left) / scale, y: (e.clientY - root.top) / scale };
+  }
+  nearest(x, y) {
+    let best = null, dist = 64;
+    this.spots.forEach((s) => { const d = Math.hypot(s.x - x, s.y - y); if (d < dist) { dist = d; best = s.id; } });
+    return best;
+  }
+  pass(id) {
+    const s = this.spots.find((p) => p.id === id);
+    if (!s) return;
+    this.setState({ dragging: false, target: null, passed: id, bx: s.x, by: s.y, prompt: s.prompt });
+  }
+  renderVals() {
+    const accent = this.props.accent ?? '#FF7A1A';
+    const { bx, by, dragging, target, passed, prompt } = this.state;
+    const lit = target ?? passed;
+    const tp = this.spots.find((s) => s.id === target);
+    const plays = this.spots.map((s) => {
+      const on = s.id === lit;
+      return {
+        label: s.label, prompt: s.prompt,
+        isProjects: s.id === 'projects', isRunning: s.id === 'running', isDesktop: s.id === 'desktop', isNext: s.id === 'next',
+        pos: 'position: absolute; left: ' + s.x + 'px; top: ' + s.y + 'px; transform: translate(-50%, -22px); display: flex; flex-direction: column; align-items: center; gap: 10px',
+        pick: () => this.pass(s.id),
+        bg: on ? accent : '#222226',
+        fg: on ? '#18181B' : '#A1A1AA',
+        border: on ? '0' : '1.5px solid rgba(255,255,255,0.16)',
+        glow: on ? '0 0 0 7px ' + accent + '2E, 0 0 28px ' + accent + '80' : 'none',
+        scale: on ? 1.08 : 1,
+        weight: on ? 600 : 500,
+        labelColor: on ? accent : '#A1A1AA'
+      };
+    });
+    // Like desktop: the logo leans toward the ball and turns to face it when it crosses to the left.
+    const engaged = dragging || passed;
+    const mx = (bx / 390) * 100;
+    const tilt = engaged ? Math.max(-8, Math.min(8, (mx - 50) * 0.18)) : 0;
+    const flip = engaged && mx < 40 ? -1 : 1;
+    const ease = dragging ? 'none' : 'left .45s cubic-bezier(.2,.8,.2,1), top .45s cubic-bezier(.2,.8,.2,1)';
+    return {
+      plays,
+      prompt,
+      logoStyle: 'width: 60px; height: 60px; object-fit: contain; transition: transform .4s cubic-bezier(.2,.8,.2,1); transform: rotate(' + tilt + 'deg) scaleX(' + flip + ')',
+      aim: dragging
+        ? (tp
+          ? { on: true, x1: this.rest.x, y1: this.rest.y, x2: tp.x, y2: tp.y, color: accent, width: 1.75, dash: 'none' }
+          : { on: true, x1: this.rest.x, y1: this.rest.y, x2: bx, y2: by, color: 'rgba(255,255,255,0.22)', width: 1, dash: '2 7' })
+        : { on: false, x1: 0, y1: 0, x2: 0, y2: 0, color: 'none', width: 0, dash: 'none' },
+      ballHit: 'position: absolute; left: ' + bx + 'px; top: ' + by + 'px; width: 44px; height: 44px; margin: -22px 0 0 -22px; display: grid; place-items: center; touch-action: none; cursor: ' + (dragging ? 'grabbing' : 'grab') + '; transition: ' + ease + '; opacity: ' + (passed && !dragging ? 0 : 1) + '; z-index: 2',
+      ballStyle: 'width: 18px; height: 18px; border-radius: 9px; background: radial-gradient(circle at 35% 30%, #fff8, ' + accent + ' 45%, ' + accent + '); animation: pg-pulse 1.6s ease-in-out infinite; transform: scale(' + (dragging ? 1.25 : 1) + '); transition: transform .15s',
+      composerBorder: passed ? accent + '80' : 'rgba(255,255,255,0.09)',
+      sendBg: prompt.trim() ? accent : '#ECECEE',
+      onDown: (e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        const p = this.point(e);
+        this.setState({ dragging: true, passed: null, bx: p.x, by: p.y, target: this.nearest(p.x, p.y) });
+      },
+      onMove: (e) => {
+        if (!this.state.dragging) return;
+        const p = this.point(e);
+        this.setState({ bx: p.x, by: p.y, target: this.nearest(p.x, p.y) });
+      },
+      onUp: () => {
+        if (!this.state.dragging) return;
+        if (this.state.target) this.pass(this.state.target);
+        else this.setState({ dragging: false, target: null, bx: this.rest.x, by: this.rest.y });
+      },
+      onType: (e) => this.setState({ prompt: e.target.value, passed: e.target.value ? this.state.passed : null, bx: e.target.value ? this.state.bx : this.rest.x, by: e.target.value ? this.state.by : this.rest.y })
+    };
+  }
+}
+</script>
+</body>
+</html>
