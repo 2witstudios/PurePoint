@@ -145,29 +145,40 @@ struct PointGuardPlaysTests {
         #expect(PointGuardCourtGeometry.layout(for: portrait, compact: false, docked: false) == .stacked)
     }
 
-    @Test func theKeyboardNeverTurnsAPortraitCourtWide() {
-        // An 11" iPad in portrait: the keyboard leaves a pane wider than tall, but the resting pane decides.
-        let underKeyboard = CGSize(width: 834, height: 640)
-        let resting = CGSize(width: 834, height: 1090)
-        #expect(
-            PointGuardCourtGeometry.layout(for: underKeyboard, resting: resting, compact: false, docked: true)
-                == .portrait)
-        #expect(PointGuardCourtGeometry.layout(for: underKeyboard, compact: false, docked: true) == .wide)
-    }
-
     @Test func aWidePaneKeepsTheWideCourt() {
-        let landscape = CGSize(width: 900, height: 700)
+        // An 11" iPad in landscape, beside the sidebar and above the docked composer.
+        let landscape = CGSize(width: 874, height: 560)
         #expect(PointGuardCourtGeometry.layout(for: landscape, compact: false, docked: true) == .wide)
-        #expect(PointGuardCourtGeometry.layout(for: landscape, compact: false, docked: false) == .wide)
+        #expect(PointGuardCourtGeometry.layout(for: CGSize(width: 900, height: 700), compact: false, docked: false) == .wide)
     }
 
-    @Test func smallAndCompactPanesStack() {
+    @Test func theIPadNeverStacksThePlays() {
+        let sizes = [
+            CGSize(width: 320, height: 460), CGSize(width: 1000, height: 300), CGSize(width: 500, height: 400),
+            CGSize(width: 500, height: 900),
+        ]
+        for size in sizes {
+            #expect(PointGuardCourtGeometry.layout(for: size, compact: false, docked: true) != .stacked)
+            #expect(PointGuardCourtGeometry.layout(for: size, compact: true, docked: true) != .stacked)
+        }
+        // A pane too narrow for the wide court runs the portrait one.
+        #expect(PointGuardCourtGeometry.layout(for: CGSize(width: 500, height: 400), compact: false, docked: true) == .portrait)
+    }
+
+    @Test func smallAndCompactMacPanesStack() {
         #expect(
-            PointGuardCourtGeometry.layout(for: CGSize(width: 320, height: 460), compact: false, docked: true)
+            PointGuardCourtGeometry.layout(for: CGSize(width: 320, height: 460), compact: false, docked: false)
                 == .stacked)
         #expect(
-            PointGuardCourtGeometry.layout(for: CGSize(width: 500, height: 900), compact: true, docked: true)
+            PointGuardCourtGeometry.layout(for: CGSize(width: 1000, height: 900), compact: true, docked: false)
                 == .stacked)
+    }
+
+    @Test func aDraggedBallReachesOnlyANearbyPlay() {
+        let positions = [CGPoint(x: 100, y: 100), CGPoint(x: 400, y: 100)]
+        let reach = PointGuardCourtGeometry.touchReach
+        #expect(PointGuardCourtGeometry.nearestSlot(to: CGPoint(x: 380, y: 120), among: positions, reach: reach) == 1)
+        #expect(PointGuardCourtGeometry.nearestSlot(to: CGPoint(x: 250, y: 100), among: positions, reach: reach) == nil)
     }
 
     @Test func portraitPlaysSitOnTheirAnchorsUnderTheHeading() {

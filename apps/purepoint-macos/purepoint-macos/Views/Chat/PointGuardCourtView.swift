@@ -5,7 +5,7 @@ private let courtSpace = "pointGuardCourt"
 
 /// Point Guard's new-conversation screen: a half-court with the logo at the top of the key,
 /// the composer under it, and four plays that each send a whole prompt when passed to. On the iPad the composer
-/// docks under the court instead, and a tall pane runs a portrait court.
+/// docks under the court instead, a tall pane runs a portrait court, and a thumb on the logo drags a ball to a play.
 struct PointGuardCourtView<Composer: View>: View {
     let plays: [PointGuardPlay]
     let prompts: [PointGuardPrompt]
@@ -25,26 +25,43 @@ struct PointGuardCourtView<Composer: View>: View {
     /// The bottom of the logo, heading and (on the Mac) composer, which no play may sit on.
     @State private var columnBottom: CGFloat = 0
     @State private var facesLeft = false
+    /// The thumb on the logo (iPad); resets on its own when the system cancels the drag, so the ball can't get stuck.
+    @GestureState private var grab: CGPoint?
+    /// The ball flying to a play after release.
+    @State private var flight: CGPoint?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static var accent: Color { Color(nsColor: Theme.pointGuardAccent) }
 
-    /// The pane's size without the keyboard (iPad only), which decides whether the court stands portrait.
-    @State private var restingSize: CGSize?
+    /// The pane's height without the keyboard, and the docked composer's (iPad only).
+    @State private var restingHeight: CGFloat?
+    @State private var slotHeight: CGFloat = 0
 
     var body: some View {
         if PointGuardCourtGeometry.docksComposer {
             // One composer under every layout. The keyboard, a rotation or a split resize relays out the court above it
             // without rebuilding the text field, which would drop its focus (and the keyboard) the moment it was tapped.
+            // The court keeps its height without the keyboard, as on the phone: the keyboard and composer slide up over
+            // its basket end rather than squeezing it into another layout.
             VStack(spacing: 0) {
-                layouts
-                slot
+                Color.clear
+                    .overlay(alignment: .top) {
+                        layouts.frame(height: restingHeight.map { max(0, $0 - slotHeight) })
+                    }
+                    .clipped()
+                slot.background {
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { slotHeight = proxy.size.height }
+                            .onChange(of: proxy.size.height) { _, height in slotHeight = height }
+                    }
+                }
             }
             .background {
                 GeometryReader { proxy in
                     Color.clear
-                        .onAppear { restingSize = proxy.size }
-                        .onChange(of: proxy.size) { _, size in restingSize = size }
+                        .onAppear { restingHeight = proxy.size.height }
+                        .onChange(of: proxy.size.height) { _, height in restingHeight = height }
                 }
                 .ignoresSafeArea(.keyboard)
             }
@@ -56,14 +73,14 @@ struct PointGuardCourtView<Composer: View>: View {
     private var layouts: some View {
         GeometryReader { proxy in
             switch PointGuardCourtGeometry.layout(
-                for: proxy.size, resting: restingSize, compact: compact, docked: PointGuardCourtGeometry.docksComposer)
+                for: proxy.size, compact: compact, docked: PointGuardCourtGeometry.docksComposer)
             {
             case .wide: court(proxy.size, portrait: false)
             case .portrait: court(proxy.size, portrait: true)
             case .stacked: stacked(height: proxy.size.height)
             }
         }
-        .onDisappear { passTask?.cancel() }
+        .onDisappear { passTask?.cancel(); passTask = nil; passing = nil; flight = nil }
     }
 
     // MARK: - Court
@@ -74,18 +91,22 @@ struct PointGuardCourtView<Composer: View>: View {
             ? PointGuardCourtGeometry.portraitPositions(in: size, headingBottom: columnBottom)
             : PointGuardCourtGeometry.positions(
                 in: size, columnWidth: PurePointTheme.chatContentWidth, composerBottom: columnBottom)
-        let pointer = reduceMotion ? nil : hover
+        let pointer = reduceMotion ? nil : (grab ?? hover)
         let drifted = positions.map { point in
             guard let pointer else { return point }
             return CGPoint(x: point.x + (pointer.x - point.x) * 0.05, y: point.y + (pointer.y - point.y) * 0.05)
         }
-        let near = pointer.flatMap { PointGuardCourtGeometry.nearestSlot(to: $0, among: drifted) }
+        // A dragged ball must come close to a play; the Mac's pointer lights one from further off.
+        let near =
+            grab.flatMap {
+                PointGuardCourtGeometry.nearestSlot(to: $0, among: drifted, reach: PointGuardCourtGeometry.touchReach)
+            } ?? pointer.flatMap { PointGuardCourtGeometry.nearestSlot(to: $0, among: drifted) }
         let lit = passing ?? near
         let logo = PointGuardCourtGeometry.logoPoint(in: size, portrait: portrait)
         let lines = portrait ? AnyShape(PortraitCourtLines(blocks: positions[2].y)) : AnyShape(CourtLines())
-        // The logo faces the lit play, else the pointer. A turn is a discrete change, so it follows the raw hover
-        // under Reduce Motion too, just without animating.
-        let facing = lit.map { drifted[$0] } ?? hover
+        // The logo faces the lit play, else the ball or pointer. A turn is a discrete change, so it follows the raw
+        // ball or hover under Reduce Motion too, just without animating.
+        let facing = lit.map { drifted[$0] } ?? grab ?? hover
         return ZStack(alignment: .topLeading) {
             lines.stroke(Color.primary.opacity(0.065), lineWidth: 1.25)
             if let pointer {
@@ -95,16 +116,21 @@ struct PointGuardCourtView<Composer: View>: View {
                 RadialGradient(
                     colors: [Self.accent.opacity(0.08), .clear], center: center, startRadius: 0, endRadius: 420)
             }
-            passLine(from: logo, to: lit.map { drifted[$0] })
+            passLine(from: logo, to: lit.map { drifted[$0] } ?? grab, aimed: lit != nil)
             ForEach(plays) { play in
                 playButton(play, lit: lit == play.slot)
                     .position(drifted[play.slot])
                     .animation(.spring(response: 0.35, dampingFraction: 0.8), value: drifted[play.slot])
             }
             // Above the plays, so a play squeezed by a short pane can never take a click meant for the composer.
-            column(size, pointer: pointer, portrait: portrait)
+            column(size, pointer: pointer, portrait: portrait, pass: pass(among: drifted, landing: positions))
+            if let ball = grab ?? flight {
+                self.ball.position(ball)
+            }
         }
         .frame(width: size.width, height: size.height)
+        .sensoryFeedback(trigger: grab == nil ? nil : near) { _, new in new == nil ? nil : .selection }
+        .sensoryFeedback(trigger: passing) { _, new in new == nil ? nil : .impact(weight: .light) }
         // A resize can carry the logo past a still pointer, so the logo's position re-decides the facing too.
         .onChange(of: facing) { _, target in turn(toward: target, logoX: logo.x) }
         .onChange(of: logo.x) { _, logoX in turn(toward: facing, logoX: logoX) }
@@ -122,24 +148,64 @@ struct PointGuardCourtView<Composer: View>: View {
         facesLeft = PointGuardCourtGeometry.facesLeft(toward: target, logoX: logoX, current: facesLeft)
     }
 
-    private func passLine(from logo: CGPoint, to target: CGPoint?) -> some View {
+    /// A solid pass to the lit play, or a dotted one to a ball that isn't on a play yet.
+    private func passLine(from logo: CGPoint, to target: CGPoint?, aimed: Bool) -> some View {
         ZStack {
             if let target {
                 Path {
                     $0.move(to: logo); $0.addLine(to: target)
                 }
-                .stroke(Self.accent, style: StrokeStyle(lineWidth: 1.75, lineCap: .round))
+                .stroke(
+                    aimed ? Self.accent : Color.primary.opacity(0.22),
+                    style: StrokeStyle(lineWidth: aimed ? 1.75 : 1, lineCap: .round, dash: aimed ? [] : [2, 7]))
             }
         }
         .allowsHitTesting(false).accessibilityHidden(true)
     }
 
-    private func column(_ size: CGSize, pointer: CGPoint?, portrait: Bool) -> some View {
+    private var ball: some View {
+        ZStack {
+            Circle().fill(Color.primary.opacity(0.07)).frame(width: 56, height: 56)
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [Color.white.opacity(0.55), Self.accent], center: UnitPoint(x: 0.35, y: 0.3),
+                        startRadius: 0, endRadius: 9)
+                )
+                .frame(width: 18, height: 18).scaleEffect(1.25)
+                .shadow(color: Self.accent.opacity(0.6), radius: 8)
+        }
+        .allowsHitTesting(false).accessibilityHidden(true)
+    }
+
+    /// A thumb on the logo picks up a ball; released near a play, the ball flies there and the play runs.
+    private func pass(among drifted: [CGPoint], landing positions: [CGPoint]) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(courtSpace))
+            .updating($grab) { value, grab, _ in if canRun { grab = value.location } }
+            .onChanged { _ in
+                // A new grab takes the ball back from a pass still in the air.
+                guard canRun, passTask != nil else { return }
+                passTask?.cancel(); passTask = nil; passing = nil; flight = nil
+            }
+            .onEnded { value in
+                guard canRun,
+                    let slot = PointGuardCourtGeometry.nearestSlot(
+                        to: value.location, among: drifted, reach: PointGuardCourtGeometry.touchReach),
+                    let play = plays.first(where: { $0.slot == slot })
+                else { return }
+                run(play, flying: (value.location, positions[slot]))
+            }
+    }
+
+    private func column(_ size: CGSize, pointer: CGPoint?, portrait: Bool, pass: some Gesture) -> some View {
         let diameter: CGFloat = portrait ? 96 : 128
         return VStack(spacing: 0) {
             logoMark(
                 diameter: diameter, tilt: pointer.map { PointGuardCourtGeometry.tilt(toward: $0, in: size) } ?? 0,
                 facesLeft: facesLeft)
+                .contentShape(Circle())
+                // The Mac's pointer already passes by hovering.
+                .gesture(pass, isEnabled: PointGuardCourtGeometry.docksComposer)
             // The portrait heading breaks into two lines, as on the phone.
             heading(size: portrait ? 30 : 40).frame(maxWidth: portrait ? 300 : nil).padding(.top, portrait ? 24 : 36)
             if !PointGuardCourtGeometry.docksComposer {
@@ -291,15 +357,19 @@ struct PointGuardCourtView<Composer: View>: View {
         }
     }
 
-    /// Draws the pass to the play, then sends once it lands.
-    private func run(_ play: PointGuardPlay) {
+    /// Draws the pass to the play, then sends once it lands. A ball released from the thumb flies there first.
+    private func run(_ play: PointGuardPlay, flying path: (from: CGPoint, to: CGPoint)? = nil) {
         guard canRun, passing == nil else { return }
         guard !reduceMotion else { return onRun(play) }
         passing = play.slot
+        if let path {
+            flight = path.from
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { flight = path.to }
+        }
         passTask = Task {
-            defer { passing = nil }
-            // A pass interrupted by the court going away (a new chat, a resumed one) never sends.
+            // A pass interrupted by the court going away (a new chat, a resumed one) or a new grab never sends.
             guard (try? await Task.sleep(for: .milliseconds(450))) != nil, !Task.isCancelled else { return }
+            passing = nil; flight = nil; passTask = nil
             onRun(play)
         }
     }
