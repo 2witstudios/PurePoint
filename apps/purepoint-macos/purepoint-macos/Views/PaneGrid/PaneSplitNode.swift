@@ -31,6 +31,7 @@ nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
         }
     }
 
+    /// The pane in the grid's top-left corner, whose tab strip starts at the window's leading edge.
     var firstLeafId: Int {
         switch self {
         case .leaf(let id): return id

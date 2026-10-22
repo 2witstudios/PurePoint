@@ -212,4 +212,13 @@ enum PointGuardCourtGeometry {
         guard size.width > 0 else { return 0 }
         return max(-8, min(8, (Double(point.x / size.width) * 100 - 50) * 0.18))
     }
+
+    /// How far either side of the logo a target must be before the logo turns to face it.
+    static let facingDeadZone: CGFloat = 24
+
+    /// The logo is drawn facing right. It turns to face a target clearly to one side, and otherwise keeps its facing.
+    static func facesLeft(toward target: CGPoint?, logoX: CGFloat, current: Bool) -> Bool {
+        guard let target, abs(target.x - logoX) > facingDeadZone else { return current }
+        return target.x < logoX
+    }
 }

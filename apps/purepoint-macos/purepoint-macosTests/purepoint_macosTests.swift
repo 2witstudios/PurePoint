@@ -272,6 +272,28 @@ struct PaneSplitNodeTests {
         #expect(tree.topTrailingLeafId == 2)
     }
 
+    // MARK: Top-leading leaf (the pane under the traffic lights while the sidebar is hidden)
+
+    @Test func leftPaneOfAVerticalSplitIsTopLeading() {
+        let tree = PaneSplitNode.split(axis: .vertical, ratio: 0.5, first: .leaf(id: 0), second: .leaf(id: 1))
+        #expect(tree.firstLeafId == 0)
+    }
+
+    @Test func topPaneOfAHorizontalSplitIsTopLeading() {
+        let tree = PaneSplitNode.split(axis: .horizontal, ratio: 0.5, first: .leaf(id: 1), second: .leaf(id: 0))
+        #expect(tree.firstLeafId == 1)
+    }
+
+    @Test func nestedGridResolvesTheTopLeftPane() {
+        // Two rows; the top row is split into a left (3) and right (2) pane.
+        let tree = PaneSplitNode.split(
+            axis: .horizontal, ratio: 0.5,
+            first: .split(axis: .vertical, ratio: 0.5, first: .leaf(id: 3), second: .leaf(id: 2)),
+            second: .leaf(id: 0)
+        )
+        #expect(tree.firstLeafId == 3)
+    }
+
     // MARK: Row count / canSplit
 
     @Test func horizontalSplitCountsRows() {
