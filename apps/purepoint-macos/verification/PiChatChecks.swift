@@ -86,6 +86,17 @@ extension ChatModel {
             model.transcriptRows.contains {
                 if case .activity = $0 { return true }; return false
             })
+        // A court play sends its own prompt and leaves the half-typed draft alone.
+        model.draft = "Half-typed draft"
+        precondition(model.canSendPlay)
+        model.submit(play: "Catch me up on everything")
+        try await wait("play answered") {
+            let messages = model.snapshot?.messages ?? []
+            return model.submissions.last?.status == "Accepted" && !model.busy
+                && messages.contains { $0.role == "user" && $0.text == "Catch me up on everything" }
+                && messages.last?.role == "assistant"
+        }
+        precondition(model.draft == "Half-typed draft", "A play must not touch the draft")
         let userCount = model.snapshot!.messages.filter { $0.role == "user" }.count
         model.disconnect()
         await model.connectFixture(url, secret: env["POINTGUARD_FIXTURE_TOKEN"]!)
@@ -125,6 +136,7 @@ extension ChatModel {
         precondition(model.browsing?.messages.first?.text == "History is read-only.")
         model.draft = "Draft for the live conversation"
         precondition(!model.canSend, "Browsing history must not send into the live conversation")
+        precondition(!model.canSendPlay, "Browsing history must not run a play")
         let submissionsBeforeBrowseSend = model.submissions.count
         model.submit(mode: "send")
         precondition(model.submissions.count == submissionsBeforeBrowseSend)
