@@ -100,9 +100,9 @@ Everything in the bridge and runtime packaging that assumes macOS or the Mac app
 
 #### [LPH-001] Node build and libc floor
 
-Option A: official nodejs.org `linux-x64`/`linux-arm64` tarballs (glibc), the same 22.23.3 that the Mac pins.
+Option A: official nodejs.org `linux-x64`/`linux-arm64` tarballs (glibc), the same 26.12.1 that the Mac pins.
 - Pro: the same upstream, version and SHA256SUMS flow as `node-release.json`; covers Debian/Ubuntu/Fedora/RHEL 8+, Amazon Linux 2023 and Raspberry Pi OS 64-bit.
-- Con: needs glibc ≥ 2.28 (Node 22's Linux build floor). Alpine/musl hosts are unsupported, unlike the static musl `pu` binaries (DIST-004).
+- Con: needs glibc ≥ 2.28 (Node 26's Linux build floor, unchanged from 22). Alpine/musl hosts are unsupported, unlike the static musl `pu` binaries (DIST-004).
 
 Option B: unofficial-builds musl Node.
 - Pro: runs on Alpine.

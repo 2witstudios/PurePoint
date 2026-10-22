@@ -257,7 +257,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_packaging_uses_the_same_node_as_ci(self):
         node = [step["with"] for step in steps(self.jobs["build-macos"]) if step.get("uses", "").startswith("actions/setup-node@")]
         self.assertEqual(len(node), 1)
-        self.assertEqual(str(node[0]["node-version"]), "22.23.3")
+        self.assertEqual(str(node[0]["node-version"]), "26.12.1")
         self.assertIs(node[0]["package-manager-cache"], False)
 
     def test_build_job_produces_an_unsigned_app(self):

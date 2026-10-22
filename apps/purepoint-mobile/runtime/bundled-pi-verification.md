@@ -1,6 +1,6 @@
 # Bundled Pi verification — 2026-10-10
 
-Point Guard owns its Pi runtime. Users install and update PurePoint; they do not need to install or update Node, npm, or Pi separately. The app manifest pins Pi 1.1.0 and Node 22.23.3. The native owner launches the explicit bundled Node helper; the bridge launches that same executable with its bundled Pi adapter and package. Canonical Pi credentials and sessions remain outside the app so app updates preserve them.
+Point Guard owns its Pi runtime. Users install and update PurePoint; they do not need to install or update Node, npm, or Pi separately. The app manifest pins Pi 1.1.0 and Node 26.12.1. The native owner launches the explicit bundled Node helper; the bridge launches that same executable with its bundled Pi adapter and package. Canonical Pi credentials and sessions remain outside the app so app updates preserve them.
 
 Managed RPC startup/exit recovery now directs users to Point Guard setup and PurePoint retry/update/reinstallation. Development bridge startup retains npm guidance. Missing-model feedback asks for provider/model configuration without requiring a separate terminal Pi installation.
 
