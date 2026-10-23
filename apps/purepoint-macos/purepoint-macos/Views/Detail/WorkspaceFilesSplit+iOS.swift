@@ -89,9 +89,13 @@ struct WorkspaceFilesSplit<Content: View, Sidebar: View>: View {
     }
 }
 
-/// The divider's hit area: transparent, and the iPad pointer becomes a vertical bar over it, as
-/// over the system split view's divider (SwiftUI's `columnResize` pointer is macOS-only).
-private struct SplitDividerPointerArea: UIViewRepresentable {
+/// A divider's hit area: transparent, and the iPad pointer becomes a bar along the divider over
+/// it, as over the system split view's divider (SwiftUI's `columnResize` pointer is macOS-only).
+/// Also the hit area of the pane grid's `DraggableSplit` dividers.
+struct SplitDividerPointerArea: UIViewRepresentable {
+    /// The split's axis: `.vertical` (side by side) draws an upright bar.
+    var axis: PaneSplitNode.Axis = .vertical
+
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .clear
@@ -99,13 +103,22 @@ private struct SplitDividerPointerArea: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.axis = axis
+    }
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(axis: axis) }
 
     final class Coordinator: NSObject, UIPointerInteractionDelegate {
+        var axis: PaneSplitNode.Axis
+
+        init(axis: PaneSplitNode.Axis) {
+            self.axis = axis
+        }
+
         func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
-            UIPointerStyle(shape: .roundedRect(CGRect(x: 0, y: 0, width: 4, height: 28), radius: 2))
+            let size = axis == .vertical ? CGSize(width: 4, height: 28) : CGSize(width: 28, height: 4)
+            return UIPointerStyle(shape: .roundedRect(CGRect(origin: .zero, size: size), radius: 2))
         }
     }
 }
