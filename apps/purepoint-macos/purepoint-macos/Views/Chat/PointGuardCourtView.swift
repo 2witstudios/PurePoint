@@ -107,14 +107,35 @@ struct PointGuardCourtView<Composer: View>: View {
         // The logo faces the lit play, else the ball or pointer. A turn is a discrete change, so it follows the raw
         // ball or hover under Reduce Motion too, just without animating.
         let facing = lit.map { drifted[$0] } ?? grab ?? hover
-        return ZStack(alignment: .topLeading) {
+        let layers = courtLayers(
+            size, portrait: portrait, lines: lines, pointer: pointer, logo: logo, lit: lit, drifted: drifted,
+            positions: positions)
+        return
+            layers
+            .frame(width: size.width, height: size.height)
+            .modifier(CourtFeedback(near: grab == nil ? nil : near, passing: passing))
+            // A resize can carry the logo past a still pointer, so the logo's position re-decides the facing too.
+            .onChange(of: facing) { _, target in turn(toward: target, logoX: logo.x) }
+            .onChange(of: logo.x) { _, logoX in turn(toward: facing, logoX: logoX) }
+            .contentShape(Rectangle())
+            .coordinateSpace(.named(courtSpace))
+            .onContinuousHover(coordinateSpace: .named(courtSpace)) { phase in
+                switch phase {
+                case .active(let point): hover = point
+                case .ended: hover = nil
+                }
+            }
+    }
+
+    // Split out of `court` so the compiler can type-check each piece in reasonable time.
+    private func courtLayers(
+        _ size: CGSize, portrait: Bool, lines: AnyShape, pointer: CGPoint?, logo: CGPoint, lit: Int?,
+        drifted: [CGPoint], positions: [CGPoint]
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
             lines.stroke(Color.primary.opacity(0.065), lineWidth: 1.25)
             if let pointer {
-                let center = UnitPoint(x: pointer.x / size.width, y: pointer.y / size.height)
-                lines.stroke(Self.accent, lineWidth: 1.5)
-                    .mask(RadialGradient(colors: [.black, .clear], center: center, startRadius: 0, endRadius: 260))
-                RadialGradient(
-                    colors: [Self.accent.opacity(0.08), .clear], center: center, startRadius: 0, endRadius: 420)
+                pointerGlow(lines: lines, at: pointer, in: size)
             }
             passLine(from: logo, to: lit.map { drifted[$0] } ?? grab, aimed: lit != nil)
             ForEach(plays) { play in
@@ -128,20 +149,14 @@ struct PointGuardCourtView<Composer: View>: View {
                 self.ball.position(ball)
             }
         }
-        .frame(width: size.width, height: size.height)
-        .sensoryFeedback(trigger: grab == nil ? nil : near) { _, new in new == nil ? nil : .selection }
-        .sensoryFeedback(trigger: passing) { _, new in new == nil ? nil : .impact(weight: .light) }
-        // A resize can carry the logo past a still pointer, so the logo's position re-decides the facing too.
-        .onChange(of: facing) { _, target in turn(toward: target, logoX: logo.x) }
-        .onChange(of: logo.x) { _, logoX in turn(toward: facing, logoX: logoX) }
-        .contentShape(Rectangle())
-        .coordinateSpace(.named(courtSpace))
-        .onContinuousHover(coordinateSpace: .named(courtSpace)) { phase in
-            switch phase {
-            case .active(let point): hover = point
-            case .ended: hover = nil
-            }
-        }
+    }
+
+    @ViewBuilder
+    private func pointerGlow(lines: AnyShape, at pointer: CGPoint, in size: CGSize) -> some View {
+        let center = UnitPoint(x: pointer.x / size.width, y: pointer.y / size.height)
+        lines.stroke(Self.accent, lineWidth: 1.5)
+            .mask(RadialGradient(colors: [.black, .clear], center: center, startRadius: 0, endRadius: 260))
+        RadialGradient(colors: [Self.accent.opacity(0.08), .clear], center: center, startRadius: 0, endRadius: 420)
     }
 
     private func turn(toward target: CGPoint?, logoX: CGFloat) {
@@ -446,5 +461,21 @@ private struct PortraitCourtLines: Shape {
         path.addEllipse(in: circle(CGPoint(x: rect.midX, y: laneTop), 60))
         // The basket end runs on past the bottom edge; keep only what lies on the court.
         return path.lineIntersection(Path(rect))
+    }
+}
+
+/// A tick as a dragged ball comes onto a play, and a tap as a pass is thrown.
+private struct CourtFeedback: ViewModifier {
+    let near: Int?
+    let passing: Int?
+
+    func body(content: Content) -> some View {
+        content
+            .sensoryFeedback(trigger: near) { (_: Int?, new: Int?) -> SensoryFeedback? in
+                new == nil ? nil : .selection
+            }
+            .sensoryFeedback(trigger: passing) { (_: Int?, new: Int?) -> SensoryFeedback? in
+                new == nil ? nil : .impact(weight: .light)
+            }
     }
 }
