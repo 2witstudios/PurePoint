@@ -153,7 +153,7 @@ All paths are absolute paths on the daemon host. Each is canonicalized and must 
 
 A client sends a file to the daemon's machine in order, in chunks small enough for the 1 MB request line (the app sends 512 KiB of raw data per chunk). `offset` must equal the bytes already received for that `upload_id`, or the daemon answers `Error { code: "offset_mismatch" }`; offset 0 starts the upload over. The file is written to `~/.pu/attachments/<upload_id>/<name>` (directory mode 0700), where `name` is reduced to a plain file name: no directory parts, control characters or leading dots, at most 200 bytes, `attachment` if nothing is left. Bytes collect in `.partial` and are renamed to the name on `done`. Uploads are limited to 64 MiB (`Error { code: "too_large" }`, and the upload is discarded). Each new upload first removes upload directories untouched for 7 days. The directory is outside every repository, so attachments never appear in git status or a diff.
 
-The app then types the returned path, shell-escaped, into the agent's terminal with `input` (`submit: false`), the same as a local file drop. Socket permissions (or the SSH forward) are the only auth, as for every other request.
+The app then types the returned path, shell-escaped, into the agent's terminal with `input` (`submit: false`), the same as a local file drop. The iPad's agent panes do the same for picked photos and files, pasted images and drops (REQ-IPAD-041). The iPhone has no daemon connection: the Point Guard bridge relays its chunks with `agent.attach` (`apps/purepoint-mobile/docs/contract.md`), and the phone adds the returned paths to its agent prompt draft. Socket permissions (or the SSH forward) are the only auth, as for every other request.
 
 ### CLI
 

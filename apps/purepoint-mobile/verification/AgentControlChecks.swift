@@ -30,6 +30,11 @@ import Foundation
         try await AgentControlScenarios.workspaceGrantToggleDoesNotInvalidatePrompt()
         try await AgentControlScenarios.duplicateInventoryKeepsFirstScopedIdentity()
         try await AgentControlScenarios.heldWorkspaceSpawnReceiptPreservesDurableRecoveryAndNeverReplays()
+        try await AgentControlScenarios.attachmentsUploadInChunksAndAddPathsToTheDraft()
+        precondition(AgentAttachment(name: "e", data: Data()).chunks.map(\.done) == [true])
+        precondition(AgentAttachment.draft("", adding: ["/a b"]) == "'/a b' ")
+        precondition(AgentAttachment.draft("see\n", adding: ["/p"]) == "see\n'/p' ")
+        precondition(AgentAttachment.draft("keep", adding: []) == "keep")
         print("Phone control lifecycle and domain checks passed")
     }
 }

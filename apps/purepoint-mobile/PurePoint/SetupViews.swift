@@ -7,6 +7,36 @@ import UniformTypeIdentifiers
 import PDFKit
 import ImageIO
 
+/// Prepares photos and files for an agent, which reads them by path on its own machine.
+enum AgentAttachmentImport {
+    /// JPEG with the long edge at most 2048 px: quick to send from a phone, sharp enough for an agent to read.
+    static func photo(_ data: Data, name: String) throws -> AgentAttachment {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { throw ComposerError("This photo could not be opened.") }
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: 2048]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+            let jpeg = UIImage(cgImage: image).jpegData(compressionQuality: 0.85)
+        else { throw ComposerError("This photo could not be prepared.") }
+        return AgentAttachment(name: name, data: jpeg)
+    }
+    /// A file as it is, up to `AgentAttachment.maxBytes`. Blocking: call it off the main thread.
+    static func file(_ url: URL) throws -> AgentAttachment {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+        let name = String(url.lastPathComponent.prefix(120))
+        guard values.isRegularFile == true else { throw ComposerError("\(name) is not a file.") }
+        guard (values.fileSize ?? Int.max) <= AgentAttachment.maxBytes else { throw ComposerError("\(name) is larger than 20 MB.") }
+        return AgentAttachment(name: name, data: try Data(contentsOf: url, options: .mappedIfSafe))
+    }
+    /// "Photo 2026-10-23 at 14.05.09.jpg", numbered when several are picked together.
+    static func photoName(at date: Date = Date(), index: Int? = nil) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        return "Photo \(formatter.string(from: date))\(index.map { " \($0)" } ?? "").jpg"
+    }
+}
+
 enum AttachmentImport {
     static func image(_ data: Data, name: String) throws -> ComposerAttachment {
         guard data.count <= 20 * 1024 * 1024, let source = CGImageSourceCreateWithData(data as CFData, nil) else { throw ComposerError("Choose an image smaller than 20 MB.") }

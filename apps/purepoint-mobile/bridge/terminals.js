@@ -30,7 +30,10 @@ const ops = new Set([
   "terminal.raw",
   "terminal.size",
   "agent.prompt",
+  "agent.attach",
 ]);
+/** Raw bytes per `agent.attach` chunk. Base64 stays under the daemon connection's 256 KiB write backlog. */
+export const attachChunkBytes = 128 * 1024;
 export const terminalOperation = (op) => ops.has(op);
 
 /** Each instance is private to one authenticated WebSocket, including same-device sockets. */
@@ -269,6 +272,7 @@ export function terminalConnection({
         "terminal.raw",
         "terminal.size",
         "agent.prompt",
+        "agent.attach",
       ].includes(r.op),
       async (signal, check) => {
         if (r.op === "agents") {
@@ -340,6 +344,60 @@ export function terminalConnection({
             check();
           }
           return { machines: result };
+        }
+        if (r.op === "agent.attach") {
+          // One chunk of a file for the agent's machine (daemon `attach_file`).
+          // The phone types the returned path; nothing here writes to the terminal.
+          if (
+            typeof r.machine !== "string" ||
+            typeof r.agentId !== "string" ||
+            !/^[A-Za-z0-9_-]{1,128}$/.test(r.agentId) ||
+            typeof r.uploadId !== "string" ||
+            !/^[A-Za-z0-9_-]{1,64}$/.test(r.uploadId) ||
+            typeof r.name !== "string" ||
+            !r.name.trim() ||
+            Buffer.byteLength(r.name) > 200 ||
+            !Number.isSafeInteger(r.offset) ||
+            r.offset < 0 ||
+            typeof r.done !== "boolean" ||
+            typeof r.data !== "string"
+          )
+            throw new Error(
+              "Attachment requires machine, agent, upload, name, offset, data and done",
+            );
+          const bytes = Buffer.from(r.data, "base64");
+          if (
+            bytes.length > attachChunkBytes ||
+            bytes.toString("base64") !== r.data ||
+            (!bytes.length && !r.done)
+          )
+            throw new Error(
+              `Attachment chunks are canonical base64 up to ${attachChunkBytes} bytes`,
+            );
+          const machine = await daemons.resolve(r.machine);
+          check();
+          if (r.offset === 0) {
+            const { inventory } = await daemons.inspect(machine, { signal });
+            check();
+            if (!inventory.agents.some((a) => a.id === r.agentId))
+              throw new Error("Agent not found");
+          }
+          const reply = await daemonRequest(
+            machine.socket,
+            {
+              type: "attach_file",
+              upload_id: r.uploadId,
+              name: r.name,
+              offset: r.offset,
+              data_base64: r.data,
+              done: r.done,
+            },
+            { signal, timeout: 15000 },
+          );
+          check();
+          if (reply.type !== "attach_file_result")
+            throw new Error("Agent daemon does not support attachments");
+          return { received: reply.received, path: reply.path ?? null };
         }
         if (r.op === "terminal.open" || r.op === "agent.prompt") {
           if (

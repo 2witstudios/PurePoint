@@ -87,6 +87,10 @@ final class AgentControlTests: XCTestCase {
 }
 
 extension AgentControlTests {
+    @MainActor func testGivenAttachedFilesShouldUploadInChunksAndAddQuotedPathsToTheDraft() async throws {
+        try await AgentControlScenarios.attachmentsUploadInChunksAndAddPathsToTheDraft()
+    }
+
     @MainActor func testGivenNewerDraftShouldRetainFailedOriginalAcrossNavigationHostsAndRelaunch() async throws {
         try await AgentControlScenarios.failedOriginalAndNewerDraftSurviveNavigationHostChangeAndRelaunch()
     }

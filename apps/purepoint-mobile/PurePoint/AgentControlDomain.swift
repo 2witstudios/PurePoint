@@ -119,6 +119,11 @@ struct AgentPromptResult: Decodable, Sendable {
     let reason: String?
 }
 
+struct AgentAttachReply: Decodable, Sendable {
+    let received: Int
+    let path: String?
+}
+
 struct AgentSubmission: Equatable, Sendable {
     let id: UUID
     let text: String
@@ -205,6 +210,45 @@ struct AgentPendingOpen: Sendable {
         }
         events.append(event); bytes += event.byteCount
     }
+}
+
+/// A photo or file sent to the agent's machine (bridge `agent.attach`), which the agent
+/// then reads by the path the phone puts in its draft, as Claude Code and Codex take images.
+struct AgentAttachment: Sendable {
+    /// Raw bytes per `agent.attach` request; matches the bridge's chunk limit.
+    static let chunkBytes = 128 * 1024
+    /// Keeps a single attachment reasonable over a phone connection.
+    static let maxBytes = 20 * 1024 * 1024
+    let name: String
+    let data: Data
+
+    /// The `agent.attach` chunks that carry `data`, in order. An empty file is one empty last chunk.
+    var chunks: [(offset: Int, data: Data, done: Bool)] {
+        guard !data.isEmpty else { return [(0, Data(), true)] }
+        return stride(from: 0, to: data.count, by: Self.chunkBytes).map { offset in
+            let end = min(offset + Self.chunkBytes, data.count)
+            return (offset, data.subdata(in: data.startIndex + offset..<data.startIndex + end), end == data.count)
+        }
+    }
+
+    /// Single-quoted for the shell, as the Mac types dropped paths.
+    static func escaped(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// `draft` with the uploaded paths added at the end, separated by a space.
+    static func draft(_ draft: String, adding paths: [String]) -> String {
+        let line = paths.map(escaped).joined(separator: " ")
+        guard !line.isEmpty else { return draft }
+        if draft.isEmpty || draft.last?.isWhitespace == true { return draft + line + " " }
+        return draft + " " + line + " "
+    }
+}
+
+enum AgentAttachState: Equatable, Sendable {
+    case idle
+    case uploading(String)
+    case failed(String)
 }
 
 struct AgentControlFailure: LocalizedError, Sendable {

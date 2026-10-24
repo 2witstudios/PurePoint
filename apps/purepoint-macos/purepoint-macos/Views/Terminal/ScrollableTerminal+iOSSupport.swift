@@ -31,6 +31,19 @@ final class PaneTerminalView: TerminalView {
         }
     }
 
+    /// Takes a pasted image (an image and no text on the pasteboard) instead of SwiftTerm's
+    /// text-only paste. Set by the host while it can upload files to the agent's machine.
+    var pasteImage: ((Data) -> Void)?
+
+    override func paste(_ sender: Any?) {
+        let pasteboard = UIPasteboard.general
+        if let pasteImage, !pasteboard.hasStrings, pasteboard.hasImages, let png = pasteboard.image?.pngData() {
+            pasteImage(png)
+            return
+        }
+        super.paste(sender)
+    }
+
     override func scrolled(source terminal: Terminal, yDisp: Int) {
         let wasScrolledAway =
             !terminal.isCurrentBufferAlternate

@@ -1,7 +1,9 @@
 #if os(iOS)
+import PhotosUI
 import SwiftTerm
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// UIViewRepresentable bridge that creates a ScrollableTerminal connected to
 /// the daemon for an agent. Handles lazy creation and deferred start
@@ -36,7 +38,7 @@ class TerminalPaneNSView: UIView {
     /// The agent's daemon. Set by `TerminalViewCache`; on iPad every agent is remote.
     var client = DaemonEndpoint.local.makeClient() {
         didSet {
-            terminal?.acceptsFileDrops = false
+            terminal?.attachmentClient = client
             terminal?.usesRemoteHost = true
         }
     }
@@ -53,6 +55,8 @@ class TerminalPaneNSView: UIView {
     private(set) var isAgentGone = false
     private var heartbeatTimer: Timer?
     private var spinner: UIActivityIndicatorView?
+    /// Sends photos and files to the agent's machine and types their paths.
+    private var attachButton: UIButton?
     private var spinnerShownAt = Date()
 
     init(agent: AgentModel) {
@@ -70,9 +74,12 @@ class TerminalPaneNSView: UIView {
         tv.clipsToBounds = true
         tv.pinToEdges(of: self)
         tv.terminalView.hideCursor(source: tv.terminalView.getTerminal())
-        tv.acceptsFileDrops = false
+        tv.attachmentClient = client
         tv.usesRemoteHost = true
+        tv.onAttachingChanged = { [weak self] attaching in self?.showAttaching(attaching) }
+        tv.onAttachmentError = { [weak self] message in self?.showAttachmentError(message) }
         terminal = tv
+        installAttachButton()
 
         // Show a small spinner while waiting for first output
         let indicator = UIActivityIndicatorView(style: .medium)
@@ -170,6 +177,7 @@ class TerminalPaneNSView: UIView {
                 self?.didStreamEnd = streamEnded
                 if agentGone {
                     self?.isAgentGone = true
+                    self?.attachButton?.isHidden = true
                     self?.heartbeatTimer?.invalidate()
                     self?.heartbeatTimer = nil
                 }
@@ -235,6 +243,66 @@ class TerminalPaneNSView: UIView {
         }
     }
 
+    // MARK: - Attachments
+
+    private func installAttachButton() {
+        var config = UIButton.Configuration.glass()
+        config.image = UIImage(systemName: "paperclip")
+        config.cornerStyle = .capsule
+        config.buttonSize = .small
+        let button = UIButton(configuration: config)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.accessibilityLabel = "Attach photos or files"
+        button.showsMenuAsPrimaryAction = true
+        button.menu = UIMenu(children: [
+            UIAction(title: "Photos", image: UIImage(systemName: "photo")) { [weak self] _ in self?.presentPhotoPicker() },
+            UIAction(title: "Files", image: UIImage(systemName: "doc")) { [weak self] _ in self?.presentFilePicker() },
+        ])
+        addSubview(button)
+        NSLayoutConstraint.activate([
+            button.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            button.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+        ])
+        attachButton = button
+    }
+
+    private func showAttaching(_ attaching: Bool) {
+        attachButton?.configuration?.showsActivityIndicator = attaching
+        attachButton?.isEnabled = !attaching
+    }
+
+    private func showAttachmentError(_ message: String) {
+        let alert = UIAlertController(title: "Couldn't attach", message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        presenter?.present(alert, animated: true)
+    }
+
+    /// The view controller showing this pane, which presents its pickers.
+    private var presenter: UIViewController? {
+        var responder: UIResponder? = self
+        while let next = responder?.next {
+            if let controller = next as? UIViewController { return controller }
+            responder = next
+        }
+        return nil
+    }
+
+    private func presentPhotoPicker() {
+        var config = PHPickerConfiguration()
+        config.filter = .images
+        config.selectionLimit = 10
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = self
+        presenter?.present(picker, animated: true)
+    }
+
+    private func presentFilePicker() {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
+        picker.allowsMultipleSelection = true
+        picker.delegate = self
+        presenter?.present(picker, animated: true)
+    }
+
     func tearDown() {
         removeSpinner()
         heartbeatTimer?.invalidate()
@@ -242,6 +310,41 @@ class TerminalPaneNSView: UIView {
         attachTask?.cancel()
         attachTask = nil
         terminal?.tearDown()
+    }
+}
+
+extension TerminalPaneNSView: PHPickerViewControllerDelegate, UIDocumentPickerDelegate {
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        picker.dismiss(animated: true)
+        guard !results.isEmpty else { return }
+        let providers = results.map(\.itemProvider)
+        let date = Date()
+        Task { [weak self] in
+            do {
+                var files: [(data: Data, name: String)] = []
+                for (index, provider) in providers.enumerated() {
+                    let name = AttachmentUpload.photoName(at: date, index: providers.count > 1 ? index + 1 : nil)
+                    let data = try await ScrollableTerminal.loadData(provider, type: .image)
+                    files.append((try await Task.detached { try AttachmentUpload.photoJPEG(data, name: name) }.value, name))
+                }
+                self?.terminal?.attach(files)
+            } catch {
+                self?.showAttachmentError(error.localizedDescription)
+            }
+        }
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        // Picked as copies, so these files are readable without security-scoped access.
+        Task { [weak self] in
+            let read = await Task.detached {
+                Result { try urls.map { (data: try AttachmentUpload.readFile(at: $0), name: $0.lastPathComponent) } }
+            }.value
+            switch read {
+            case .success(let files): self?.terminal?.attach(files)
+            case .failure(let error): self?.showAttachmentError(error.localizedDescription)
+            }
+        }
     }
 }
 #endif

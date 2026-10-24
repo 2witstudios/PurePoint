@@ -107,7 +107,38 @@ struct PointGuardCourtView<Composer: View>: View {
         // The logo faces the lit play, else the ball or pointer. A turn is a discrete change, so it follows the raw
         // ball or hover under Reduce Motion too, just without animating.
         let facing = lit.map { drifted[$0] } ?? grab ?? hover
-        return ZStack(alignment: .topLeading) {
+        let nearWhileGrabbed: Int? = grab == nil ? nil : near
+        // Built in steps: as one expression, the layers and all their modifiers take the compiler too long to type-check.
+        let layers = courtLayers(
+            size, portrait: portrait, lines: lines, pointer: pointer, logo: logo, lit: lit,
+            drifted: drifted, positions: positions)
+        let felt = layers
+            .frame(width: size.width, height: size.height)
+            .sensoryFeedback(trigger: nearWhileGrabbed) { _, new -> SensoryFeedback? in new == nil ? nil : .selection }
+            .sensoryFeedback(trigger: passing) { _, new -> SensoryFeedback? in
+                new == nil ? nil : .impact(weight: .light)
+            }
+        // A resize can carry the logo past a still pointer, so the logo's position re-decides the facing too.
+        let facingLogo = felt
+            .onChange(of: facing) { _, target in turn(toward: target, logoX: logo.x) }
+            .onChange(of: logo.x) { _, logoX in turn(toward: facing, logoX: logoX) }
+        return facingLogo
+            .contentShape(Rectangle())
+            .coordinateSpace(.named(courtSpace))
+            .onContinuousHover(coordinateSpace: .named(courtSpace)) { phase in
+                switch phase {
+                case .active(let point): hover = point
+                case .ended: hover = nil
+                }
+            }
+    }
+
+    /// The court's lines, glow, pass line, plays, column and ball, back to front.
+    private func courtLayers(
+        _ size: CGSize, portrait: Bool, lines: AnyShape, pointer: CGPoint?, logo: CGPoint, lit: Int?,
+        drifted: [CGPoint], positions: [CGPoint]
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
             lines.stroke(Color.primary.opacity(0.065), lineWidth: 1.25)
             if let pointer {
                 let center = UnitPoint(x: pointer.x / size.width, y: pointer.y / size.height)
@@ -126,20 +157,6 @@ struct PointGuardCourtView<Composer: View>: View {
             column(size, pointer: pointer, portrait: portrait, pass: pass(among: drifted, landing: positions))
             if let ball = grab ?? flight {
                 self.ball.position(ball)
-            }
-        }
-        .frame(width: size.width, height: size.height)
-        .sensoryFeedback(trigger: grab == nil ? nil : near) { _, new in new == nil ? nil : .selection }
-        .sensoryFeedback(trigger: passing) { _, new in new == nil ? nil : .impact(weight: .light) }
-        // A resize can carry the logo past a still pointer, so the logo's position re-decides the facing too.
-        .onChange(of: facing) { _, target in turn(toward: target, logoX: logo.x) }
-        .onChange(of: logo.x) { _, logoX in turn(toward: facing, logoX: logoX) }
-        .contentShape(Rectangle())
-        .coordinateSpace(.named(courtSpace))
-        .onContinuousHover(coordinateSpace: .named(courtSpace)) { phase in
-            switch phase {
-            case .active(let point): hover = point
-            case .ended: hover = nil
             }
         }
     }

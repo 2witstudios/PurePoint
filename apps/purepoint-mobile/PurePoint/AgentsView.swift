@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import PhotosUI
+import UniformTypeIdentifiers
 
 // MARK: - Theme
 
@@ -952,6 +954,11 @@ struct AgentControlView: View {
 private struct AgentControlBar: View {
     @ObservedObject var model: AgentControlModel
     @State private var showRecoveries = false
+    @State private var showPhotos = false
+    @State private var showFiles = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    /// Reading picked photos or files, before the upload starts.
+    @State private var preparing = false
     private enum Field: Hashable { case prompt, raw }
     @FocusState private var field: Field?
     private var focused: Bool { field != nil }
@@ -980,8 +987,54 @@ private struct AgentControlBar: View {
         .background(Theme.chrome)
         .overlay(alignment: .top) { Rectangle().fill(Theme.line).frame(height: 1) }
         .sheet(isPresented: $showRecoveries) { AgentPromptRecoveries(model: model, screen: token) }
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 10, matching: .images)
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            attach(screen: token) {
+                var files: [AgentAttachment] = []
+                let date = Date()
+                for (index, item) in items.enumerated() {
+                    guard let data = try await item.loadTransferable(type: Data.self) else { throw ComposerError("This photo could not be opened.") }
+                    let name = AgentAttachmentImport.photoName(at: date, index: items.count > 1 ? index + 1 : nil)
+                    files.append(try await Task.detached(priority: .userInitiated) { try AgentAttachmentImport.photo(data, name: name) }.value)
+                }
+                return files
+            }
+        }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            attach(screen: token) {
+                let urls = try result.get()
+                return try await Task.detached(priority: .userInitiated) { try urls.map(AgentAttachmentImport.file) }.value
+            }
+        }
+    }
+    /// Reads the picked items, then hands them to the model to upload. A cancelled picker is not an error.
+    private func attach(screen token: Int, _ read: @escaping @MainActor () async throws -> [AgentAttachment]) {
+        Task {
+            preparing = true
+            defer { preparing = false }
+            do {
+                let files = try await read()
+                guard !files.isEmpty else { return }
+                model.attach(files, screen: token)
+            } catch {
+                let failure = error as NSError
+                if failure.domain != NSCocoaErrorDomain || failure.code != NSUserCancelledError { model.error = error.localizedDescription }
+            }
+        }
+    }
+    private var attaching: Bool {
+        if preparing { return true }
+        if case .uploading = model.attachState { return true }
+        return false
     }
     private var status: (text: String, warning: Bool)? {
+        switch model.attachState {
+        case .uploading(let text): return (text, false)
+        case .failed(let text): return ("Attachment failed · " + text, true)
+        case .idle: break
+        }
         if let outcome = model.composer.outcome {
             let text = (model.composer.deliveryUncertain ? "Delivery uncertain" : outcome.label) + (model.composer.reason.map { " · " + $0 } ?? "")
             return (text, outcome == .failed || outcome == .blocked || model.composer.deliveryUncertain)
@@ -1002,6 +1055,13 @@ private struct AgentControlBar: View {
                         .foregroundStyle(Theme.muted).frame(width: 36, height: 40).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityLabel("Hide keyboard")
             }
+            Menu {
+                Button("Photos", systemImage: "photo") { field = nil; model.dismissAttachError(); showPhotos = true }
+                Button("Files", systemImage: "doc") { field = nil; model.dismissAttachError(); showFiles = true }
+            } label: {
+                Group { if attaching { ProgressView() } else { Image(systemName: "plus").font(.body.weight(.medium)) } }
+                    .foregroundStyle(Theme.muted).frame(width: 36, height: 40).contentShape(Rectangle())
+            }.disabled(attaching || !model.controlEnabled).accessibilityLabel("Attach photos or files")
             TextField(
                 "Message \(model.agent?.displayName ?? "agent")", text: Binding(get: { model.draft }, set: { model.editDraft($0, screen: token) }),
                 axis: .vertical

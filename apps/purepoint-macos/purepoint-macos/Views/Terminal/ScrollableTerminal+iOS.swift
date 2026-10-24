@@ -2,6 +2,7 @@
 import GameController
 import SwiftTerm
 import UIKit
+import UniformTypeIdentifiers
 
 /// iOS twin of the Mac terminal host: SwiftTerm's iOS `TerminalView`, fed by
 /// `DaemonAttachSession`, with the Mac's input behaviour moved onto UIKit gestures.
@@ -14,9 +15,22 @@ class ScrollableTerminal: UIView, TerminalViewDelegate, UIGestureRecognizerDeleg
     /// Remote TUIs must not handle browser/clipboard gestures on their host.
     var usesRemoteHost = false
     var openLink: (URL) -> Void = { UIApplication.shared.open($0) }
-    /// Dropping a file types its path on the Mac. A remote agent's machine cannot see this
-    /// device's files, and every iPad agent is remote, so the iPad terminal takes no drops.
-    var acceptsFileDrops = true
+    /// The agent's daemon, which takes pasted, dropped and picked files. The agent's machine
+    /// cannot see this device's files, so each is uploaded there and its path typed.
+    var attachmentClient: DaemonClient? {
+        didSet {
+            let pasteImage: ((Data) -> Void)? =
+                attachmentClient == nil ? nil : { [weak self] png in self?.attach([(png, AttachmentUpload.pastedImageName())]) }
+            (terminalView as? PaneTerminalView)?.pasteImage = pasteImage
+        }
+    }
+    /// Uploads in progress; the host shows activity while any run.
+    private(set) var attachmentsInFlight = 0 {
+        didSet { onAttachingChanged?(attachmentsInFlight > 0) }
+    }
+    var onAttachingChanged: ((Bool) -> Void)?
+    /// Explains a failed attachment; set by the host.
+    var onAttachmentError: ((String) -> Void)?
     private(set) var localGridSize = (cols: 120, rows: 40)
     private var reportedGridSize: (cols: Int, rows: Int)?
     private var lastPhysicalFont: UIFont?
@@ -297,6 +311,67 @@ class ScrollableTerminal: UIView, TerminalViewDelegate, UIGestureRecognizerDeleg
         if terminalView.isFirstResponder { terminalView.reloadInputViews() }
     }
 
+    // MARK: - Attachments
+
+    /// Uploads files to the agent's machine in order, then types their paths there without
+    /// submitting, as the Mac does for a remote drop.
+    func attach(_ files: [(data: Data, name: String)]) {
+        guard let client = attachmentClient, !files.isEmpty else { return }
+        let session = attachSession
+        attachmentsInFlight += 1
+        Task { [weak self] in
+            do {
+                try await AttachmentUpload.uploadAndType(files, via: client, session: session)
+            } catch {
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+                self?.onAttachmentError?(error.localizedDescription)
+            }
+            self?.attachmentsInFlight -= 1
+        }
+    }
+
+    /// Reads dropped items: images become JPEG (Photos hands over HEIC), other files go as they are.
+    private func readDrop(_ providers: [NSItemProvider]) async throws -> [(data: Data, name: String)] {
+        var files: [(data: Data, name: String)] = []
+        let date = Date()
+        for (index, provider) in providers.enumerated() {
+            let base = provider.suggestedName ?? "Attachment"
+            if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                let data = try await Self.loadData(provider, type: .image)
+                let name = provider.suggestedName.map { ($0 as NSString).deletingPathExtension + ".jpg" }
+                    ?? AttachmentUpload.photoName(at: date, index: providers.count > 1 ? index + 1 : nil)
+                files.append((try await Task.detached { try AttachmentUpload.photoJPEG(data, name: base) }.value, name))
+            } else {
+                files.append(try await Self.loadFile(provider))
+            }
+        }
+        return files
+    }
+
+    /// A dropped or picked item's data as `type`.
+    static func loadData(_ provider: NSItemProvider, type: UTType) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadDataRepresentation(for: type) { data, error in
+                if let data { continuation.resume(returning: data) } else {
+                    continuation.resume(throwing: error ?? AttachmentUpload.UploadError.unexpectedResponse)
+                }
+            }
+        }
+    }
+
+    /// A dropped file's bytes, read while the provider's temporary copy still exists.
+    private static func loadFile(_ provider: NSItemProvider) async throws -> (data: Data, name: String) {
+        try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadFileRepresentation(for: .item, openInPlace: false) { url, _, error in
+                guard let url else {
+                    continuation.resume(throwing: error ?? AttachmentUpload.UploadError.unexpectedResponse)
+                    return
+                }
+                continuation.resume(with: Result { (try AttachmentUpload.readFile(at: url), url.lastPathComponent) })
+            }
+        }
+    }
+
     // MARK: - Copy
 
     /// SwiftTerm copies its own (touch) selection while it is first responder; a pointer
@@ -320,6 +395,8 @@ class ScrollableTerminal: UIView, TerminalViewDelegate, UIGestureRecognizerDeleg
     // MARK: - Gestures
 
     private func installGestures() {
+        addInteraction(UIDropInteraction(delegate: self))
+
         let touchDown = TouchDownRecognizer { [weak self] touch, event in
             self?.handleTouchDown(touch, event: event)
         }
@@ -644,5 +721,30 @@ class ScrollableTerminal: UIView, TerminalViewDelegate, UIGestureRecognizerDeleg
 
     private static var didRunScriptedInput = false
     #endif
+}
+
+extension ScrollableTerminal: UIDropInteractionDelegate {
+    func dropInteraction(_ interaction: UIDropInteraction, canHandle session: UIDropSession) -> Bool {
+        attachmentClient != nil && session.hasItemsConforming(toTypeIdentifiers: [UTType.item.identifier])
+    }
+
+    func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: UIDropSession) -> UIDropProposal {
+        UIDropProposal(operation: .copy)
+    }
+
+    func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
+        let providers = session.items.map(\.itemProvider)
+        attachmentsInFlight += 1
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.attachmentsInFlight -= 1 }
+            do {
+                self.attach(try await self.readDrop(providers))
+            } catch {
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+                self.onAttachmentError?(error.localizedDescription)
+            }
+        }
+    }
 }
 #endif

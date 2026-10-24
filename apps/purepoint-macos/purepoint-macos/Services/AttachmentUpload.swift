@@ -2,6 +2,8 @@
 import AppKit
 #endif
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Sends a file to an agent's daemon so the agent can read it by path, even when
 /// it runs on another machine. The daemon keeps it in `~/.pu/attachments` there.
@@ -17,9 +19,13 @@ nonisolated enum AttachmentUpload {
         case notAFile(name: String)
         case daemon(code: String, message: String)
         case unexpectedResponse
+        case notTyped
+        case notAnImage(name: String)
 
         var errorDescription: String? {
             switch self {
+            case .notTyped: "The agent's terminal disconnected before the file path could be typed"
+            case .notAnImage(let name): "\(name) could not be read as an image"
             case .tooLarge(let name): "\(name) is larger than 64 MB"
             case .notAFile(let name): "\(name) is not a regular file"
             case .daemon(_, let message): message
@@ -59,6 +65,52 @@ nonisolated enum AttachmentUpload {
             }
         }
         throw UploadError.unexpectedResponse
+    }
+
+    /// Uploads files in order, then types their remote paths as one shell-escaped
+    /// line without submitting, as a local drop does. Throws if an upload fails or
+    /// the line cannot be typed.
+    static func uploadAndType(
+        _ files: [(data: Data, name: String)], via client: DaemonClient, session: DaemonAttachSession?
+    ) async throws {
+        var paths: [String] = []
+        for file in files {
+            paths.append(try await upload(file.data, name: file.name, via: client))
+        }
+        let line = paths.map(shellEscape).joined(separator: " ")
+        // The upload uses its own connections, so it can finish while the
+        // attach connection is reconnecting.
+        guard await session?.deliverInput(Data(line.utf8)) == true else { throw UploadError.notTyped }
+    }
+
+    /// Long edge of a photo sent to an agent: sharp enough to read, small enough to send.
+    static let photoMaxPixels = 2048
+
+    /// A photo as JPEG with its long edge at most `photoMaxPixels`, so a HEIC or a
+    /// large PNG from Photos reaches the agent in a format and size it reads.
+    static func photoJPEG(_ data: Data, name: String) throws -> Data {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: photoMaxPixels,
+        ]
+        let output = NSMutableData()
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+            let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+            let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil)
+        else { throw UploadError.notAnImage(name: name) }
+        CGImageDestinationAddImage(
+            destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { throw UploadError.notAnImage(name: name) }
+        return output as Data
+    }
+
+    /// "Photo 2026-10-23 at 14.05.09.jpg", numbered when several are added together.
+    static func photoName(at date: Date = Date(), index: Int? = nil) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        return "Photo \(formatter.string(from: date))\(index.map { " \($0)" } ?? "").jpg"
     }
 
     /// Reads a dropped file for upload. Checks it is a regular file within

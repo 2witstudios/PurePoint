@@ -24,6 +24,9 @@ import UserNotifications
     @Published private(set) var screenMayBeInexact = false
     @Published private(set) var composer = AgentComposer()
     @Published private(set) var recoveries: [AgentPromptRecovery] = []
+    @Published private(set) var attachState = AgentAttachState.idle
+    /// The upload `attachState` describes; closing the agent screen lets it finish quietly.
+    private var attachUpload: UUID?
     @Published var error: String?
     @Published var rawTyping = false
     @Published var rawText = ""
@@ -454,6 +457,7 @@ import UserNotifications
         saveComposer(); screen += 1; pendingOpen = nil
         if let id = streamId, let request { Task { _ = try? await request("terminal.close", ["streamId": id]) } }
         selected = nil; streamId = nil; claimedSize = nil; rawTyping = false; rawText = ""; composer = AgentComposer(); recoveries = []
+        attachUpload = nil; attachState = .idle
         cols = 80; rows = 24; hasSize = false; resetTerminal()
     }
 
@@ -550,6 +554,63 @@ import UserNotifications
             }
         }
     }
+
+    /// Uploads files to the open agent's machine in order, then adds their paths to that agent's
+    /// draft without sending it, so the user writes the prompt around them.
+    func attach(_ files: [AgentAttachment], screen token: Int) {
+        guard token == screen, controlEnabled, !files.isEmpty, let scope = selected, let request else { return }
+        if case .uploading = attachState { return }
+        if let large = files.first(where: { $0.data.count > AgentAttachment.maxBytes }) {
+            attachState = .failed("\(large.name) is larger than 20 MB.")
+            return
+        }
+        attachState = .uploading(files.count == 1 ? "Attaching \(files[0].name)…" : "Attaching \(files.count) files…")
+        let generationToken = generation, permissionToken = terminalPermissionRevision, upload = UUID()
+        attachUpload = upload
+        Task { [weak self] in
+            var paths: [String] = []
+            var failure: String?
+            do {
+                for file in files {
+                    let uploadId = UUID().uuidString.lowercased()
+                    var path: String?
+                    for chunk in file.chunks {
+                        guard let self, generationToken == self.generation,
+                            permissionToken == self.terminalPermissionRevision, self.permission == .control
+                        else { throw AgentControlFailure(message: "Connection or permission changed while attaching. Attach again.") }
+                        let reply = try await request(
+                            "agent.attach",
+                            [
+                                "machine": scope.machine, "agentId": scope.agent, "uploadId": uploadId, "name": file.name,
+                                "offset": chunk.offset, "data": chunk.data.base64EncodedString(), "done": chunk.done,
+                            ]
+                        ).decode(AgentAttachReply.self)
+                        path = reply.path
+                    }
+                    guard let path else { throw AgentControlFailure(message: "The agent's machine did not accept \(file.name).") }
+                    paths.append(path)
+                }
+            } catch {
+                failure = error.localizedDescription
+            }
+            guard let self else { return }
+            // Files that did upload are on the agent's machine, so their paths still go in the draft.
+            if !paths.isEmpty {
+                if self.selected == scope {
+                    self.draft = AgentAttachment.draft(self.draft, adding: paths)
+                } else {
+                    var origin = self.composers[scope] ?? AgentComposer(text: self.drafts[scope.storageKey] ?? "")
+                    origin.text = AgentAttachment.draft(origin.text, adding: paths)
+                    self.composers[scope] = origin; self.drafts[scope.storageKey] = origin.text
+                    self.defaults.set(self.drafts, forKey: "pi.agentDrafts.v1")
+                }
+            }
+            guard self.attachUpload == upload else { return }
+            self.attachUpload = nil
+            self.attachState = failure.map { .failed($0) } ?? .idle
+        }
+    }
+    func dismissAttachError() { if case .failed = attachState { attachState = .idle } }
 
     func sendKey(_ key: AgentQuickKey, screen token: Int) {
         guard token == screen else { return }; input("terminal.keys", fields: ["key": key.rawValue])

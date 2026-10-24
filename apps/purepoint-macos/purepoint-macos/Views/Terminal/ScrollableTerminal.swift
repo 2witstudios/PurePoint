@@ -278,20 +278,9 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         let session = attachSession
         Task {
             do {
-                var paths: [String] = []
-                for file in files {
-                    paths.append(try await AttachmentUpload.upload(file.data, name: file.name, via: client))
-                }
-                let line = paths.map(shellEscape).joined(separator: " ")
-                // The upload uses its own connections, so it can finish while the
-                // attach connection is reconnecting.
-                guard await session?.deliverInput(Data(line.utf8)) == true else {
-                    print("[Attachment] could not type the uploaded paths")
-                    await MainActor.run { NSSound.beep() }
-                    return
-                }
+                try await AttachmentUpload.uploadAndType(files, via: client, session: session)
             } catch {
-                print("[Attachment] upload failed: \(error.localizedDescription)")
+                print("[Attachment] \(error.localizedDescription)")
                 await MainActor.run { NSSound.beep() }
             }
         }

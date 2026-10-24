@@ -68,6 +68,17 @@ async function fixture(t) {
           attached.push({ socket, request: r, send });
           send({ type: "attach_ready", buffered_bytes: 0 });
         }
+        if (r.type === "attach_file") {
+          const received =
+            r.offset + Buffer.from(r.data_base64, "base64").length;
+          send({
+            type: "attach_file_result",
+            received,
+            ...(r.done
+              ? { path: `/home/u/.pu/attachments/${r.upload_id}/${r.name}` }
+              : {}),
+          });
+        }
         if (r.type === "input") {
           inputs.push({ r, socket });
           if (r.submit && !hold)
@@ -795,4 +806,78 @@ test("additive authoritative signal forwards exact CORE inventory facts without 
   f.signal(undefined);
   const legacy = await c.request({ op: "agents" });
   assert.equal(legacy.machines[0].agents[0].signal, null);
+});
+
+test("attachments relay ordered chunks to the agent's daemon and return its path on the last chunk", async (t) => {
+  const f = await fixture(t),
+    c = client(f);
+  t.after(c.connection.dispose);
+  const chunk = (fields) => ({
+    op: "agent.attach",
+    machine: "local",
+    agentId: "ag-one",
+    uploadId: "up-1",
+    name: "Photo.jpg",
+    ...fields,
+  });
+  const first = await c.request(
+    chunk({ offset: 0, data: Buffer.from("abc").toString("base64"), done: false }),
+  );
+  assert.deepEqual(first, { received: 3, path: null });
+  const last = await c.request(
+    chunk({ offset: 3, data: Buffer.from("def").toString("base64"), done: true }),
+  );
+  assert.deepEqual(last, {
+    received: 6,
+    path: "/home/u/.pu/attachments/up-1/Photo.jpg",
+  });
+  const sent = f.requests.filter((r) => r.type === "attach_file");
+  assert.deepEqual(sent[1], {
+    type: "attach_file",
+    upload_id: "up-1",
+    name: "Photo.jpg",
+    offset: 3,
+    data_base64: Buffer.from("def").toString("base64"),
+    done: true,
+  });
+  assert.equal(
+    f.requests.filter((r) => r.type === "inventory").length,
+    1,
+    "only the first chunk checks the agent exists",
+  );
+  assert.equal(f.inputs.length, 0, "attaching never types into the terminal");
+});
+
+test("attachments require Control, a known agent and canonical bounded chunks", async (t) => {
+  const f = await fixture(t),
+    c = client(f);
+  t.after(c.connection.dispose);
+  const chunk = (fields) => ({
+    op: "agent.attach",
+    machine: "local",
+    agentId: "ag-one",
+    uploadId: "up-2",
+    name: "notes.txt",
+    offset: 0,
+    data: Buffer.from("x").toString("base64"),
+    done: true,
+    ...fields,
+  });
+  await assert.rejects(c.request(chunk({ agentId: "missing" })), /Agent not found/);
+  await assert.rejects(c.request(chunk({ uploadId: "../up" })), /Attachment requires/);
+  await assert.rejects(c.request(chunk({ name: " " })), /Attachment requires/);
+  await assert.rejects(c.request(chunk({ offset: -1 })), /Attachment requires/);
+  await assert.rejects(c.request(chunk({ data: "eA" })), /canonical base64/);
+  await assert.rejects(
+    c.request(chunk({ data: Buffer.alloc(128 * 1024 + 1).toString("base64") })),
+    /canonical base64/,
+  );
+  await assert.rejects(
+    c.request(chunk({ data: "", done: false })),
+    /canonical base64/,
+  );
+  assert.equal(f.requests.filter((r) => r.type === "attach_file").length, 0);
+  c.change("view");
+  await assert.rejects(c.request(chunk({})), /permission/);
+  assert.equal(f.requests.filter((r) => r.type === "attach_file").length, 0);
 });

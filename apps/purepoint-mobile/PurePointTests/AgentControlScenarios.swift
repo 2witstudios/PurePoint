@@ -12,6 +12,7 @@ import Foundation
         var managementStatuses: [CheckedContinuation<JSONValue, Error>] = []
         var inventory = ""
         var holdInventory = false
+        var failAttach = false
         var inventories: [CheckedContinuation<JSONValue, Error>] = []
         static func permissionJSON() throws -> JSONValue { try AgentControlScenarios.json(#"{"terminals":"control","workspaceManagement":true,"workspace":{"version":1,"management":true}}"#) }
         func request(_ op: String, _ fields: [String: Any]) async throws -> JSONValue {
@@ -26,6 +27,12 @@ import Foundation
                 return try JSONDecoder().decode(JSONValue.self, from: Data(inventory.utf8))
             case "terminal.open": return try await withCheckedThrowingContinuation { opens.append($0) }
             case "agent.prompt": return try await withCheckedThrowingContinuation { prompts.append($0) }
+            case "agent.attach":
+                if failAttach { throw AgentControlFailure(message: "Agent daemon does not support attachments") }
+                let data = Data(base64Encoded: fields["data"] as? String ?? "") ?? Data()
+                let received = (fields["offset"] as? Int ?? 0) + data.count
+                let path = fields["done"] as? Bool == true ? "\"/home/u/.pu/attachments/\(fields["uploadId"] as? String ?? "")/\(fields["name"] as? String ?? "")\"" : "null"
+                return try AgentControlScenarios.json("{\"received\":\(received),\"path\":\(path)}")
             default: return .object([:])
             }
         }
@@ -569,5 +576,37 @@ extension AgentControlScenarios {
             try await wait { !model.machines.isEmpty }
             try check(bridge.operations.filter { $0.0 == "workspace.spawn" }.count == 1, "Reconnect must never redispatch a launch")
         }
+    }
+
+    static func attachmentsUploadInChunksAndAddPathsToTheDraft() async throws {
+        let (model, bridge, defaults, suite) = try await setup()
+        defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+        try await open(model, bridge); try finishOpen(bridge)
+        try await wait { model.streamId != nil }
+        model.editDraft("Look at", screen: model.screenToken)
+        let photo = AgentAttachment(name: "Photo.jpg", data: Data(repeating: 7, count: AgentAttachment.chunkBytes + 5))
+        model.attach([photo, AgentAttachment(name: "it's.txt", data: Data("hi".utf8))], screen: model.screenToken)
+        try await wait { model.attachState == .idle }
+        let chunks = bridge.operations.filter { $0.0 == "agent.attach" }.map(\.1)
+        try check(chunks.count == 3, "A file larger than one chunk is sent in order, then the next file")
+        try check(chunks.map { $0["offset"] as? Int } == [0, AgentAttachment.chunkBytes, 0], "Offsets count bytes already sent")
+        try check(chunks.map { $0["done"] as? Bool } == [false, true, true], "Only each file's last chunk is done")
+        try check(chunks[0]["uploadId"] as? String == chunks[1]["uploadId"] as? String
+            && chunks[1]["uploadId"] as? String != chunks[2]["uploadId"] as? String, "Each file is its own upload")
+        let first = "'/home/u/.pu/attachments/\(chunks[0]["uploadId"] as? String ?? "")/Photo.jpg'"
+        let second = "'/home/u/.pu/attachments/\(chunks[2]["uploadId"] as? String ?? "")/it'\\''s.txt'"
+        try check(model.draft == "Look at \(first) \(second) ", "Paths join the draft, shell-quoted, ready for more text")
+        try check(!bridge.operations.contains { $0.0 == "agent.prompt" || $0.0 == "terminal.raw" }, "Attaching never sends or types")
+
+        bridge.failAttach = true
+        model.attach([photo], screen: model.screenToken)
+        try await wait { model.attachState != .idle && model.attachState != .uploading("Attaching Photo.jpg…") }
+        try check(model.attachState == .failed("Agent daemon does not support attachments"), "A refused upload explains why")
+        model.dismissAttachError()
+        let large = AgentAttachment(name: "big.mov", data: Data(count: AgentAttachment.maxBytes + 1))
+        let sent = bridge.operations.count
+        model.attach([large], screen: model.screenToken)
+        try check(model.attachState == .failed("big.mov is larger than 20 MB.") && bridge.operations.count == sent,
+            "An oversized file is refused before anything is sent")
     }
 }
