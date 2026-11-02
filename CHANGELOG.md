@@ -9,6 +9,7 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 - Paste an image (Cmd+V) into any agent's terminal, or drop files on a remote agent's terminal, and the macOS app uploads it to the agent's machine and types its path there, so remote agents can see screenshots. Uploads are kept in `~/.pu/attachments` on that machine for 7 days.
 
 ### Changed
+- Point Guard now runs on its bundled Node.js 26 LTS (26.13.0), up from Node 22, on macOS and on Linux phone hosts. Nothing to install: the runtime ships inside PurePoint. Linux phone hosts still need glibc 2.28 or newer.
 - The daemon protocol is now version 14, for the new `reorder_projects` request. Update PurePoint on every machine and restart its daemon.
 - Phones and iPads now pair with full access (agents, terminals, workspace management and Point Guard chat). Point Guard setup shows each device on one line with a single Access menu (Full access, Terminals only, View only, No access) and a Revoke button. Revoked devices are removed instead of lingering as "Revoked", and the redundant "Require re-pair" button is gone. Devices that are already paired keep their current access.
 - The daemon protocol is now version 12, for the new `attach_file` request. Update PurePoint on every machine and restart its daemon.
