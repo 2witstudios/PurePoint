@@ -20,6 +20,8 @@ agents:
 
 ```yaml
 agentStatusTracking: true
+commands:
+  aider: "npx aider"
 launchArgs:
   claude: "--dangerously-skip-permissions"
 ```
@@ -27,13 +29,17 @@ launchArgs:
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `agentStatusTracking` | bool | `true` | Report working/idle/question status through native adapters |
+| `commands` | map of agent type → string | `{}` | Command for every project that leaves `command` unset; a type that isn't built in adds that agent |
 | `launchArgs` | map of agent type → string (or string[]) | `{}` | Launch args for every project that leaves `launchArgs` unset |
 
 The file is read on every config resolution, so spawn and resume pick up changes
 without a daemon restart. It is written under a lock with atomic replacement.
 Malformed content, including an unbalanced quote in a `launchArgs` string, is a
 config error; it never falls back to permission flags. The keys under
-`launchArgs` are agent types (`claude`, `codex`, `opencode`, `terminal`).
+`commands` and `launchArgs` are agent types: lowercase letters, digits, `-` and
+`_`. A project agent's `command` is optional; when unset it is the machine
+command, else the built-in one (`claude`, `codex`, `opencode`), else the agent's
+name.
 
 ## Machine-wide Codex permissions
 
@@ -63,7 +69,7 @@ Each entry in `agents` configures a specific agent type.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | (required) | Agent type identifier |
-| `command` | string | (required) | Binary to execute |
+| `command` | string | machine command, else built-in, else agent name | Program to run plus any words before the launch args; optional |
 | `promptFlag` | string | `null` | CLI flag for prompt injection (e.g., `"--prompt"`) |
 | `interactive` | bool | `true` | Whether the agent runs in an interactive PTY |
 | `launchArgs` | string, string[] or null | `null` | Extra CLI arguments; see resolution logic below |

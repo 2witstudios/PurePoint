@@ -142,6 +142,9 @@ fn config_to_report(
                 project_launch_args: ac.launch_args.as_deref().map(format_launch_args),
                 machine_launch_args: ac.machine_launch_args.as_deref().map(format_launch_args),
                 resolved_command: Some(resolved_command),
+                project_command: ac.project_command.clone(),
+                inherited_command: Some(ac.inherited_command(name)),
+                origin: Some(agent_origin(name, ac).into()),
             }
         })
         .collect();
@@ -152,6 +155,16 @@ fn config_to_report(
         ),
         default_agent: cfg.default_agent.clone(),
         agents,
+    }
+}
+
+fn agent_origin(name: &str, ac: &pu_core::types::AgentConfig) -> &'static str {
+    if pu_core::types::default_agents().contains_key(name) {
+        "builtin"
+    } else if ac.machine_command.is_some() || ac.machine_launch_args.is_some() {
+        "machine"
+    } else {
+        "project"
     }
 }
 
@@ -472,10 +485,14 @@ impl Engine {
             Request::UpdateGlobalAgentSettings {
                 launch_args,
                 agent_status_tracking,
+                commands,
+                remove_agents,
             } => {
                 self.handle_global_agent_settings(Some(config::GlobalAgentSettingsUpdate {
                     agent_status_tracking,
+                    commands: commands.unwrap_or_default(),
                     launch_args: launch_args.unwrap_or_default(),
+                    remove_agents: remove_agents.unwrap_or_default(),
                 }))
                 .await
             }
@@ -483,8 +500,15 @@ impl Engine {
                 project_root,
                 agent_name,
                 launch_args,
+                command,
+                remove,
             } => {
-                self.handle_update_agent_config(&project_root, &agent_name, launch_args)
+                let update = config::AgentConfigUpdate {
+                    command,
+                    launch_args,
+                    remove,
+                };
+                self.handle_update_agent_config(&project_root, &agent_name, update)
                     .await
             }
             Request::Shutdown => Response::ShuttingDown,
@@ -938,6 +962,7 @@ impl Engine {
                         .iter()
                         .map(|(agent, args)| (agent.clone(), format_launch_args(&args.0)))
                         .collect(),
+                    commands: Some(settings.commands),
                 },
                 Err(e) => Response::Error {
                     code: e.code().into(),
@@ -976,14 +1001,14 @@ impl Engine {
         &self,
         project_root: &str,
         agent_name: &str,
-        launch_args: Option<Vec<String>>,
+        update: config::AgentConfigUpdate,
     ) -> Response {
         let pr = project_root.to_string();
         let name = agent_name.to_string();
         let env = self.agent_env().await;
         tokio::task::spawn_blocking(move || {
             let root = Path::new(&pr);
-            match config::update_agent_config(root, &name, launch_args) {
+            match config::update_agent_config(root, &name, update) {
                 Ok(cfg) => config_to_report(&cfg, root, &env),
                 Err(e) => Response::Error {
                     code: e.code().into(),
@@ -1240,6 +1265,8 @@ mod tests {
             interactive: true,
             launch_args,
             machine_launch_args: None,
+            project_command: None,
+            machine_command: None,
         }
     }
 
@@ -1265,6 +1292,47 @@ mod tests {
             Some("--sandbox read-only")
         );
         assert_eq!(codex.resolved_launch_args, vec!["--search"]);
+    }
+
+    #[test]
+    fn given_machine_command_and_added_agents_should_report_hints_and_origin() {
+        // given
+        let mut cfg = pu_core::types::Config::default();
+        let claude = cfg.agents.get_mut("claude").unwrap();
+        claude.machine_command = Some("scripts/agent-launch.sh claude".into());
+        claude.command = "scripts/agent-launch.sh claude".into();
+        let mut aider = pu_core::types::AgentConfig::named("aider");
+        aider.machine_command = Some("npx aider".into());
+        aider.command = "npx aider".into();
+        cfg.agents.insert("aider".into(), aider);
+        let mut goose = pu_core::types::AgentConfig::named("goose");
+        goose.project_command = Some("goose session".into());
+        goose.command = "goose session".into();
+        cfg.agents.insert("goose".into(), goose);
+
+        // when
+        let Response::ConfigReport { agents, .. } = config_to_report(&cfg, Path::new("/"), &[])
+        else {
+            panic!("expected ConfigReport");
+        };
+
+        // then — each grey hint is what runs when the project field is empty
+        let get = |id: &str| agents.iter().find(|a| a.id.as_deref() == Some(id)).unwrap();
+        let claude = get("claude");
+        assert_eq!(claude.project_command, None);
+        assert_eq!(
+            claude.inherited_command.as_deref(),
+            Some("scripts/agent-launch.sh claude")
+        );
+        assert_eq!(claude.origin.as_deref(), Some("builtin"));
+        assert_eq!(get("codex").inherited_command.as_deref(), Some("codex"));
+        let aider = get("aider");
+        assert_eq!(aider.origin.as_deref(), Some("machine"));
+        assert_eq!(aider.command, "npx aider");
+        let goose = get("goose");
+        assert_eq!(goose.origin.as_deref(), Some("project"));
+        assert_eq!(goose.project_command.as_deref(), Some("goose session"));
+        assert_eq!(goose.inherited_command.as_deref(), Some("goose"));
     }
 
     #[test]
@@ -1516,6 +1584,8 @@ mod tests {
             interactive: true,
             launch_args: None,
             machine_launch_args: None,
+            project_command: None,
+            machine_command: None,
         }
     }
 
@@ -1570,6 +1640,8 @@ mod workspace_catalog_tests {
             interactive: true,
             launch_args: None,
             machine_launch_args: None,
+            project_command: None,
+            machine_command: None,
         }
     }
 

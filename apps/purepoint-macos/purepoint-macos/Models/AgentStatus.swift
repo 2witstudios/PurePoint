@@ -4,7 +4,7 @@ import AppKit
 import UIKit
 #endif
 
-enum AgentStatus: String, CaseIterable, Codable, Sendable {
+nonisolated enum AgentStatus: String, CaseIterable, Codable, Sendable {
     // Current observable states
     case running
     case broken

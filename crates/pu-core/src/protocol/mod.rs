@@ -362,6 +362,13 @@ pub enum Request {
         /// removes that agent's entry. Agents left out keep their stored value.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         launch_args: Option<IndexMap<String, String>>,
+        /// Machine-level command per agent type; a blank string removes it.
+        /// An agent type that is not built in adds that agent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commands: Option<IndexMap<String, String>>,
+        /// Agent types whose machine-level command and launch args are removed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remove_agents: Option<Vec<String>>,
     },
     GetConfig {
         project_root: String,
@@ -375,6 +382,12 @@ pub enum Request {
             deserialize_with = "crate::types::launch_args_serde::deserialize"
         )]
         launch_args: Option<Vec<String>>,
+        /// The project's command; left out keeps it, a blank string clears it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+        /// Drop the agent from the project config.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        remove: bool,
     },
     // Trigger CRUD
     ListTriggers {
@@ -698,6 +711,10 @@ pub enum Response {
         /// Machine-level launch args string per agent type.
         #[serde(default)]
         launch_args: IndexMap<String, String>,
+        /// Machine-level command per agent type. `None` from daemons that
+        /// predate machine-level commands.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commands: Option<IndexMap<String, String>>,
     },
     ConfigReport {
         #[serde(default, skip_serializing_if = "Option::is_none")]

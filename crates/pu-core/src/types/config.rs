@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
     pub name: String,
+    /// The executable plus any words before the launch args. After config
+    /// resolution this is the effective command: project, else machine, else the
+    /// built-in default. Empty in a config file means "not set here".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub command: String,
     #[serde(default)]
     pub prompt_flag: Option<String>,
@@ -18,9 +22,39 @@ pub struct AgentConfig {
     /// the project leaves `launch_args` unset. Filled in at config resolution.
     #[serde(skip)]
     pub machine_launch_args: Option<Vec<String>>,
+    /// The command `.pu/config.yaml` sets for this agent, if any. Filled in at
+    /// config resolution.
+    #[serde(skip)]
+    pub project_command: Option<String>,
+    /// Machine-level command from `~/.pu/agent-settings.yaml`. Filled in at
+    /// config resolution.
+    #[serde(skip)]
+    pub machine_command: Option<String>,
 }
 
 impl AgentConfig {
+    /// An agent with nothing set: it launches `name` with no args.
+    pub fn named(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            command: String::new(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: None,
+            machine_launch_args: None,
+            project_command: None,
+            machine_command: None,
+        }
+    }
+
+    /// The command used when the project leaves it unset: machine, else the
+    /// built-in default, else the agent's name.
+    pub fn inherited_command(&self, agent_type: &str) -> String {
+        self.machine_command
+            .clone()
+            .unwrap_or_else(|| default_command(agent_type))
+    }
+
     /// The launch args in effect before resolution: project, else machine,
     /// else none.
     pub fn configured_launch_args(&self) -> Option<&[String]> {
@@ -130,16 +164,33 @@ pub fn default_agents() -> IndexMap<String, AgentConfig> {
         (
             name.to_string(),
             AgentConfig {
-                name: name.to_string(),
                 command: cmd.to_string(),
-                prompt_flag: None,
-                interactive: true,
-                launch_args: None,
-                machine_launch_args: None,
+                ..AgentConfig::named(name)
             },
         )
     })
     .collect()
+}
+
+/// The built-in command for an agent type, or the type's own name for agents
+/// the user added.
+pub fn default_command(agent_type: &str) -> String {
+    default_agents()
+        .get(agent_type)
+        .map_or_else(|| agent_type.to_string(), |a| a.command.clone())
+}
+
+/// Whether `name` can key an agent in a config: lowercase letters, digits, `-`
+/// and `_`, starting with a letter or digit.
+pub fn is_valid_agent_name(name: &str) -> bool {
+    name.len() <= 64
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 /// Codex's auto-mode flags. Codex removed the `--full-auto` shortcut; these are the
@@ -282,7 +333,7 @@ launchArgs:
             prompt_flag: None,
             interactive: true,
             launch_args: Some(vec!["--dangerously-skip-permissions".into()]),
-            machine_launch_args: None,
+            ..AgentConfig::named("claude")
         };
         let yaml = serde_yaml_ng::to_string(&config).unwrap();
         let parsed: AgentConfig = serde_yaml_ng::from_str(&yaml).unwrap();

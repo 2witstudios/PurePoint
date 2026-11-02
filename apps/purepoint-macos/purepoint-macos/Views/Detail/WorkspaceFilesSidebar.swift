@@ -230,13 +230,14 @@ private struct InlineFilePreview: View {
                 // background, like the other remote pollers (the first read always runs).
                 #if os(macOS)
                 let checkNow = hunks == nil || host.isLocal || NSApplication.shared.isActive
+                let modified = checkNow ? await FileIOService.fileModificationDate(at: path, host: host) : lastModified
                 #else
                 // Paused in the background (the scene-phase hook); checked again on return.
                 await AppActivity.shared.untilForeground()
                 if Task.isCancelled { return }
                 let checkNow = true
+                let modified = await FileIOService.fileModificationDate(at: path, host: host)
                 #endif
-                let modified = checkNow ? await FileIOService.fileModificationDate(at: path, host: host) : lastModified
                 if checkNow, hunks == nil || modified != lastModified {
                     do {
                         let file = try await FileIOService.readFile(at: path, limit: 1_000_000, host: host)

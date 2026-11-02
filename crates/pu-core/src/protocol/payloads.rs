@@ -235,6 +235,17 @@ pub struct AgentConfigInfo {
     /// Preview of `command` plus the resolved launch args.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_command: Option<String>,
+    /// Project `command`; `None` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_command: Option<String>,
+    /// The command used when the project leaves it unset: machine-level, else
+    /// the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherited_command: Option<String>,
+    /// Where the agent is defined: `builtin`, `machine` (added for all
+    /// projects) or `project` (added in this project's config).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

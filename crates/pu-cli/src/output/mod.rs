@@ -345,9 +345,13 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::GlobalAgentSettingsReport {
             agent_status_tracking,
             launch_args,
+            commands,
             ..
         } => {
             println!("Agent status tracking: {agent_status_tracking}");
+            for (agent, command) in commands.iter().flatten() {
+                println!("Command for {agent} (all projects): {command}");
+            }
             for (agent, args) in launch_args {
                 println!("Launch args for {agent} (all projects): {args}");
             }

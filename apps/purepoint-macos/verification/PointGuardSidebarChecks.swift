@@ -230,7 +230,7 @@ struct PaneGridView: View {
                     let history = frame("history")
                     let transcript = frame("transcript")
                     let grid = frame("grid")
-                    let paneEnd = split ? grid.minX + grid.width * ratio - 2 : grid.maxX
+                    let paneEnd = grid.minX + DraggableSplit<EmptyView, EmptyView>.sizes(total: grid.width, ratio: ratio).first
                     precondition(frame("navigation").maxX <= grid.minX + 1, "Grid overlaps navigation sidebar")
                     precondition(history.minX >= grid.minX - 1, "History overlaps navigation: \(history)")
                     precondition(history.width > 0, "History is hidden")

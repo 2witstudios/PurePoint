@@ -427,19 +427,21 @@ struct PlaysHero: View {
 
     var body: some View {
         GeometryReader { geometry in
-            if geometry.size.height < Self.minimumCourtHeight { stacked(height: geometry.size.height) } else { court }
+            if geometry.size.height < Self.minimumCourtHeight { stacked(height: geometry.size.height) } else { court(open: geometry.frame(in: .global)) }
         }
         .ignoresSafeArea(.keyboard)
         .sensoryFeedback(trigger: passed) { _, new in new == nil ? nil : .impact(weight: .light) }
         .onDisappear { passTask?.cancel(); passTask = nil; flight = nil }
     }
 
-    private var court: some View {
+    /// `open` is the space between the toolbar and composer. The court ignores the safe area, where its own proxy reports no insets,
+    /// so the insets are measured against it instead.
+    private func court(open: CGRect) -> some View {
         // Fills the screen under the toolbar and composer so the court lines run edge to edge; the plays stay in the open space between.
         GeometryReader { geometry in
             let size = geometry.size
-            let top = geometry.safeAreaInsets.top
-            let height = size.height - top - geometry.safeAreaInsets.bottom
+            let top = max(0, open.minY - geometry.frame(in: .global).minY)
+            let height = open.height
             let column = min(size.width, 520)
             let logo = CGPoint(x: size.width / 2, y: top + height * 0.22)
             let spots = [
