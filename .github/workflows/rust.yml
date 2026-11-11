@@ -90,7 +90,7 @@ jobs:
           persist-credentials: false
       # Install the same audit version from verified release binaries, avoiding
       # Docker Hub's unauthenticated image-pull limit.
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: cargo-deny@0.20.2
       - run: cargo deny --all-features check advisories licenses bans sources
