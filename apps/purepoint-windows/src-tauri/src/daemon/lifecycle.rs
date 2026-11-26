@@ -453,7 +453,7 @@ fn spawn_daemon(
 
 /// The running `pu-engine.exe` named by a PID file.
 #[cfg(windows)]
-mod process {
+pub(crate) mod process {
     use std::time::Duration;
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
@@ -519,7 +519,7 @@ mod process {
 }
 
 #[cfg(not(windows))]
-mod process {
+pub(crate) mod process {
     use std::time::Duration;
     pub fn is_engine(_pid: u32) -> bool {
         false
