@@ -9,6 +9,7 @@ import type { SidebarSelection } from '../../model/sidebarItem.ts';
 import type { ProjectState } from '../../state/projectState.ts';
 import { useAppState } from '../shell/appContext.ts';
 import { useTitlebarClearance } from '../shell/TitlebarClearance.tsx';
+import { AgentsHubView } from '../agents/AgentsHubView.tsx';
 import { useAgentSelection } from '../terminal/agentSelection.ts';
 import { AgentTerminalsView } from '../terminal/AgentTerminals.tsx';
 import { ScreenPlaceholder } from './placeholders.tsx';
@@ -87,7 +88,7 @@ function SelectedContent({ selection }: { selection: SidebarSelection }) {
             />
           );
         case 'agents':
-          return <ScreenPlaceholder icon="cpu" title="Agents" view="AgentsHubView" />;
+          return <AgentsHubView />;
         case 'schedule':
           return <ScreenPlaceholder icon="calendar" title="Schedule" view="ScheduleView" />;
       }

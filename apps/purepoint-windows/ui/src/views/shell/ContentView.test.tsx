@@ -104,7 +104,7 @@ describe('ContentView', () => {
   it('routes nav selections to their screens', () => {
     renderShell();
     fireEvent.click(screen.getByRole('button', { name: 'Agents' }));
-    expect(screen.getByText('AgentsHubView')).toBeInTheDocument();
+    expect(screen.getByTestId('agents-hub')).toBeInTheDocument();
     runMenu('Navigation', /^Schedule/);
     expect(screen.getByText('ScheduleView')).toBeInTheDocument();
   });
@@ -131,7 +131,7 @@ describe('ContentView', () => {
 
     // Alt+Shift+2 is Agents.
     fireEvent.keyDown(window, { code: 'Digit2', altKey: true, shiftKey: true });
-    expect(screen.getByText('AgentsHubView')).toBeInTheDocument();
+    expect(screen.getByTestId('agents-hub')).toBeInTheDocument();
 
     // Ctrl+, opens Settings; Escape closes it.
     fireEvent.keyDown(window, { code: 'Comma', ctrlKey: true });
@@ -145,7 +145,7 @@ describe('ContentView', () => {
     renderShell();
     useKeyBindingStore.getState().setBinding({ code: 'KeyY', modifiers: ['alt'] }, 'navAgents');
     fireEvent.keyDown(window, { code: 'KeyY', altKey: true });
-    expect(screen.getByText('AgentsHubView')).toBeInTheDocument();
+    expect(screen.getByTestId('agents-hub')).toBeInTheDocument();
   });
 
   it('runs pending commands as no-ops', () => {
