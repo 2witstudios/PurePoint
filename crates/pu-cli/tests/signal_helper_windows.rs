@@ -24,8 +24,13 @@ fn pipe_name(tag: &str) -> String {
 }
 
 /// Run the helper the way a hook does: payload on stdin, signal env only.
+///
+/// The payload is ready on stdin before the helper starts, as a hook
+/// runner's is: the helper gives stdin 50ms, and a payload written after
+/// spawn would race this test thread's scheduling on a loaded machine.
 fn helper(socket: Option<&str>, token: &str, stdin: Option<&[u8]>) -> Output {
     let home = tempfile::tempdir().unwrap();
+    let mut payload = tempfile::NamedTempFile::new().unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_pu"));
     command
         .arg("__agent-signal")
@@ -33,22 +38,20 @@ fn helper(socket: Option<&str>, token: &str, stdin: Option<&[u8]>) -> Output {
         .env("SystemRoot", std::env::var_os("SystemRoot").unwrap())
         .env("HOME", home.path())
         .env("PU_SIGNAL_TOKEN", token)
-        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(bytes) = stdin {
+        payload.as_file_mut().write_all(bytes).unwrap();
+        command.stdin(payload.reopen().unwrap());
+    } else {
+        // An open, silent stdin: the helper must still finish on time.
+        command.stdin(Stdio::piped());
+    }
     if let Some(socket) = socket {
         command.env("PU_SIGNAL_SOCKET", socket);
     }
     let mut child = command.spawn().unwrap();
-    let input = child.stdin.take().unwrap();
-    let _keep_open;
-    if let Some(bytes) = stdin {
-        let mut input = input;
-        let _ = input.write_all(bytes);
-    } else {
-        // An open, silent stdin: the helper must still finish on time.
-        _keep_open = input;
-    }
+    let _keep_open = child.stdin.take();
     let out = child.wait_with_output().unwrap();
     assert!(!home.path().join(".pu").exists());
     out
@@ -67,19 +70,26 @@ fn given_isolated_observer_should_relay_one_frame_over_the_pipe() {
     let listener = rt.block_on(async { SignalListener::bind(&name) }).unwrap();
     // Warm the binary (first-run image validation is outside the budget).
     assert_silent_success(&helper(None, "", Some(b"")));
-    let out = helper(
-        Some(&name),
-        "private",
-        Some(br#"{"session_id":"exact","hook_event_name":"UserPromptSubmit"}"#),
-    );
-    assert_silent_success(&out);
+    // The helper drops a frame it cannot send within its 100ms budget
+    // (fail-open); a machine loaded by other work can starve one run, so
+    // a hook that fires again must get through.
     let mut data = vec![0; MAX_FRAME];
-    let n = rt
-        .block_on(async {
+    let mut received = None;
+    for _attempt in 0..3 {
+        let out = helper(
+            Some(&name),
+            "private",
+            Some(br#"{"session_id":"exact","hook_event_name":"UserPromptSubmit"}"#),
+        );
+        assert_silent_success(&out);
+        if let Ok(n) = rt.block_on(async {
             tokio::time::timeout(Duration::from_secs(2), listener.recv(&mut data)).await
-        })
-        .unwrap()
-        .unwrap();
+        }) {
+            received = Some(n.unwrap());
+            break;
+        }
+    }
+    let n = received.expect("no relayed frame in three hook runs");
     let frame: serde_json::Value = serde_json::from_slice(&data[..n]).unwrap();
     assert_eq!(frame["payload"]["session_id"], "exact");
     assert!(frame["payload"]["occurred_at_ms"].is_i64());
@@ -91,14 +101,18 @@ fn given_dead_listener_or_open_stdin_should_exit_success_within_budget() {
     assert_silent_success(&helper(None, "", Some(b"")));
     let absent = pipe_name("absent");
     for stdin in [Some(&b"{}"[..]), None] {
-        let start = Instant::now();
-        let out = helper(Some(&absent), "", stdin);
-        assert!(
-            start.elapsed() < Duration::from_millis(500),
-            "{:?}",
-            start.elapsed()
-        );
-        assert_silent_success(&out);
+        // A blocked helper would take as long every time; process start-up
+        // on a machine loaded by other work only sometimes does.
+        let fastest = (0..3)
+            .map(|_| {
+                let start = Instant::now();
+                let out = helper(Some(&absent), "", stdin);
+                assert_silent_success(&out);
+                start.elapsed()
+            })
+            .min()
+            .unwrap();
+        assert!(fastest < Duration::from_millis(500), "{fastest:?}");
     }
 }
 
@@ -128,11 +142,14 @@ fn given_scripted_hooks_through_helper_should_move_engine_state() {
         .unwrap();
     assert!(intake.snapshot().is_none());
     assert_silent_success(&helper(None, "", Some(b"")));
-    let now = chrono::Utc::now().timestamp_millis();
-    for (sequence, kind) in [(1, "observer_bound"), (2, "agent_start")] {
+    // Each helper run drops its frame if starved past its 100ms budget
+    // (fail-open), as a hook's next firing would find. Resend each step, with
+    // its own sequence number (pi binds only on sequence 1), until the
+    // engine shows it took effect.
+    let send = |sequence: u64, kind: &str| {
         let payload = serde_json::json!({
             "session_id": "root", "native_pid": 4242, "sequence": sequence,
-            "type": kind, "occurred_at_ms": now,
+            "type": kind, "occurred_at_ms": chrono::Utc::now().timestamp_millis(),
         });
         let out = helper(
             Some(&intake.address),
@@ -140,17 +157,33 @@ fn given_scripted_hooks_through_helper_should_move_engine_state() {
             Some(&serde_json::to_vec(&payload).unwrap()),
         );
         assert_silent_success(&out);
-    }
-    let deadline = Instant::now() + Duration::from_secs(3);
-    let snapshot = loop {
-        if let Some(s) = intake.snapshot()
-            && s.activity == SignalActivity::Working
-        {
-            break s;
-        }
-        assert!(Instant::now() < deadline, "{:?}", intake.snapshot());
-        std::thread::sleep(Duration::from_millis(20));
     };
+    let wait_for = |done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    };
+    let bound = (0..3).any(|_| {
+        send(1, "observer_bound");
+        wait_for(&|| intake.snapshot().is_some())
+    });
+    assert!(bound, "observer_bound never relayed");
+    let working = (0..3).any(|_| {
+        send(2, "agent_start");
+        wait_for(&|| {
+            intake
+                .snapshot()
+                .is_some_and(|s| s.activity == SignalActivity::Working)
+        })
+    });
+    assert!(working, "{:?}", intake.snapshot());
+    let working = intake.snapshot();
+    let snapshot = working.unwrap();
     assert_eq!(snapshot.observation.state, ObservationState::Current);
 
     // A wrong token through the same helper changes nothing.

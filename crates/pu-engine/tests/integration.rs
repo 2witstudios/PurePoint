@@ -1,11 +1,14 @@
-// Drives the daemon over its Unix socket.
-#![cfg(unix)]
+// Drives the daemon over its platform transport: the Unix socket, or on
+// Windows the named pipe derived from the same socket path.
 
 use pu_core::canon::CanonicalPath;
 use pu_core::protocol::{GridCommand, PROTOCOL_VERSION, Request, Response};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+
+async fn connect(sock: &std::path::Path) -> std::io::Result<pu_transport::Stream> {
+    pu_transport::connect(&pu_transport::Endpoint::for_socket(sock)?).await
+}
 
 async fn start_server(sock: &std::path::Path) -> tokio::task::JoinHandle<()> {
     let engine = pu_engine::engine::Engine::new();
@@ -16,7 +19,7 @@ async fn start_server(sock: &std::path::Path) -> tokio::task::JoinHandle<()> {
 }
 
 async fn send(sock: &std::path::Path, req: &Request) -> Response {
-    let stream = UnixStream::connect(sock).await.unwrap();
+    let stream = connect(sock).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let json = serde_json::to_string(req).unwrap();
@@ -294,7 +297,7 @@ async fn given_grid_split_should_succeed() {
 async fn given_tab_command_should_be_accepted_and_broadcast_to_grid_subscribers() {
     // given — a subscriber streaming grid events for the project
     let h = TestHarness::new().await;
-    let stream = UnixStream::connect(&h.sock).await.unwrap();
+    let stream = connect(&h.sock).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let subscribe = serde_json::to_string(&Request::SubscribeGrid {
@@ -466,8 +469,6 @@ fn init_git_repo(dir: &std::path::Path) {
 
 #[tokio::test(flavor = "current_thread")]
 async fn given_undeletable_worktree_directory_should_mark_failed_and_keep_manifest_entry() {
-    use std::os::unix::fs::PermissionsExt;
-
     let h = TestHarness::new().await;
     let project_path = std::path::PathBuf::from(h.project_root());
     init_git_repo(&project_path);
@@ -490,7 +491,24 @@ async fn given_undeletable_worktree_directory_should_mark_failed_and_keep_manife
     // Strip write permission so neither `git worktree remove` nor the fallback
     // `remove_dir_all` can unlink the directory's contents — simulating the
     // permission-error/lingering-file-handle failure mode from issue #161.
-    std::fs::set_permissions(&wt_path, std::fs::Permissions::from_mode(0o555)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wt_path, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    // Windows: the lingering file handle itself, opened with no sharing, so
+    // the retried removal gives up on a sharing violation.
+    #[cfg(windows)]
+    let held = {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .share_mode(0)
+            .open(wt_path.join("held.log"))
+            .unwrap()
+    };
 
     let resp = h
         .send(&Request::DeleteWorktree {
@@ -500,7 +518,13 @@ async fn given_undeletable_worktree_directory_should_mark_failed_and_keep_manife
         .await;
 
     // Restore permissions immediately so the TempDir can clean itself up afterward.
-    std::fs::set_permissions(&wt_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wt_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(windows)]
+    drop(held);
 
     match resp {
         Response::DeleteWorktreeResult {
@@ -586,7 +610,7 @@ async fn given_production_daemon_restart_should_restore_registry_without_project
                     process.try_wait().unwrap().is_none(),
                     "daemon exited before binding"
                 );
-                if UnixStream::connect(socket).await.is_ok() {
+                if connect(socket).await.is_ok() {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -650,13 +674,28 @@ async fn given_point_guard_folder_without_git_should_spawn_split_agents_in_that_
     assert!(matches!(response, Response::InitResult { .. }));
     assert!(!root.join(".git").exists());
 
-    let script = root.join("record-directory.sh");
-    std::fs::write(
-        &script,
-        "pwd > \"$PU_PROJECT_ROOT/$PU_AGENT_ID.cwd\"\nexec /bin/sleep 30\n",
-    )
-    .unwrap();
-    let command = format!("/bin/sh {}", script.display());
+    #[cfg(unix)]
+    let command = {
+        let script = root.join("record-directory.sh");
+        std::fs::write(
+            &script,
+            "pwd > \"$PU_PROJECT_ROOT/$PU_AGENT_ID.cwd\"\nexec /bin/sleep 30\n",
+        )
+        .unwrap();
+        format!("/bin/sh {}", script.display())
+    };
+    #[cfg(windows)]
+    let command = {
+        let script = root.join("record-directory.ps1");
+        std::fs::write(
+            &script,
+            "$cwd = [System.IO.Directory]::GetCurrentDirectory()\n\
+             [System.IO.File]::WriteAllText(\"$env:PU_PROJECT_ROOT\\$env:PU_AGENT_ID.cwd\", \"$cwd`n\")\n\
+             Start-Sleep 30\n",
+        )
+        .unwrap();
+        format!("pwsh -NoProfile -NoLogo -File {}", script.display())
+    };
     // Exercise a shell, a configured agent and a custom command without invoking providers.
     std::fs::write(
         root.join(".pu/config.yaml"),
@@ -686,7 +725,8 @@ async fn given_point_guard_folder_without_git_should_spawn_split_agents_in_that_
             }
             other => panic!("expected root spawn, got {other:?}"),
         };
-        let recorded = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        // pwsh can take seconds to start when the suite loads the machine.
+        let recorded = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
                 // `>` creates the file before `pwd` writes it; wait for the full line.
                 if let Some(cwd) = std::fs::read_to_string(root.join(format!("{id}.cwd")))
@@ -712,6 +752,9 @@ async fn given_point_guard_folder_without_git_should_spawn_split_agents_in_that_
     }
 }
 
+// SIGHUP is Unix's. A detached Windows daemon has no console, so closing the
+// terminal that started it delivers nothing (`ipc_server::signals`).
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_standalone_daemon_should_survive_sighup() {
     // The SSH session or terminal that started the daemon hanging up must not
@@ -728,7 +771,7 @@ async fn given_standalone_daemon_should_survive_sighup() {
         .spawn()
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while UnixStream::connect(&socket).await.is_err() {
+        while connect(&socket).await.is_err() {
             assert!(
                 process.try_wait().unwrap().is_none(),
                 "daemon exited before binding"

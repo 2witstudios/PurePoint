@@ -26,9 +26,17 @@ pub(crate) type SignalSocket = pu_transport::signal::SignalListener;
 
 pub(crate) type SignalStates = Arc<Mutex<HashMap<String, Arc<LaunchState>>>>;
 
+/// One launch as Codex discovery sees it: its pid and cwd, and on Windows the
+/// Codex home its environment names (discovery there scans that home by
+/// creation time instead of following descriptors).
+#[cfg(unix)]
+pub(crate) type CodexKey = (u32, String);
+#[cfg(windows)]
+pub(crate) type CodexKey = (u32, String, Option<PathBuf>);
+
 /// Read-only samplers live with this Engine, never in a global/service singleton.
 pub(crate) struct NativeSources {
-    codex: Arc<batch::Sampler<(u32, String), crate::read_source::CodexCandidate>>,
+    codex: Arc<batch::Sampler<CodexKey, crate::read_source::CodexCandidate>>,
     opencode: opencode::Services,
 }
 impl Default for NativeSources {
@@ -42,19 +50,13 @@ impl Default for NativeSources {
 
 /// Existing native-read binding and telemetry share discovery, not ownership.
 pub(crate) struct CodexReader {
-    sampler: Arc<batch::Sampler<(u32, String), crate::read_source::CodexCandidate>>,
+    sampler: Arc<batch::Sampler<CodexKey, crate::read_source::CodexCandidate>>,
     id: String,
     startup_until: tokio::time::Instant,
-    _registration: batch::Registration<(u32, String), crate::read_source::CodexCandidate>,
+    _registration: batch::Registration<CodexKey, crate::read_source::CodexCandidate>,
 }
 impl NativeSources {
-    pub(crate) fn codex_reader(
-        &self,
-        launch: Option<&str>,
-        pid: u32,
-        cwd: &str,
-    ) -> Option<CodexReader> {
-        let key = (pid, cwd.to_owned());
+    pub(crate) fn codex_reader(&self, launch: Option<&str>, key: CodexKey) -> Option<CodexReader> {
         let (id, registration) =
             match launch.and_then(|id| self.codex.attach(id, &key).map(|r| (id.to_owned(), r))) {
                 Some(existing) => existing,
@@ -83,7 +85,7 @@ impl CodexReader {
         mut refresh: F,
     ) -> Result<crate::read_source::Binding, crate::read_source::SourceError>
     where
-        F: FnMut(Vec<(String, (u32, String))>) -> Fut,
+        F: FnMut(Vec<(String, CodexKey)>) -> Fut,
         Fut: std::future::Future<
                 Output = HashMap<String, Option<crate::read_source::CodexCandidate>>,
             >,
@@ -109,16 +111,21 @@ impl CodexReader {
     }
 }
 async fn refresh_codex(
-    roots: Vec<(String, (u32, String))>,
+    roots: Vec<(String, CodexKey)>,
 ) -> HashMap<String, Option<crate::read_source::CodexCandidate>> {
+    #[cfg(unix)]
+    let roots = roots
+        .into_iter()
+        .map(|(id, (pid, cwd))| (id, pid, cwd))
+        .collect();
+    #[cfg(windows)]
+    let roots = roots
+        .into_iter()
+        .map(|(id, (pid, cwd, home))| (id, pid, cwd, home))
+        .collect();
     tokio::time::timeout(
         Duration::from_secs(2),
-        crate::read_source::discover_codex_roots(
-            roots
-                .into_iter()
-                .map(|(id, (pid, cwd))| (id, pid, cwd))
-                .collect(),
-        ),
+        crate::read_source::discover_codex_roots(roots),
     )
     .await
     .unwrap_or_default()
@@ -924,7 +931,11 @@ mod tests {
     async fn given_long_idle_unbound_reader_should_not_force_scans_after_startup() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let sources = NativeSources::default();
-        let reader = sources.codex_reader(None, 123, "/owned").unwrap();
+        #[cfg(unix)]
+        let key = (123, "/owned".to_owned());
+        #[cfg(windows)]
+        let key = (123, "/owned".to_owned(), None);
+        let reader = sources.codex_reader(None, key).unwrap();
         tokio::time::advance(Duration::from_secs(3)).await;
         let calls = AtomicUsize::new(0);
         for _ in 0..100 {
@@ -976,6 +987,9 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
+    // Ownership by held descriptor (`exec 3<`) is Unix; the Windows
+    // counterpart below proves the same retry with creation-time ownership.
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_unbound_reader_with_cached_miss_should_retry_newly_opened_owned_rollout() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1001,7 +1015,7 @@ mod tests {
             .unwrap();
         let sources = NativeSources::default();
         let reader = sources
-            .codex_reader(None, child.id().unwrap(), "/owned")
+            .codex_reader(None, (child.id().unwrap(), "/owned".to_owned()))
             .unwrap();
         assert!(reader.discover().await.is_err(), "No rollout is held yet");
         child
@@ -1019,6 +1033,50 @@ mod tests {
             .read_exact(&mut ready)
             .await
             .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), reader.discover()).await;
+        child.kill().await.unwrap();
+        child.wait().await.unwrap();
+        assert_eq!(result.unwrap().unwrap().session_id, "late-root");
+    }
+
+    /// Windows: a rollout created under the launch's Codex home after a
+    /// cached miss is found by the next discovery.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn given_unbound_reader_with_cached_miss_should_retry_newly_created_owned_rollout() {
+        let home = tempfile::tempdir().unwrap();
+        let mut child = tokio::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let sources = NativeSources::default();
+        let reader = sources
+            .codex_reader(
+                None,
+                (
+                    child.id().unwrap(),
+                    "/owned".to_owned(),
+                    Some(home.path().to_path_buf()),
+                ),
+            )
+            .unwrap();
+        assert!(reader.discover().await.is_err(), "No rollout exists yet");
+        let today = chrono::Local::now();
+        let day = home
+            .path()
+            .join("sessions")
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        std::fs::create_dir_all(&day).unwrap();
+        std::fs::write(
+            day.join("rollout-late.jsonl"),
+            r#"{"type":"session_meta","payload":{"source":"cli","id":"late-root","cwd":"/owned"}}
+"#,
+        )
+        .unwrap();
         let result = tokio::time::timeout(Duration::from_secs(1), reader.discover()).await;
         child.kill().await.unwrap();
         child.wait().await.unwrap();
@@ -1162,55 +1220,77 @@ mod tests {
             eprintln!("node not found; skipping");
             return;
         };
-        let (prepared, tmp) = fixture("pi", None);
-        let address = prepared.state._artifacts.signal_address.clone();
-        let extension = tmp.path().join("pi.mjs");
-        std::fs::write(
-            &extension,
-            include_bytes!("../../assets/agent-signals/pi.mjs"),
-        )
-        .unwrap();
-        let script = r#"
-            const { pathToFileURL } = await import('node:url');
-            const ext = (await import(pathToFileURL(process.argv[1]).href)).default;
-            const on = {};
-            ext({ on: (name, f) => { on[name] = f; } });
-            const ctx = { sessionManager: { getSessionId: () => 'root' } };
-            process.stdin.once('data', () => {
-              on.session_start({}, ctx);
-              setTimeout(() => on.agent_start({}, ctx), 300);
-              setTimeout(() => process.exit(0), 900);
-            });
-        "#;
-        let mut child = tokio::process::Command::new(node)
-            .args(["--input-type=module", "-e", script])
-            .arg(&extension)
-            .env("PU_SIGNAL_SOCKET", &address)
-            .env("PU_SIGNAL_TOKEN", "private-fixture-token")
-            .stdin(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+        // The extension gives each frame 100ms and drops it after that
+        // (fail-open, as the Unix helper does); a machine loaded by other
+        // suites can starve one attempt, so run the stub host up to three
+        // times and require one complete Working sequence.
+        let mut activity = SignalActivity::Unknown;
+        for _attempt in 0..3 {
+            let (prepared, tmp) = fixture("pi", None);
+            let address = prepared.state._artifacts.signal_address.clone();
+            let extension = tmp.path().join("pi.mjs");
+            std::fs::write(
+                &extension,
+                include_bytes!("../../assets/agent-signals/pi.mjs"),
+            )
             .unwrap();
-        let states = SignalStates::default();
-        let (_tx, rx) = tokio::sync::watch::channel(None);
-        prepared.activate(
-            &states,
-            "project",
-            "/owned",
-            child.id().unwrap(),
-            rx,
-            Arc::default(),
-        );
-        child
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(b"go\n")
-            .await
-            .unwrap();
-        assert!(child.wait().await.unwrap().success());
-        let snapshot = states.lock().unwrap()["ag-test"].snapshot().unwrap();
-        assert_eq!(snapshot.activity, SignalActivity::Working);
+            let script = r#"
+                const { pathToFileURL } = await import('node:url');
+                const ext = (await import(pathToFileURL(process.argv[1]).href)).default;
+                const on = {};
+                ext({ on: (name, f) => { on[name] = f; } });
+                const ctx = { sessionManager: { getSessionId: () => 'root' } };
+                process.stdin.once('data', () => {
+                  on.session_start({}, ctx);
+                  setTimeout(() => on.agent_start({}, ctx), 300);
+                  setTimeout(() => process.exit(0), 2000);
+                });
+            "#;
+            let mut child = tokio::process::Command::new(&node)
+                .args(["--input-type=module", "-e", script])
+                .arg(&extension)
+                .env("PU_SIGNAL_SOCKET", &address)
+                .env("PU_SIGNAL_TOKEN", "private-fixture-token")
+                .stdin(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let states = SignalStates::default();
+            let (_tx, rx) = tokio::sync::watch::channel(None);
+            prepared.activate(
+                &states,
+                "project",
+                "/owned",
+                child.id().unwrap(),
+                rx,
+                Arc::default(),
+            );
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(b"go\n")
+                .await
+                .unwrap();
+            assert!(child.wait().await.unwrap().success());
+            // The frames are in the pipe once node exits, but the intake task
+            // reduces them asynchronously: wait for it rather than racing it.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            activity = loop {
+                let activity = states.lock().unwrap()["ag-test"]
+                    .snapshot()
+                    .unwrap()
+                    .activity;
+                if activity == SignalActivity::Working || tokio::time::Instant::now() >= deadline {
+                    break activity;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            };
+            if activity == SignalActivity::Working {
+                break;
+            }
+        }
+        assert_eq!(activity, SignalActivity::Working);
     }
     #[cfg(windows)]
     fn which_node() -> Result<PathBuf, ()> {

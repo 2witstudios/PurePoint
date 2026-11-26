@@ -473,10 +473,11 @@ mod tests {
             let tmp = tempfile::TempDir::new().unwrap();
             let engine = Self::new();
             let id = "quiet-screen".to_string();
+            let mut words = crate::test_helpers::ECHO_COMMAND.split_whitespace();
             let mut session = crate::pty_manager::NativePtyHost::new()
                 .spawn(crate::pty_manager::SpawnConfig {
-                    command: "/bin/cat".into(),
-                    args: vec![],
+                    command: words.next().unwrap().into(),
+                    args: words.map(str::to_owned).collect(),
                     cwd: tmp.path().display().to_string(),
                     env: vec![],
                     env_remove: vec![],
@@ -486,6 +487,16 @@ mod tests {
                 .await
                 .unwrap();
             session.screen_aware = true;
+            // conhost repaints its whole screen after every resize (WIN-1.1
+            // section 4), so ConPTY is never quiet: give the session a buffer
+            // the console's output does not reach. Resizes still go through
+            // the real `ResizePseudoConsole`.
+            #[cfg(windows)]
+            {
+                let buffer = crate::output_buffer::OutputBuffer::new();
+                buffer.resize_terminal(40, 120);
+                session.output_buffer = std::sync::Arc::new(buffer);
+            }
             engine.sessions.lock().await.insert(id.clone(), session);
             (engine, id, tmp)
         }

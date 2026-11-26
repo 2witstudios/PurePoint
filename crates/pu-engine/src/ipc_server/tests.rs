@@ -165,7 +165,7 @@ async fn setup_with_agent() -> (
 #[tokio::test(flavor = "current_thread")]
 async fn given_attach_request_should_stream_output_continuously() {
     let (engine, agent_id, tmp) =
-        crate::test_helpers::init_and_spawn_command(Some("/bin/cat")).await;
+        crate::test_helpers::init_and_spawn_command(Some(crate::test_helpers::ECHO_COMMAND)).await;
     let sock_path = tmp.path().join("test.sock");
     let server = IpcServer::bind(&sock_path, engine).unwrap();
     let engine = server.engine().clone();
@@ -739,11 +739,14 @@ async fn next_response(reader: &mut IpcReader) -> Response {
 
 #[tokio::test]
 async fn given_identified_viewer_should_rebuild_evicted_screen_and_resync_gap() {
-    let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+    let (engine, id, _tmp) =
+        crate::test_helpers::init_and_spawn_command(Some(crate::test_helpers::ECHO_COMMAND)).await;
     let engine = std::sync::Arc::new(engine);
     let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
-    // Wait for shell startup, then put enduring output beyond the raw replay bound.
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Wait until the terminal has drawn its startup output (an echoed line
+    // follows it; a ConPTY's first paint clears the screen), then put
+    // enduring output beyond the raw replay bound.
+    crate::test_helpers::wait_for_echo(&engine, &id, b"pu-startup-done").await;
     buffer.write(b"\x1b[2J\x1b[Hancient screen");
     buffer.write(&b"\x1b[0m".repeat(1_100_000));
     let (mut reader, writer, task) = attachment_pair(
@@ -948,13 +951,24 @@ async fn given_rapid_applied_sizes_should_report_every_change_in_order() {
 
 #[tokio::test]
 async fn given_cancellable_request_and_eof_already_buffered_should_never_start_typing() {
-    let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+    let (engine, id, _tmp) =
+        crate::test_helpers::init_and_spawn_command(Some(crate::test_helpers::ECHO_COMMAND)).await;
     let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Startup output (a ConPTY's first paint) is in before the baseline, and
+    // an echoing terminal would show any byte that was typed.
+    crate::test_helpers::wait_for_echo(&engine, &id, b"pu-startup-done").await;
     let (server, client) = pair().await;
     let (read, mut write) = server.into_split();
-    // EOF is already visible before the request is dispatched.
+    // EOF is already visible before the request is dispatched. (Dropping a
+    // Windows pipe client with a read in flight closes its handle only once
+    // the runtime has reaped that read; a real client process's exit closes
+    // it at once. Wait for the hang-up to show, as it would there.)
     drop(client);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !read.peer_sent_or_closed() {
+        assert!(std::time::Instant::now() < deadline, "hang-up never seen");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     let request = serde_json::to_string(&Request::Input {
         agent_id: id,
         data: b"QQQQQQQQQQQQQQQQ".to_vec(),
@@ -975,12 +989,17 @@ async fn given_cancellable_request_and_eof_already_buffered_should_never_start_t
         )
         .await
     );
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Long enough for a typed byte to come back through the terminal's echo.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let (data, _, _) = buffer.read_from(before);
+    // The echoing terminal shows any typed byte, even of a partial first
+    // chunk. (On Windows conhost may still retitle the window after the
+    // startup echo, so the buffer itself need not stay byte-identical.)
     assert!(
-        data.is_empty(),
+        !data.contains(&b'Q'),
         "PTY output changed after pre-observed EOF: {data:?}"
     );
+    #[cfg(unix)]
     assert_eq!(
         buffer.current_offset(),
         before,
@@ -1203,7 +1222,7 @@ async fn given_oversized_frame_in_status_stream_should_reject_and_close() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn given_oversized_frame_in_attach_stream_should_reject_and_close() {
     let (engine, agent_id, tmp) =
-        crate::test_helpers::init_and_spawn_command(Some("/bin/cat")).await;
+        crate::test_helpers::init_and_spawn_command(Some(crate::test_helpers::ECHO_COMMAND)).await;
     let sock_path = tmp.path().join("test.sock");
     let server = IpcServer::bind(&sock_path, engine).unwrap();
     let engine = server.engine().clone();
@@ -1224,7 +1243,7 @@ async fn given_oversized_frame_in_attach_stream_should_reject_and_close() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn given_line_split_across_writes_in_attach_stream_should_not_lose_bytes() {
     let (engine, agent_id, tmp) =
-        crate::test_helpers::init_and_spawn_command(Some("/bin/cat")).await;
+        crate::test_helpers::init_and_spawn_command(Some(crate::test_helpers::ECHO_COMMAND)).await;
     let sock_path = tmp.path().join("test.sock");
     let server = IpcServer::bind(&sock_path, engine).unwrap();
     let engine = server.engine().clone();
@@ -1381,7 +1400,7 @@ async fn given_client_of_same_user_should_pass_the_default_peer_check() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn given_line_still_arriving_when_attach_ends_should_finish_in_request_mode() {
     let (engine, agent_id, tmp) =
-        crate::test_helpers::init_and_spawn_command(Some("/bin/cat")).await;
+        crate::test_helpers::init_and_spawn_command(Some(crate::test_helpers::ECHO_COMMAND)).await;
     let project_root = tmp.path().join("project").to_string_lossy().into_owned();
     let sock_path = tmp.path().join("test.sock");
     let server = IpcServer::bind(&sock_path, engine).unwrap();
