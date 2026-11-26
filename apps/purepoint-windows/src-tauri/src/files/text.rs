@@ -151,15 +151,68 @@ fn temp_path(path: &Path) -> PathBuf {
     path.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()))
 }
 
+/// The file a save writes: a symbolic link's target (so saving through a link updates the
+/// file it names and keeps the link), otherwise `path` itself.
+fn save_target(path: &Path) -> Result<PathBuf, FsError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            pu_core::canon::canonicalize(path).map_err(|e| FsError::io(path, &e))
+        }
+        _ => Ok(path.to_path_buf()),
+    }
+}
+
+/// Puts `temp` in place of `path`. An existing file is replaced with `ReplaceFileW`, which
+/// keeps the replaced file's security descriptor (its ACL), attributes and creation time, as
+/// an editor's save should; a plain rename would give the file the temporary's inherited ACL.
+/// A new file is renamed into place and inherits its folder's ACL, like any new file.
+fn replace_with(temp: &Path, path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    if std::fs::symlink_metadata(path).is_ok() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            REPLACEFILE_IGNORE_MERGE_ERRORS, ReplaceFileW,
+        };
+        let wide = |p: &Path| -> Vec<u16> {
+            p.as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect()
+        };
+        let (replaced, replacement) = (wide(path), wide(temp));
+        // SAFETY: both are NUL-terminated wide strings that outlive the call; no backup file,
+        // no exclude or reserved pointers.
+        let ok = unsafe {
+            ReplaceFileW(
+                replaced.as_ptr(),
+                replacement.as_ptr(),
+                std::ptr::null(),
+                REPLACEFILE_IGNORE_MERGE_ERRORS,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        return if ok != 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        };
+    }
+    std::fs::rename(temp, path)
+}
+
 /// Write `text` unless the file changed: its modification time must still be
 /// `expected_modified_ms` (`None`: there must be no file). Creates the parent directory and
 /// replaces the file through a temporary sibling, so readers never see half a document.
-/// Returns the new modification time.
+/// Saving through a symbolic link writes its target; an existing file keeps its ACL
+/// ([`replace_with`]). Returns the new modification time.
 pub fn write_if_unmodified(
     path: &Path,
     text: &str,
     expected_modified_ms: Option<u64>,
 ) -> Result<u64, FsError> {
+    let target = save_target(path)?;
+    let path = target.as_path();
     let current = stat(path)?;
     if current != expected_modified_ms {
         return Err(FsError::Conflict(format!(
@@ -175,8 +228,7 @@ pub fn write_if_unmodified(
         let _ = std::fs::remove_file(&temp);
         return Err(FsError::io(&temp, &e));
     }
-    // `rename` replaces an existing file on Windows (MOVEFILE_REPLACE_EXISTING).
-    if let Err(e) = std::fs::rename(&temp, path) {
+    if let Err(e) = replace_with(&temp, path) {
         let _ = std::fs::remove_file(&temp);
         return Err(FsError::io(path, &e));
     }
@@ -303,6 +355,58 @@ mod tests {
             write_if_unmodified(&path, "two", Some(first)),
             Err(FsError::Conflict(_))
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_an_explicit_acl_should_keep_it_across_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        let first = write_if_unmodified(&path, "one", None).unwrap();
+        let icacls = |args: &[&str]| {
+            std::process::Command::new("icacls")
+                .arg(&path)
+                .args(args)
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        };
+        // A well-known SID, so the output does not depend on the language of Windows.
+        if icacls(&["/grant", "*S-1-1-0:(R)"]).is_err() {
+            return;
+        }
+        let granted = |listing: &str| listing.contains("Everyone") || listing.contains("S-1-1-0");
+        if !granted(&icacls(&[]).unwrap()) {
+            return; // the grant did not take here
+        }
+        let modified = stat(&path).unwrap();
+        assert!(modified.is_some());
+        write_if_unmodified(&path, "two", modified).unwrap();
+        assert_eq!(read(&path, 100).unwrap().unwrap().text, "two");
+        assert!(granted(&icacls(&[]).unwrap()), "the save dropped the ACL");
+        let _ = first;
+    }
+
+    #[test]
+    fn given_a_symbolic_link_should_save_its_target_and_keep_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.txt");
+        let link = dir.path().join("link.txt");
+        let modified = write_if_unmodified(&target, "one", None).unwrap();
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&target, &link);
+        #[cfg(not(windows))]
+        let made = std::os::unix::fs::symlink(&target, &link);
+        if made.is_err() {
+            return; // symbolic links need Developer Mode or elevation here
+        }
+        write_if_unmodified(&link, "two", Some(modified)).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "two");
     }
 
     #[test]
