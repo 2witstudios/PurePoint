@@ -7,6 +7,7 @@ Maps every macOS app source file to its planned counterpart in the Windows app (
 - Status is `todo`, `ported` or `excluded`. Excluded rows have no leaf and must give a reason: the `+iOS` files and whole-file `#if os(iOS)` files (iPad build only) and the DEC-11 exclusions. Every other row names exactly one WIN leaf.
 - `node scripts/check-parity-matrix.mjs` fails when a Swift file, a test file or an SF Symbol in the source is missing here, or a non-excluded row lacks a leaf. `--no-todo` also fails on any `todo` row (the WIN-10.5 and WIN-11.1 gate).
 - Keep the tables in this exact format: one row per line, cells separated by `|`, file names in backticks.
+- Shared sources outside the macOS app are not rows here. `apps/shared/ChatMarkdown/` (Point Guard chat Markdown: `ChatMarkdown.swift`, `ChatMarkdownView.swift` and the cases in `ChatMarkdownTests.swift`, run by `check-markdown.py`, plus the render-script fixtures) is ported by WIN-9.6 to `ui/src/model/chatMarkdown.ts` and `ui/src/views/chat/ChatMarkdown.tsx`, with tests in `ui/src/model/chatMarkdown.test.ts` and `ui/src/views/chat/ChatMarkdown.test.tsx`.
 
 Summary: 256 source files, 67 excluded, 186 todo, 3 ported. 69 test files (23 iOS-only). 104 SF Symbols.
 

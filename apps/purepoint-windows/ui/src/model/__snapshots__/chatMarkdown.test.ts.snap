@@ -1,0 +1,549 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ChatMarkdown render fixtures > parses the desktopChat fixture 1`] = `
+[
+  {
+    "kind": "heading",
+    "level": 2,
+    "text": "A clearer view of the work",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Here's the **release plan**, with \`pu status\` ready to run.
+This line stays on its own line.",
+  },
+  {
+    "checked": null,
+    "depth": 0,
+    "kind": "listItem",
+    "marker": "1.",
+    "text": "Check the workspace:",
+  },
+  {
+    "blocks": [
+      {
+        "kind": "code",
+        "language": "sh",
+        "text": "pu status --global --json
+pu agents list --global --json",
+      },
+    ],
+    "depth": 1,
+    "kind": "listContinuation",
+  },
+  {
+    "checked": null,
+    "depth": 0,
+    "kind": "listItem",
+    "marker": "2.",
+    "text": "Review the results",
+  },
+  {
+    "checked": true,
+    "depth": 1,
+    "kind": "listItem",
+    "marker": "•",
+    "text": "Preserve line breaks",
+  },
+  {
+    "checked": false,
+    "depth": 1,
+    "kind": "listItem",
+    "marker": "•",
+    "text": "Check the phone layout",
+  },
+  {
+    "blocks": [
+      {
+        "kind": "paragraph",
+        "text": "**Keep the conversation readable.**
+Long replies should have a clear rhythm.",
+      },
+    ],
+    "kind": "quote",
+  },
+  {
+    "alignments": [
+      "leading",
+      "leading",
+      "trailing",
+    ],
+    "headers": [
+      "Platform",
+      "Rendering",
+      "Status",
+    ],
+    "kind": "table",
+    "rows": [
+      [
+        "Desktop",
+        "Native Markdown",
+        "Ready",
+      ],
+      [
+        "iOS",
+        "Shared styles",
+        "Ready",
+      ],
+    ],
+  },
+]
+`;
+
+exports[`ChatMarkdown render fixtures > parses the phoneAppendedSection fixture 1`] = `
+[
+  {
+    "kind": "heading",
+    "level": 2,
+    "text": "A clearer view of the work",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Here's the **release plan**, with \`pu status\` ready to run.
+This line stays on its own line.",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Next steps",
+  },
+  {
+    "checked": null,
+    "depth": 0,
+    "kind": "listItem",
+    "marker": "1.",
+    "text": "Review the desktop changes",
+  },
+  {
+    "checked": true,
+    "depth": 1,
+    "kind": "listItem",
+    "marker": "•",
+    "text": "Preserve line breaks",
+  },
+  {
+    "checked": false,
+    "depth": 1,
+    "kind": "listItem",
+    "marker": "•",
+    "text": "Check the phone layout",
+  },
+  {
+    "checked": null,
+    "depth": 0,
+    "kind": "listItem",
+    "marker": "2.",
+    "text": "Ship the polished chat",
+  },
+  {
+    "blocks": [
+      {
+        "kind": "paragraph",
+        "text": "**Keep the conversation readable.**
+Long replies should have a clear rhythm.",
+      },
+    ],
+    "kind": "quote",
+  },
+  {
+    "kind": "heading",
+    "level": 2,
+    "text": "New section",
+  },
+  {
+    "kind": "paragraph",
+    "text": "This arrived after the reply was laid out.",
+  },
+  {
+    "kind": "code",
+    "language": "swift",
+    "text": "let next = "Keep following the reply"",
+  },
+  {
+    "kind": "paragraph",
+    "text": "End of the appended section.",
+  },
+]
+`;
+
+exports[`ChatMarkdown render fixtures > parses the phoneCode fixture 1`] = `
+[
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Ready to run",
+  },
+  {
+    "checked": null,
+    "depth": 0,
+    "kind": "listItem",
+    "marker": "1.",
+    "text": "Check the workspace:",
+  },
+  {
+    "blocks": [
+      {
+        "kind": "code",
+        "language": "sh",
+        "text": "pu status --global --json
+pu agents list --global --json",
+      },
+    ],
+    "depth": 1,
+    "kind": "listContinuation",
+  },
+  {
+    "alignments": [
+      "leading",
+      "leading",
+      "trailing",
+    ],
+    "headers": [
+      "Platform",
+      "Rendering",
+      "Status",
+    ],
+    "kind": "table",
+    "rows": [
+      [
+        "Desktop",
+        "Native Markdown",
+        "Ready",
+      ],
+      [
+        "iOS",
+        "Shared styles",
+        "Ready",
+      ],
+    ],
+  },
+]
+`;
+
+exports[`ChatMarkdown render fixtures > parses the phoneLongReply fixture 1`] = `
+[
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 1",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 2",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 3",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 4",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 5",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 6",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 7",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 8",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 9",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 10",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 11",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Step 12",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the result, then check the next task.",
+  },
+  {
+    "kind": "code",
+    "language": "sh",
+    "text": "pu status --global --json",
+  },
+  {
+    "kind": "paragraph",
+    "text": "End of the long reply.",
+  },
+]
+`;
+
+exports[`ChatMarkdown render fixtures > parses the phoneOverview fixture 1`] = `
+[
+  {
+    "kind": "heading",
+    "level": 2,
+    "text": "A clearer view of the work",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Here's the **release plan**, with \`pu status\` ready to run.
+This line stays on its own line.",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Next steps",
+  },
+  {
+    "checked": null,
+    "depth": 0,
+    "kind": "listItem",
+    "marker": "1.",
+    "text": "Review the desktop changes",
+  },
+  {
+    "checked": true,
+    "depth": 1,
+    "kind": "listItem",
+    "marker": "•",
+    "text": "Preserve line breaks",
+  },
+  {
+    "checked": false,
+    "depth": 1,
+    "kind": "listItem",
+    "marker": "•",
+    "text": "Check the phone layout",
+  },
+  {
+    "checked": null,
+    "depth": 0,
+    "kind": "listItem",
+    "marker": "2.",
+    "text": "Ship the polished chat",
+  },
+  {
+    "blocks": [
+      {
+        "kind": "paragraph",
+        "text": "**Keep the conversation readable.**
+Long replies should have a clear rhythm.",
+      },
+    ],
+    "kind": "quote",
+  },
+]
+`;
+
+exports[`ChatMarkdown render fixtures > parses the renderPreview fixture 1`] = `
+[
+  {
+    "kind": "heading",
+    "level": 2,
+    "text": "A clearer view of the work",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Here's the **release plan**, with \`pu status\` ready to run.
+This line stays on its own line.",
+  },
+  {
+    "kind": "heading",
+    "level": 3,
+    "text": "Next steps",
+  },
+  {
+    "checked": null,
+    "depth": 0,
+    "kind": "listItem",
+    "marker": "1.",
+    "text": "Review the desktop changes",
+  },
+  {
+    "checked": true,
+    "depth": 1,
+    "kind": "listItem",
+    "marker": "•",
+    "text": "Preserve line breaks",
+  },
+  {
+    "checked": false,
+    "depth": 1,
+    "kind": "listItem",
+    "marker": "•",
+    "text": "Check the phone layout",
+  },
+  {
+    "checked": null,
+    "depth": 0,
+    "kind": "listItem",
+    "marker": "2.",
+    "text": "Ship the polished chat",
+  },
+  {
+    "blocks": [
+      {
+        "kind": "paragraph",
+        "text": "**Keep the conversation readable.**
+Long replies should have a clear rhythm, even in narrow panes.",
+      },
+    ],
+    "kind": "quote",
+  },
+  {
+    "alignments": [
+      "leading",
+      "leading",
+      "trailing",
+    ],
+    "headers": [
+      "Platform",
+      "Rendering",
+      "Status",
+    ],
+    "kind": "table",
+    "rows": [
+      [
+        "Desktop",
+        "Native Markdown",
+        "Ready",
+      ],
+      [
+        "iOS",
+        "Shared styles",
+        "Ready",
+      ],
+    ],
+  },
+  {
+    "kind": "code",
+    "language": "swift",
+    "text": "let conversation = PointGuard()
+conversation.send("Hello, Markdown")",
+  },
+  {
+    "kind": "paragraph",
+    "text": "Read the [project notes](https://example.com) for details.",
+  },
+]
+`;
