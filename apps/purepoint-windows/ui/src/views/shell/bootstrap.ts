@@ -7,7 +7,10 @@ import {
   onInstallerState,
   type InstallerState,
 } from '../../services/installer.ts';
-import type { AppState } from '../../state/appState.ts';
+import { localLayoutHostIO } from '../../services/fs.ts';
+import { AppState } from '../../state/appState.ts';
+import { CachedWorkspacePersistence } from '../../state/cachedWorkspacePersistence.ts';
+import { WorkspaceRegistry } from '../../state/workspaceRegistry.ts';
 import { startThemeSync } from '../../theme/themeStore.ts';
 import { useInstallerBannerStore } from './ShellBanners.tsx';
 
@@ -33,6 +36,31 @@ function logged(what: string) {
   return (error: unknown) => {
     console.error(`PurePoint: ${what} failed`, error);
   };
+}
+
+/**
+ * The window's AppState with its workspace registry (purepoint_macosApp.swift's `.onAppear`:
+ * `appState.registry = registry` and `registry.onCloseAgent`). The registry gives the sidebar its
+ * workspace rows; it persists each local project's layout through the cached `.pu/workspaces.json`
+ * mirror.
+ */
+export function createAppState(): AppState {
+  let registry: WorkspaceRegistry | null = null;
+  const persistence = new CachedWorkspacePersistence({
+    host: localLayoutHostIO,
+    onConflict: (projectRoot) => {
+      registry?.adoptLocalLayoutIfChanged(projectRoot);
+    },
+    onWriteError: (projectRoot, message) => {
+      console.error(`PurePoint: saving the layout of ${projectRoot} failed: ${message}`);
+    },
+  });
+  registry = new WorkspaceRegistry({ persistence });
+  const app = new AppState({ registry, persistence });
+  registry.onCloseAgent = (projectId, agentId) => {
+    app.projectState(projectId)?.removeAndKillAgent(agentId);
+  };
+  return app;
 }
 
 /** Starts everything; returns the function that stops the listeners. */

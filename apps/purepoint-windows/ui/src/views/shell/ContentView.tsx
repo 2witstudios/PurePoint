@@ -7,7 +7,6 @@
 // Mac's Auto Layout helper (Services/NSView+Constraints.swift).
 //
 // Differences from Swift:
-// - The sidebar outline is WIN-7.2 (`SidebarView`); until then the column lists the nav items.
 // - Agent signals (`updateAgentSignals`, `pendingSignalDestination`) are WIN-7.7; Point Guard's
 //   working directory (`pointGuardService`) is WIN-9.x; spawn selection (`pendingSelectAgentId`)
 //   and the session's workspace restore follow the pane grid (WIN-7.4).
@@ -15,19 +14,14 @@
 //   and `HotkeyMonitor` the rest; WIN-7.6 ports the monitor for terminal-focus rules).
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
-import {
-  SIDEBAR_NAV_ITEMS,
-  type SidebarSelection,
-  navItemTitle,
-  selection as sidebarSelection,
-  selectionsEqual,
-} from '../../model/sidebarItem.ts';
+import { type SidebarSelection, selection as sidebarSelection } from '../../model/sidebarItem.ts';
 import type { AppState } from '../../state/appState.ts';
 import { useKeyBindingStore } from '../../state/keyBindingStore.ts';
 import { SIDEBAR_KEY, useSidebarVisibilityStore } from '../../state/sidebarVisibilityStore.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { runWindowAction } from '../../services/windowChrome.ts';
 import { DetailView, ScreenPlaceholder } from '../detail/DetailView.tsx';
+import { SidebarView } from '../sidebar/SidebarView.tsx';
 import { useAppState } from './appContext.ts';
 import { type AppCommand, createAppActions } from './appCommands.ts';
 import { MenuBar } from './MenuBar.tsx';
@@ -131,53 +125,6 @@ export function SidebarResizer({ store = useSidebarWidthStore }) {
         store.getState().commit(next);
       }}
     />
-  );
-}
-
-/** Stands in for the sidebar outline (WIN-7.2): the nav rows, so the shell can be driven. */
-function SidebarPlaceholder({
-  selection,
-  onSelect,
-}: {
-  selection: SidebarSelection | null;
-  onSelect: (selection: SidebarSelection) => void;
-}) {
-  return (
-    <nav className="sidebar-placeholder" aria-label="Sidebar">
-      {SIDEBAR_NAV_ITEMS.map((item) => {
-        const row = sidebarSelection.nav(item);
-        return (
-          <button
-            type="button"
-            key={item}
-            className="sidebar-nav-row"
-            aria-current={selectionsEqual(selection, row) ? 'page' : undefined}
-            onClick={() => {
-              onSelect(row);
-            }}
-          >
-            {navItemTitle(item)}
-          </button>
-        );
-      })}
-      <ProjectListPlaceholder />
-      <span className="sidebar-placeholder-view">SidebarView</span>
-    </nav>
-  );
-}
-
-/** Interim project list (the end-to-end smoke test reads it); WIN-7.2's outline replaces it. */
-function ProjectListPlaceholder() {
-  const app = useAppState();
-  const projects = useStore(app.store, (state) => state.projects);
-  return (
-    <ul data-testid="project-list" className="sidebar-project-list">
-      {projects.map((project) => (
-        <li key={project.projectRoot} title={project.projectRoot}>
-          {project.projectRoot.split(/[\\/]/).filter(Boolean).pop() ?? project.projectRoot}
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -317,7 +264,7 @@ export function ContentView() {
         {sidebarShown && (
           <>
             <aside className="sidebar-column" ref={sidebarRef} tabIndex={-1}>
-              <SidebarPlaceholder selection={selection} onSelect={setSelection} />
+              <SidebarView selection={selection} onSelectionChange={setSelection} />
             </aside>
             <SidebarResizer />
           </>

@@ -141,9 +141,13 @@ export class DaemonFixture {
     await this.pu(['init']);
   }
 
-  /** Spawn a `terminal` agent in the project root; resolves its agent ID. */
-  async spawnTerminal(): Promise<string> {
-    const { stdout } = await this.pu(['spawn', '--root', '--agent', 'terminal', '--json']);
+  /**
+   * Spawn a `terminal` agent in the project root, or in a new worktree named `worktree`;
+   * resolves its agent ID.
+   */
+  async spawnTerminal(worktree?: string): Promise<string> {
+    const placement = worktree === undefined ? ['--root'] : ['--name', worktree];
+    const { stdout } = await this.pu(['spawn', ...placement, '--agent', 'terminal', '--json']);
     const match = /"(?:agent_id|id)"\s*:\s*"([^"]+)"/.exec(stdout);
     if (!match?.[1]) throw new Error(`pu spawn printed no agent id: ${stdout}`);
     return match[1];

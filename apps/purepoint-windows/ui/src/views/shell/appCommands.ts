@@ -18,7 +18,7 @@ import {
   displayString,
   isHotkeyAction,
 } from '../../model/keyBinding.ts';
-import type { SidebarNavItem } from '../../model/sidebarItem.ts';
+import type { SidebarNavItem, SidebarSelection } from '../../model/sidebarItem.ts';
 
 /** Every menu command: the hotkey actions plus the menu-only ones. */
 export type AppCommand = HotkeyAction | 'exit' | 'checkForUpdates';
@@ -148,6 +148,24 @@ export interface AppActionDeps {
 }
 
 // Commands whose screens are later leaves. Each is a named no-op until its leaf replaces it.
+
+/**
+ * What the command palette opens for (Swift `onShowCommandPalette`'s project, selection and
+ * whether worktree variants are offered). Null: the palette's own default (Swift `activeProject`).
+ */
+export interface CommandPaletteRequest {
+  readonly projectId: string;
+  readonly selection: SidebarSelection | null;
+  readonly includeWorktree: boolean;
+}
+
+/**
+ * WIN-7.5: open the command palette (Swift `CommandPalettePanel.requestOpen` + `show`). The
+ * sidebar's footer New button and its rows' add buttons call it.
+ */
+export const openCommandPalette: (request: CommandPaletteRequest | null) => void = () => {
+  // Pending WIN-7.5.
+};
 
 /** WIN-7.5: the command palette (Swift `showNewAgentPalette`). */
 function newAgent(): void {

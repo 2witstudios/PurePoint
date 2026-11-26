@@ -128,41 +128,6 @@
   font-family: var(--pp-font-mono);
 }
 
-/* Sidebar placeholder rows (the outline is WIN-7.2). */
-.sidebar-placeholder {
-  display: flex;
-  flex-direction: column;
-  padding: 8px;
-  gap: 2px;
-}
-
-.sidebar-nav-row {
-  height: var(--pp-nav-row-height);
-  border: 0;
-  border-radius: 6px;
-  padding: 0 8px;
-  background: transparent;
-  color: inherit;
-  font: var(--pp-nav-font);
-  text-align: left;
-}
-
-.sidebar-nav-row:hover {
-  background: var(--control-hover);
-}
-
-.sidebar-nav-row[aria-current='page'] {
-  background: var(--control-pressed);
-}
-
-.sidebar-placeholder-view {
-  margin-top: 12px;
-  padding: 0 8px;
-  font: var(--pp-small-font);
-  font-family: var(--pp-font-mono);
-  color: var(--secondary-text);
-}
-
 /* Title bar: a transparent band over both columns. */
 .title-bar {
   position: absolute;
