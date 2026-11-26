@@ -30,6 +30,25 @@ Backend checks run from `apps/purepoint-windows/src-tauri`: `cargo fmt -- --chec
 
 CI runs all of these in `.github/workflows/windows-app.yml`.
 
+## Releases
+
+A `v<version>` tag runs `.github/workflows/release.yml`. Its Windows jobs (WIN-10.4, DIST-009) publish to the same GitHub release as the Mac and Linux builds:
+
+| Asset                                                                                 | What it is                                                                               |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `purepoint-<version>-<x86_64\|aarch64>-pc-windows-msvc.zip` (+ `.sha256`, `.minisig`) | `pu.exe` and `pu-engine.exe`, which `scripts/install.ps1` installs                       |
+| `PurePoint_<version>_<x64\|arm64>-setup.exe` (+ `.sha256`, `.minisig`)                | the NSIS installer                                                                       |
+| `latest-windows.json` on the fixed `appcast` release                                  | the updater feed for both architectures, the only Windows asset replaced on each release |
+
+- **`windows`** (no secrets, read-only token) runs `node scripts/build-release.mjs --arch <x64|arm64> --version <tag>` for both architectures on `windows-latest`. arm64 is cross-compiled to `aarch64-pc-windows-msvc` with the runner's MSVC ARM64 tools, not built on an arm64 runner, so the arm64 binaries are never run in CI. `--version` stamps the tag into the app, into `pu` (`PU_RELEASE_VERSION`) and into the Point Guard manifest's `puVersion`. The build job zips the CLI and installs the x64 zip with `install.ps1 -Archive` into a temp directory as a smoke test. The updater public key comes from the repository variable `TAURI_UPDATER_PUBKEY`.
+- **`sign-windows`** (the `release` environment) checks the builds' SHA-256 and then signs, in this order. Each signature is skipped with a warning until its secret exists:
+  1. Authenticode with signtool when the `WINDOWS_CERTIFICATE_PFX` (+ `WINDOWS_CERTIFICATE_PASSWORD`) secret is set (WIN-10.6). It signs the zipped binaries and the setup exes. The app exe and the binaries inside the installer stay unsigned until signing moves into the bundle step.
+  2. minisign, with `RELEASE_MINISIGN_KEY`, the Linux archives' key, through `.github/scripts/minisign.sh`. A key that doesn't match the one embedded in `install.sh` and `install.ps1` fails the job.
+  3. The updater signature, with `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`), through `scripts/sign-release-feed.mjs`. It signs both installers, checks each signature against `TAURI_UPDATER_PUBKEY` and the version, and writes one `latest-windows.json`.
+- **`attest`** records build provenance and the SBOM attestations for the zips and installers. **`publish`** uploads them and replaces `latest-windows.json` on the `appcast` release.
+
+`scripts/install.ps1` (REQ-WINAPP-038) is the Windows `install.sh`. Run it as `irm …/install.ps1 | iex`, or save it and run it with `-Version`, `-InstallDir`, `-Archive` or `-AddToPath`. It downloads the zip and its `.sha256` and `.minisig`, then verifies the release signature with `minisign` if it is on `PATH`. Otherwise it uses its built-in verifier: Ed25519 and BLAKE2b-512 compiled with `Add-Type`, because .NET has neither and OpenSSL isn't on a stock Windows `PATH`. When `gh` is signed in, it also runs `gh attestation verify`. At least one check must pass and no check that runs may fail. `PU_INSTALL_SKIP_VERIFY=1` only bypasses a missing check, never a failed one. Before the install, `Unblock-File` removes the Mark of the Web. A running `pu-engine.exe` is renamed aside. The script changes `PATH` only with `-AddToPath`. It runs on PowerShell 7 and Windows PowerShell 5.1. Its tests are in `.github/scripts/test_install_ps1.py` (Windows only): a local HTTP server and throwaway keys, signed both by an independent Python signer and by `minisign.sh`.
+
 ## End-to-end tests
 
 `npm run e2e` (`ui/e2e/run.mjs`) drives the real app with WebdriverIO through [`tauri-driver`](https://v2.tauri.app/develop/tests/webdriver/) and `msedgedriver`:

@@ -655,12 +655,288 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # pu.exe/pu-engine.exe zip archives (installed by scripts/install.ps1) and the NSIS installer
+  # (DIST-009, WIN-10.4). Holds no secrets: the updater public key is a repository variable,
+  # and Authenticode, minisign and updater signing happen in sign-windows. Both architectures
+  # build on the x64 runner; arm64 cross-compiles to aarch64-pc-windows-msvc with the image's
+  # MSVC ARM64 tools (build-release.mjs --arch arm64), as the Mac build cross-compiles x86_64.
+  windows:
+    name: Build Windows (${{ matrix.arch }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.version.outputs.raw }}
+      ARCH: ${{ matrix.arch }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@dc08e2af391d489dff6d14cf743e574f7d1229c5 # 1.94.0
+        with:
+          targets: ${{ matrix.target }}
+
+      # As in the linux job: the build runs on rust-toolchain.toml's pinned toolchain.
+      - name: Add target to the pinned toolchain
+        run: rustup target add "$TARGET"
+
+      - name: Install Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+          package-manager-cache: false
+
+      - name: Install app dependencies
+        working-directory: apps/purepoint-windows
+        run: npm ci --ignore-scripts
+
+      # cargo build --release of pu-cli and pu-engine, the sealed Point Guard runtime, then the
+      # NSIS installer, all stamped with the tag's version (pu's PU_RELEASE_VERSION, the
+      # runtime manifest's puVersion and the app's version). There is no updater signing key
+      # here, so it writes no feed; sign-windows signs the final installers.
+      - name: Build CLI and installer
+        working-directory: apps/purepoint-windows
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
+        run: node scripts/build-release.mjs --arch "$ARCH" --version "$VERSION"
+
+      - name: Package
+        run: |
+          if [ "$ARCH" = x64 ]; then OUT=release; else OUT="$TARGET/release"; fi
+          NAME="purepoint-${VERSION}-${TARGET}"
+          SETUP="PurePoint_${VERSION}_${ARCH}-setup.exe"
+          mkdir -p "dist/${NAME}"
+          cp "target/${OUT}/pu.exe" "target/${OUT}/pu-engine.exe" "dist/${NAME}/"
+          cp LICENSE* README.md "dist/${NAME}/" 2>/dev/null || true
+          # .NET's ZipFile writes forward-slash entry names, which Expand-Archive and unzip read.
+          ROOT=$(pwd -W)
+          pwsh -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::CreateFromDirectory('${ROOT}/dist/${NAME}', '${ROOT}/dist/${NAME}.zip', 'Optimal', \$true)"
+          rm -rf "dist/${NAME}"
+          cp "apps/purepoint-windows/src-tauri/target/${OUT}/bundle/nsis/${SETUP}" dist/
+          cd dist
+          for FILE in "${NAME}.zip" "${SETUP}"; do
+            printf '%s  %s\n' "$(sha256sum "$FILE" | cut -d ' ' -f 1)" "$FILE" > "$FILE.sha256"
+          done
+          ls -la
+
+      # The x64 archive, installed by install.ps1 into a throwaway directory, then run.
+      - name: Install with install.ps1 into a throwaway directory
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'smoke-bin'
+          ./scripts/install.ps1 -Archive "dist/purepoint-$env:VERSION-$env:TARGET.zip" -InstallDir $dir
+          if ($LASTEXITCODE) { exit 1 }
+          & (Join-Path $dir 'pu.exe') --version
+          if ($LASTEXITCODE) { exit 1 }
+
+      - name: Upload build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-build-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # Signs the Windows builds: Authenticode (once the release environment has a certificate,
+  # WIN-10.6), then the archives and installers with the release minisign key that
+  # scripts/install.sh and scripts/install.ps1 embed, then each installer for the updater and
+  # the combined latest-windows.json feed. Runs only signtool, this repository's OpenSSL and
+  # feed wrappers, and the lockfile's Tauri CLI (installed with scripts off). Each signature
+  # is skipped with a warning until its secret exists, as for the Linux archives.
+  sign-windows:
+    name: Sign Windows artifacts
+    needs: [version, windows]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.version.outputs.raw }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+          package-manager-cache: false
+
+      - name: Download Windows builds
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: windows-build-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify Windows builds
+        run: |
+          cd dist
+          for SUM in *.sha256; do sha256sum -c "$SUM"; done
+          rm -f ./*.sha256
+
+      - name: Check for an Authenticode certificate
+        id: authenticode
+        env:
+          WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
+        run: |
+          if [ -z "$WINDOWS_CERTIFICATE_PFX" ]; then
+            echo "::warning title=Windows binaries are not Authenticode-signed::WINDOWS_CERTIFICATE_PFX is not set in the release environment (WIN-10.6), so SmartScreen warns about the installer and the binaries. See docs/architecture/distribution.md."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # WIN-10.6. Signs pu.exe and pu-engine.exe inside each archive (re-zipped) and the setup
+      # exes, with an RFC 3161 timestamp. The app exe and the binaries inside the installer
+      # stay unsigned until the bundle step signs them (WIN-10.6).
+      - name: Authenticode-sign archives and installers
+        if: steps.authenticode.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          TIMESTAMP_URL: http://timestamp.digicert.com
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'authenticode.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX))
+          try {
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName -Descending | Select-Object -First 1
+            if (-not $signtool) { throw 'signtool.exe not found' }
+            function Invoke-Sign([string[]]$Files) {
+              & $signtool.FullName sign /fd SHA256 /td SHA256 /tr $env:TIMESTAMP_URL /f $pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD @Files
+              if ($LASTEXITCODE) { throw 'signtool sign failed' }
+              & $signtool.FullName verify /pa @Files
+              if ($LASTEXITCODE) { throw 'signtool verify failed' }
+            }
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            foreach ($zip in Get-ChildItem dist -Filter *.zip) {
+              $unpacked = Join-Path $env:RUNNER_TEMP "authenticode-$($zip.BaseName)"
+              [IO.Compression.ZipFile]::ExtractToDirectory($zip.FullName, $unpacked)
+              Invoke-Sign @((Get-ChildItem $unpacked -Recurse -Filter *.exe).FullName)
+              Remove-Item $zip.FullName
+              [IO.Compression.ZipFile]::CreateFromDirectory((Join-Path $unpacked $zip.BaseName), $zip.FullName, 'Optimal', $true)
+            }
+            Invoke-Sign @((Get-ChildItem dist -Filter *-setup.exe).FullName)
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Write checksums
+        run: |
+          cd dist
+          for FILE in *.zip *-setup.exe; do
+            printf '%s  %s\n' "$(sha256sum "$FILE" | cut -d ' ' -f 1)" "$FILE" > "$FILE.sha256"
+          done
+
+      # The same key and wrapper as sign-linux, with Git for Windows' OpenSSL 3 first on PATH.
+      - name: Sign archives
+        id: sign
+        env:
+          RELEASE_MINISIGN_KEY: ${{ secrets.RELEASE_MINISIGN_KEY }}
+        run: |
+          if [ -z "$RELEASE_MINISIGN_KEY" ]; then
+            echo "::warning title=Windows archives are unsigned::RELEASE_MINISIGN_KEY is not set in the release environment, so this release has no Windows .minisig files. See docs/architecture/distribution.md."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          export PATH="/usr/bin:$PATH"
+          case "$(openssl version)" in "OpenSSL 3."*) ;; *) echo "::error::need OpenSSL 3, got $(openssl version)"; exit 1 ;; esac
+          KEY="$RUNNER_TEMP/release-minisign.pem"
+          (umask 077 && printf '%s\n' "$RELEASE_MINISIGN_KEY" > "$KEY")
+          EXPECTED=$(sed -n 's/^RELEASE_PUBLIC_KEY="\(.*\)"$/\1/p' scripts/install.sh)
+          EXPECTED_PS1=$(sed -n "s/^\$ReleasePublicKey = '\(.*\)'\$/\1/p" scripts/install.ps1)
+          ACTUAL=$(bash .github/scripts/minisign.sh pubkey "$KEY")
+          if [ "$EXPECTED" != "$ACTUAL" ] || [ "$EXPECTED_PS1" != "$ACTUAL" ]; then
+            rm -f "$KEY"
+            echo "::error::RELEASE_MINISIGN_KEY does not match the public key in scripts/install.sh and scripts/install.ps1"
+            exit 1
+          fi
+          bash .github/scripts/minisign.sh sign "$KEY" dist/*.zip dist/*-setup.exe
+          rm -f "$KEY"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install the Tauri CLI
+        working-directory: apps/purepoint-windows
+        run: npm ci --ignore-scripts
+
+      # The app verifies an update against TAURI_UPDATER_PUBKEY (built in by the windows job),
+      # so each signature is checked against it before the feed is written.
+      - name: Sign installers for the updater and write latest-windows.json
+        working-directory: apps/purepoint-windows
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
+          PUREPOINT_RELEASE_NOTES: See https://github.com/2witstudios/PurePoint/releases/tag/v${{ needs.version.outputs.raw }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD; fi
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::warning title=No Windows update feed::TAURI_SIGNING_PRIVATE_KEY is not set in the release environment (WIN-10.6), so latest-windows.json is not updated."
+          fi
+          node scripts/sign-release-feed.mjs --version "$VERSION" --out "$GITHUB_WORKSPACE/build/appcast" \
+            "$GITHUB_WORKSPACE/dist/PurePoint_${VERSION}_x64-setup.exe" \
+            "$GITHUB_WORKSPACE/dist/PurePoint_${VERSION}_arm64-setup.exe"
+
+      - name: Upload Windows release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-release
+          path: |
+            dist/*.zip
+            dist/*.zip.sha256
+            dist/*-setup.exe
+            dist/*-setup.exe.sha256
+            dist/*.minisig
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Windows update feed
+        if: hashFiles('build/appcast/latest-windows.json') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-appcast
+          path: build/appcast/latest-windows.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Cleanup signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/authenticode.pfx" "$RUNNER_TEMP/release-minisign.pem"
+
   # Records GitHub build provenance for every release binary and attests the
   # SBOMs against them (verify with `gh attestation verify`). Runs no
   # repository code.
   attest:
     name: Attest release artifacts
-    needs: [version, sign-macos, linux, linux-phone, sbom]
+    needs: [version, sign-macos, linux, linux-phone, sbom, sign-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -682,6 +958,12 @@ jobs:
           name: macos-dmg
           path: dist
 
+      - name: Download Windows release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-release
+          path: dist
+
       - name: Download SBOMs
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -694,6 +976,8 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/*.dmg
+            dist/*.zip
+            dist/*-setup.exe
 
       - name: Attest pu SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -701,6 +985,8 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/*.dmg
+            dist/*.zip
+            dist/*-setup.exe
           sbom-path: sbom/purepoint-${{ needs.version.outputs.raw }}-pu-cli.cdx.json
 
       - name: Attest pu-engine SBOM
@@ -709,14 +995,18 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/*.dmg
+            dist/*.zip
+            dist/*-setup.exe
           sbom-path: sbom/purepoint-${{ needs.version.outputs.raw }}-pu-engine.cdx.json
 
-      # The DMG and the Linux phone access payloads ship this npm runtime.
+      # The DMG, the Windows installers and the Linux phone access payloads ship
+      # this npm runtime.
       - name: Attest Point Guard npm SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             dist/*.dmg
+            dist/*-setup.exe
             dist/purepoint-pointguard-*.tar.gz
           sbom-path: sbom/purepoint-${{ needs.version.outputs.raw }}-point-guard-npm.cdx.json
 
@@ -727,7 +1017,7 @@ jobs:
   # every artifact is signed and attested.
   publish:
     name: Publish release
-    needs: [version, sign-macos, linux, linux-phone, sbom, sign-linux, attest]
+    needs: [version, sign-macos, linux, linux-phone, sbom, sign-linux, windows, sign-windows, attest]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -749,6 +1039,12 @@ jobs:
           name: macos-dmg
           path: dist
 
+      - name: Download Windows release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-release
+          path: dist
+
       - name: Download SBOMs
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -768,6 +1064,14 @@ jobs:
         with:
           name: macos-appcast
           path: build
+
+      # Absent when the release environment has no updater signing key yet.
+      - name: Download Windows update feed
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: windows-appcast
+          path: build
+          merge-multiple: true
 
       # A re-run of every job re-signs and re-notarizes the DMG, which changes
       # its bytes. The appcast must never carry a signature for a DMG other
@@ -794,11 +1098,16 @@ jobs:
             fi
           done
 
-      # The `appcast` release is the moving update feed, so its appcast.xml is
-      # the one asset that is replaced on every release. The signing job
-      # generated and signed it.
+      # The `appcast` release is the moving update feed, so its appcast.xml and
+      # latest-windows.json are the only assets replaced on every release. The
+      # signing jobs generated and signed them.
       - name: Upload appcast
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload appcast build/appcast.xml --clobber
+          if [ -f build/latest-windows.json ]; then
+            gh release upload appcast build/latest-windows.json --clobber
+          else
+            echo "::warning::no signed latest-windows.json, so the Windows update feed is unchanged"
+          fi

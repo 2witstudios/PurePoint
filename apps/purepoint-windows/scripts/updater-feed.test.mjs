@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { bundleConfig } from './build-release.mjs';
+import { installerArch, parseArgs } from './sign-release-feed.mjs';
 import {
   FEED_NAME,
   FEED_URL,
@@ -17,6 +18,7 @@ import {
   signInstaller,
   updaterConfig,
   updaterKeys,
+  verifyUpdaterSignature,
   writeFeed,
 } from './updater-feed.mjs';
 
@@ -54,6 +56,27 @@ test('the release public key is merged over the placeholder', () => {
   const merged = bundleConfig({ binDir: 'C:\\bin', pointGuard: 'C:\\pg', pubkey: 'KEY' });
   assert.equal(merged.plugins.updater.pubkey, 'KEY');
   assert.equal(bundleConfig({ binDir: 'C:\\bin', pointGuard: 'C:\\pg' }).plugins, undefined);
+});
+
+test('a release build carries the tag version; a local one keeps tauri.conf.json', () => {
+  const dirs = { binDir: 'C:\\bin', pointGuard: 'C:\\pg' };
+  assert.equal(bundleConfig({ ...dirs, version: '1.2.3' }).version, '1.2.3');
+  assert.equal('version' in bundleConfig(dirs), false);
+});
+
+test('the release feed signer takes one installer of the release per architecture', () => {
+  assert.equal(installerArch('dist/PurePoint_1.2.3_x64-setup.exe', '1.2.3'), 'x64');
+  assert.equal(installerArch('PurePoint_1.2.3_arm64-setup.exe', '1.2.3'), 'arm64');
+  assert.throws(() => installerArch('PurePoint_1.2.4_x64-setup.exe', '1.2.3'), /not version/);
+  assert.throws(() => installerArch('PurePoint_1.2.3_x86-setup.exe', '1.2.3'), /Not a PurePoint/);
+  const both = ['PurePoint_1.2.3_x64-setup.exe', 'PurePoint_1.2.3_arm64-setup.exe'];
+  assert.equal(parseArgs(['--version', '1.2.3', '--out', 'feed', ...both]).installers.length, 2);
+  const twice = ['PurePoint_1.2.3_x64-setup.exe', 'x/PurePoint_1.2.3_x64-setup.exe'];
+  assert.throws(
+    () => parseArgs(['--version', '1.2.3', '--out', 'f', ...twice]),
+    /per architecture/,
+  );
+  assert.throws(() => parseArgs(['--out', 'f', both[0]]), /--version/);
 });
 
 test('the manifest lists the NSIS installer of the versioned release', () => {
@@ -99,6 +122,24 @@ test(
       // The signature names the key that made it (minisign key id, bytes 2-10).
       const keyId = (b64) => Buffer.from(b64, 'base64').subarray(2, 10).toString('hex');
       assert.equal(keyId(decoded.split('\n')[1] ?? ''), keyId(publicKey.split('\n')[1] ?? ''));
+
+      // The release job checks each signature against the app's public key (WIN-10.4).
+      const pubkey = fs.readFileSync(`${key}.pub`, 'utf8').trim();
+      const check = (overrides) =>
+        verifyUpdaterSignature({ pubkey, file: setup, signature, version: '0.2.0', ...overrides });
+      check({});
+      assert.throws(() => check({ version: '0.2.1' }), /does not name version 0\.2\.1/);
+      const other = path.join(dir, 'other.key');
+      execFileSync(process.execPath, [CLI, 'signer', 'generate', '--ci', '-p', '', '-w', other], {
+        stdio: 'ignore',
+      });
+      assert.throws(
+        () => check({ pubkey: fs.readFileSync(`${other}.pub`, 'utf8') }),
+        /another key/,
+      );
+      fs.writeFileSync(setup, 'tampered\n');
+      assert.throws(() => check({}), /does not verify/);
+      fs.writeFileSync(setup, 'not an installer\n');
 
       const feed = writeFeed(
         dir,

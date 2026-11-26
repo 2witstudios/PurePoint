@@ -229,7 +229,9 @@ export async function stage(args) {
   const digest = writeManifest(
     target,
     windowsManifest({
-      puVersion: workspaceVersion(fs.readFileSync(path.join(REPO, 'Cargo.toml'), 'utf8')),
+      // A release build compiles the tag into pu (PU_RELEASE_VERSION), which `pu phone` matches.
+      puVersion:
+        args.puVersion ?? workspaceVersion(fs.readFileSync(path.join(REPO, 'Cargo.toml'), 'utf8')),
       piVersion: mobilePackage.dependencies['@earendil-works/pi-coding-agent'],
       nodeVersion: pin.version,
       architecture: args.arch,

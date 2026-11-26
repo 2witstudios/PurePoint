@@ -395,6 +395,8 @@ WebView2: `webviewInstallMode` is `embedBootstrapper` (silent), so the installer
 
 CI: the `installer` job in `windows-app.yml` runs `npm run bundle` on pushes to `main` and `pu/windows` and on `workflow_dispatch`, not on pull requests (two release builds, one with LTO), and uploads the setup exe as the `purepoint-windows-installer` artifact.
 
+Release (WIN-10.4): on a `v<version>` tag, `release.yml`'s `windows` job builds both architectures on `windows-latest`. arm64 is cross-compiled to `aarch64-pc-windows-msvc`. The job runs `build-release.mjs --version <tag>`, which stamps the app version, `pu`'s `PU_RELEASE_VERSION` and the runtime manifest's `puVersion`. It then zips `pu.exe` and `pu-engine.exe` as `purepoint-<version>-<arch>-pc-windows-msvc.zip`. `sign-windows` adds Authenticode when its certificate secret exists (WIN-10.6), then the release minisign signatures for the zips and setup exes, then the updater signatures and a two-architecture `latest-windows.json` (`scripts/sign-release-feed.mjs`, checked against `TAURI_UPDATER_PUBKEY`). `attest` and `publish` attest and publish them with the Unix artifacts. Details: `apps/purepoint-windows/README.md` (Releases).
+
 ### Updater (WIN-10.3)
 
 `src-tauri/src/updater.rs` (front end `ui/src/services/updater.ts`, `ui/src/state/updaterStore.ts`, `ui/src/views/shell/UpdateDialog.tsx`) replaces Sparkle with `tauri-plugin-updater` 2.12 (the last release on Tauri 2.11 and Rust 1.89; `default-features = false`, `native-tls`, since an NSIS update needs no zip support and Windows TLS fetches the feed).

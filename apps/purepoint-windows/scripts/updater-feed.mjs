@@ -16,6 +16,7 @@
 // (`requireSignedVersion`), so a feed cannot pair a newer version with an older installer.
 
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -83,4 +84,56 @@ export function writeFeed(dir, manifest) {
   const target = path.join(dir, FEED_NAME);
   fs.writeFileSync(target, JSON.stringify(manifest, null, 2) + '\n');
   return target;
+}
+
+/** The minisign public key inside TAURI_UPDATER_PUBKEY (base64 of the `.pub` file's text). */
+function minisignPublicKey(pubkey) {
+  const line = Buffer.from(pubkey, 'base64').toString('utf8').split('\n')[1]?.trim() ?? '';
+  const raw = Buffer.from(line, 'base64');
+  if (raw.length !== 42 || raw.subarray(0, 2).toString() !== 'Ed')
+    throw new Error('TAURI_UPDATER_PUBKEY is not a minisign public key');
+  return { keyId: raw.subarray(2, 10), key: raw.subarray(10) };
+}
+
+function ed25519Verify(key, message, signature) {
+  // DER SubjectPublicKeyInfo prefix for an Ed25519 key.
+  const spki = Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), key]);
+  return crypto.verify(null, message, { key: spki, format: 'der', type: 'spki' }, signature);
+}
+
+/**
+ * Check an updater signature (`<file>.sig`, base64 of a minisign signature) the way the app
+ * will: made by `pubkey` over `file`, with a trusted comment that names `version`. Throws on
+ * anything else, so a signing key that doesn't match the app's public key fails the release.
+ */
+export function verifyUpdaterSignature({ pubkey, file, signature, version }) {
+  const { keyId, key } = minisignPublicKey(pubkey);
+  const lines = Buffer.from(signature, 'base64').toString('utf8').split('\n');
+  const sigLine = Buffer.from(lines[1]?.trim() ?? '', 'base64');
+  const trusted = lines[2] ?? '';
+  const global = Buffer.from(lines[3]?.trim() ?? '', 'base64');
+  if (sigLine.length !== 74 || !trusted.startsWith('trusted comment: ') || global.length !== 64)
+    throw new Error(`malformed updater signature for ${path.basename(file)}`);
+  if (!sigLine.subarray(2, 10).equals(keyId))
+    throw new Error(`${path.basename(file)} is signed by another key than TAURI_UPDATER_PUBKEY`);
+  const algorithm = sigLine.subarray(0, 2).toString();
+  const content = fs.readFileSync(file);
+  const message =
+    algorithm === 'ED'
+      ? crypto.createHash('blake2b512').update(content).digest()
+      : algorithm === 'Ed'
+        ? content
+        : null;
+  const sig = sigLine.subarray(10);
+  const comment = trusted.slice('trusted comment: '.length);
+  if (
+    message === null ||
+    !ed25519Verify(key, message, sig) ||
+    !ed25519Verify(key, Buffer.concat([sig, Buffer.from(comment, 'utf8')]), global)
+  )
+    throw new Error(`the updater signature of ${path.basename(file)} does not verify`);
+  if (!comment.split('\t').includes(`version:${version}`))
+    throw new Error(
+      `the updater signature of ${path.basename(file)} does not name version ${version}`,
+    );
 }

@@ -18,7 +18,7 @@ Builds that aren't code-signed yet make SmartScreen show "Windows protected your
 irm https://raw.githubusercontent.com/2witstudios/PurePoint/main/scripts/install.ps1 | iex
 ```
 
-The script downloads the release archive and verifies its signature. It then removes the downloaded-from-the-internet mark from the binaries and installs them to `%USERPROFILE%\.pu\bin`. Set `PU_VERSION` to pin a release.
+The script downloads the release archive and verifies its signature. It then removes the downloaded-from-the-internet mark from the binaries and installs them to `%USERPROFILE%\.pu\bin`. Set `PU_VERSION` to pin a release. The script doesn't change `PATH`: it prints the command to add the folder, or does it when you save the script and run it with `-AddToPath`.
 
 **From source.** You need Rust 1.89 (MSVC; `rust-toolchain.toml` selects it), Node 22+, Git for Windows and the Visual Studio C++ build tools.
 

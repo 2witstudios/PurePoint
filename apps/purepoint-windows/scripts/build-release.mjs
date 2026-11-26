@@ -21,10 +21,11 @@
 // Output: src-tauri/target/release/bundle/nsis/PurePoint_<version>_<arch>-setup.exe (no
 // Authenticode signature), and with a signing key its .sig and latest-windows.json.
 //
-// Usage: node scripts/build-release.mjs [--jobs N] [--arch x64|arm64] [--cache <dir>]
-//        [--node-zip <zip>]
-// --jobs caps cargo's parallelism for both builds (CARGO_BUILD_JOBS); --cache and --node-zip
-// go to the staging script.
+// Usage: node scripts/build-release.mjs [--jobs N] [--arch x64|arm64] [--version X.Y.Z]
+//        [--cache <dir>] [--node-zip <zip>]
+// --jobs caps cargo's parallelism for both builds (CARGO_BUILD_JOBS); --version overrides
+// tauri.conf.json's version (the release job passes the tag's, WIN-10.4); --cache and
+// --node-zip go to the staging script.
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -57,11 +58,14 @@ function parseArgs(argv) {
     };
     if (flag === '--jobs') args.jobs = value();
     else if (flag === '--arch') args.arch = value();
+    else if (flag === '--version') args.version = value();
     else if (flag === '--cache') args.cache = value();
     else if (flag === '--node-zip') args.nodeZip = value();
     else throw new Error(`Unknown argument ${flag}`);
   }
   if (!(args.arch in TARGETS)) throw new Error(`Unknown --arch ${args.arch}`);
+  if (args.version !== undefined && !/^\d+\.\d+\.\d+$/.test(args.version))
+    throw new Error('--version must be X.Y.Z');
   if (args.jobs !== undefined && !/^[1-9]\d*$/.test(args.jobs))
     throw new Error('--jobs must be a positive integer');
   return args;
@@ -73,12 +77,13 @@ function run(command, args, options = {}) {
 }
 
 /**
- * The merged Tauri config: the bundled binaries and runtime as resources (absolute sources), and
- * the updater's release public key when there is one.
+ * The merged Tauri config: the bundled binaries and runtime as resources (absolute sources), the
+ * updater's release public key when there is one, and the release version when it is given.
  */
-export function bundleConfig({ binDir, pointGuard, pubkey = null }) {
+export function bundleConfig({ binDir, pointGuard, pubkey = null, version = null }) {
   const source = (p) => p.split(path.sep).join('/');
   return {
+    ...(version === null ? {} : { version }),
     ...updaterConfig(pubkey),
     bundle: {
       resources: {
@@ -109,6 +114,8 @@ async function main() {
   ])
     delete env[name];
   if (args.jobs) env.CARGO_BUILD_JOBS = args.jobs;
+  // pu records the release version, which `pu phone` requires the runtime manifest to match.
+  if (args.version) env.PU_RELEASE_VERSION = args.version;
   const cross = args.arch !== 'x64' || process.arch !== 'x64';
 
   const cargoTarget = path.resolve(REPO, process.env.CARGO_TARGET_DIR ?? 'target');
@@ -129,6 +136,7 @@ async function main() {
     arch: args.arch,
     cache: args.cache,
     nodeZip: args.nodeZip,
+    puVersion: args.version,
     replace: true,
   });
   console.log(`Staged ${pointGuard} (manifest SHA-256 ${digest})`);
@@ -136,7 +144,11 @@ async function main() {
   const config = path.join(INPUTS, 'tauri.bundle.conf.json');
   fs.writeFileSync(
     config,
-    JSON.stringify(bundleConfig({ binDir, pointGuard, pubkey: keys.pubkey }), null, 2) + '\n',
+    JSON.stringify(
+      bundleConfig({ binDir, pointGuard, pubkey: keys.pubkey, version: args.version ?? null }),
+      null,
+      2,
+    ) + '\n',
   );
 
   // npm's tauri shim is a .cmd: run the CLI's JS entry with this Node instead.
@@ -162,7 +174,9 @@ async function main() {
     );
     return;
   }
-  const { version } = JSON.parse(fs.readFileSync(path.join(TAURI, 'tauri.conf.json'), 'utf8'));
+  const version =
+    args.version ??
+    JSON.parse(fs.readFileSync(path.join(TAURI, 'tauri.conf.json'), 'utf8')).version;
   const signed = installers
     .filter((file) => file.includes(`_${version}_`))
     .map((file) => ({
