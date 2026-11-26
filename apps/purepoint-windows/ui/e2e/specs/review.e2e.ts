@@ -49,7 +49,8 @@ describe('Review changes', () => {
   });
 
   it('opens the worktree review on its branch changes', async () => {
-    const row = byText(WORKTREE, 'li');
+    // The worktree's agent shares its name, so look only in the project/worktree list.
+    const row = $(`//ul[@data-testid="project-list"]//li[normalize-space()="${WORKTREE}"]`);
     await row.waitForDisplayed({ timeout: 30_000 });
     await row.click();
     await expect($('[data-view="ReviewChangesView"]')).toBeDisplayed();
