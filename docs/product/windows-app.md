@@ -259,6 +259,10 @@ The daemon side is `pu_core::fs_retry` plus `handle_delete_worktree`: it waits o
 ### Unix unchanged and exclusions
 
 - REQ-WINAPP-079: Given Linux and macOS, should build and pass the existing test suites unchanged, with `PROTOCOL_VERSION` still 14 and every Windows code path `cfg(windows)`.
+- Three small changes made for the port are visible on Unix too, and are kept there on purpose (shared code is simpler than gating them, and none changes a working setup):
+  - An empty `HOME` is treated as unset (`pu_core::paths::home_from`), so `HOME=` fails with "$HOME not set" instead of resolving `.pu` against the current directory.
+  - An existing `<project>/.pu/agent-signals` directory is chmod'ed to 0700 when an agent launches (`private_fs::create_private_dir`), not only a newly created one.
+  - `pu-engine --parent-pid <pid>` is honoured on Unix: the daemon exits when that pid is gone, as with `--managed`, which still watches the original parent when no pid is given. An unparsable value exits with status 1.
 - REQ-WINAPP-080: Given the Exclusions list, should not port any listed file or feature, and should provide the listed replacement wherever the Mac exposes the feature.
 
 ## Sum Sheet
