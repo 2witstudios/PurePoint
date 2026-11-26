@@ -27,6 +27,7 @@ import {
   selectedSwarmOf,
   type AgentsHubState,
 } from '../../state/agentsHubState.ts';
+import { triggersStateFor } from '../../state/triggersState.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { useAppState } from '../shell/appContext.ts';
 import { InlineErrorBanner } from '../shell/DaemonErrorBanner.tsx';
@@ -45,6 +46,7 @@ import {
 } from './hubComponents.tsx';
 import { PromptCreationSheet } from './PromptCreationSheet.tsx';
 import { SwarmCreationSheet } from './SwarmCreationSheet.tsx';
+import { TriggersTab } from '../triggers/TriggersTab.tsx';
 import './agents.css';
 
 /** What the hub needs from the app: where to load from and where to act. */
@@ -58,6 +60,7 @@ interface HubContext {
 export function AgentsHubView() {
   const app = useAppState();
   const hub = agentsHubStateFor(app);
+  const triggers = triggersStateFor(app);
   const projectCount = useStore(app.store, (s) => s.projects.length);
   const isLoading = useStore(hub.store, (s) => s.isLoading);
   const error = useStore(hub.store, (s) => s.error);
@@ -77,8 +80,11 @@ export function AgentsHubView() {
   const rootsKey = projectRoots.join('\n');
   useEffect(() => {
     const roots = rootsKey === '' ? [] : rootsKey.split('\n');
-    void hub.loadAll(roots);
-  }, [hub, rootsKey, projectCount]);
+    void (async () => {
+      await hub.loadAll(roots);
+      await triggers.loadTriggers(roots);
+    })();
+  }, [hub, triggers, rootsKey, projectCount]);
 
   let content: ReactNode;
   switch (activeTab) {
@@ -92,11 +98,7 @@ export function AgentsHubView() {
       content = <SwarmsContent context={context} />;
       break;
     case 'triggers':
-      content = (
-        <div className="hub-empty hub-empty-detail" data-view="TriggerDetailView">
-          Triggers
-        </div>
-      );
+      content = <TriggersTab state={triggers} projectRoots={projectRoots} />;
       break;
   }
 

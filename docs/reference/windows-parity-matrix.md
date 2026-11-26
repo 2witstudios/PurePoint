@@ -45,7 +45,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/ScheduleEvent.swift` | 231 | `ui/src/model/scheduleEvent.ts` | WIN-8.8 | todo | — |
 | `Models/SidebarItem.swift` | 136 | `ui/src/model/sidebarItem.ts` | WIN-6.5 | ported | — |
 | `Models/StreamEvent.swift` | 122 | `src-tauri/src/conversations/stream_event.rs` | WIN-8.12 | ported | — |
-| `Models/TriggerItem.swift` | 59 | `ui/src/model/triggerItem.ts` | WIN-8.9 | todo | — |
+| `Models/TriggerItem.swift` | 59 | `ui/src/model/triggerItem.ts` | WIN-8.9 | ported | — |
 | `Models/Workspace.swift` | 594 | `ui/src/model/workspace.ts`, `ui/src/model/paneSplit.ts` (the tree operations it uses) | WIN-6.1 | ported | — |
 | `Models/WorkspaceModel.swift` | 73 | `ui/src/model/workspaceModel.ts` | WIN-6.1 | ported | — |
 | `Platform/AppActivity+iOS.swift` | 97 | — | — | excluded | `+iOS` file (iPad build only) |
@@ -137,7 +137,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/SidebarVisibility.swift` | 38 | `ui/src/state/sidebarVisibilityStore.ts` | WIN-6.5 | ported | — |
 | `State/SpawnTargetResolver.swift` | 31 | `ui/src/state/spawnTargetResolver.ts` | WIN-6.6 | ported | — |
 | `State/StreamAccumulator.swift` | 193 | `ui/src/state/sessions.ts` | WIN-8.16 | ported | — |
-| `State/TriggersState.swift` | 93 | `ui/src/state/triggersState.ts` | WIN-8.9 | todo | — |
+| `State/TriggersState.swift` | 93 | `ui/src/state/triggersState.ts` (plus `assign_trigger`) | WIN-8.9 | ported | — |
 | `State/WorkspaceFilesState.swift` | 139 | `ui/src/state/workspaceFilesState.ts` | WIN-8.4 | todo | — |
 | `State/WorkspaceRegistry.swift` | 749 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | ported | — |
 | `Theme/EditorTheme.swift` | 49 | `ui/src/theme/tokens.css` (`--pp-editor-*`) | WIN-5.8 | ported | — |
@@ -266,8 +266,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Terminal/TerminalPaneView.swift` | 251 | `ui/src/views/terminal/terminalPaneView.ts` | WIN-7.3 | ported | — |
 | `Views/Terminal/TerminalViewCache.swift` | 152 | `ui/src/views/terminal/terminalViewCache.ts`, `ui/src/views/terminal/terminals.ts` (evicts every hidden terminal 30 s after hiding, REQ-WINAPP-061) | WIN-7.3 | ported | — |
 | `Views/TitlebarClearance.swift` | 25 | `ui/src/views/shell/TitlebarClearance.tsx` | WIN-7.1 | ported | — |
-| `Views/Triggers/TriggerCreationSheet.swift` | 220 | `ui/src/views/triggers/TriggerCreationSheet.tsx` | WIN-8.9 | todo | — |
-| `Views/Triggers/TriggerDetailView.swift` | 170 | `ui/src/views/triggers/TriggerDetailView.tsx` | WIN-8.9 | todo | — |
+| `Views/Triggers/TriggerCreationSheet.swift` | 220 | `ui/src/views/triggers/TriggerCreationSheet.tsx` | WIN-8.9 | ported | — |
+| `Views/Triggers/TriggerDetailView.swift` | 170 | `ui/src/views/triggers/TriggerDetailView.tsx` (plus an Assign section), `ui/src/views/triggers/TriggersTab.tsx` (the hub's Triggers tab), `ui/src/views/triggers/triggers.css` | WIN-8.9 | ported | — |
 | `Views/WindowChrome+iOS.swift` | 102 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/WindowChrome.swift` | 42 | `ui/src/views/shell/WindowChrome.tsx`, `src-tauri/src/chrome.rs`, `src-tauri/src/window_state.rs` | WIN-7.1 | ported | — |
 | `purepoint_macosApp.swift` | 95 | `ui/src/main.tsx`, `src-tauri/src/main.rs` | WIN-5.1 | ported | — |

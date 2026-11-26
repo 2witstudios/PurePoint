@@ -1,0 +1,102 @@
+/* The Triggers tab and sheet (WIN-8.9); the hub's shared styles are in views/agents/agents.css. */
+.trigger-tint-blue {
+  color: var(--hub-blue);
+}
+
+.trigger-tint-orange {
+  color: var(--hub-orange);
+}
+
+.trigger-tint-purple {
+  color: var(--hub-purple);
+}
+
+.trigger-tertiary {
+  color: var(--pp-system-tertiary-label);
+  font-size: 12px;
+}
+
+.trigger-tiny {
+  font-size: 10px;
+}
+
+.trigger-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trigger-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.trigger-scope {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--secondary-text) 15%, transparent);
+  color: var(--secondary-text);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.trigger-description {
+  margin: 0;
+  color: var(--secondary-text);
+}
+
+.trigger-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--secondary-text) 5%, transparent);
+}
+
+.trigger-step-index {
+  width: 20px;
+  text-align: right;
+  font: 700 11px var(--pp-font-mono);
+  color: var(--secondary-text);
+}
+
+.trigger-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trigger-code {
+  font: 12px var(--pp-font-mono);
+  user-select: text;
+}
+
+.trigger-variable {
+  display: flex;
+  gap: 8px;
+  font: 12px var(--pp-font-mono);
+}
+
+.trigger-variable-key {
+  font-weight: 500;
+}
+
+.trigger-step-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trigger-step-title {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--secondary-text);
+}
+
+.hub-roster-row > .hub-input.trigger-narrow {
+  flex: none;
+  width: 56px;
+}
