@@ -4,15 +4,19 @@
 // name, worktree count, changes toggle, Refresh), the file tree (shown by default) and the
 // review changes or the open file. DiffState loads for the project root.
 //
-// Differences from Swift, as in WorktreeDetailView: the file tree is WIN-8.4 and the editor and
-// its banners WIN-8.5; until then the editor shows its empty state.
-import { useState } from 'react';
+// The file tree is FileTreeSidebarView (WIN-8.4). Difference from Swift, as in
+// WorktreeDetailView: the editor and its banners are WIN-8.5; until then the editor shows its
+// empty state.
+import { useMemo, useState } from 'react';
 import { useStore } from 'zustand';
 import type { DiffState } from '../../state/diffState.ts';
 import type { ProjectState } from '../../state/projectState.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { ChangesContent } from './ChangesContent.tsx';
-import { EditorPlaceholder, FileTreeSidebarPlaceholder } from './placeholders.tsx';
+import { projectFileHost } from '../../services/fileHost.ts';
+import { FileTreeSidebarView } from '../filetree/FileTreeSidebarView.tsx';
+import { useFileTreeState } from '../filetree/useFileTreeState.ts';
+import { EditorPlaceholder } from './placeholders.tsx';
 import { useDiffState } from './useDiffState.ts';
 import './detail.css';
 
@@ -29,6 +33,8 @@ export function RootCheckoutDetailView({ project, createDiffState }: RootCheckou
   );
   const [showFileTree, setShowFileTree] = useState(true);
   const [showChanges, setShowChanges] = useState(true);
+  const host = useMemo(() => projectFileHost(project), [project]);
+  const fileTree = useFileTreeState(project.projectRoot, host, showFileTree);
 
   return (
     <div className="detail-screen" data-view="RootCheckoutDetailView">
@@ -69,6 +75,7 @@ export function RootCheckoutDetailView({ project, createDiffState }: RootCheckou
           title="Refresh"
           onClick={() => {
             diffState.refresh();
+            void fileTree.refresh();
           }}
         >
           <Icon name="arrow.clockwise" size={13} />
@@ -76,11 +83,17 @@ export function RootCheckoutDetailView({ project, createDiffState }: RootCheckou
       </div>
       <div className="detail-body">
         {showFileTree && (
-          <FileTreeSidebarPlaceholder
-            onHide={() => {
-              setShowFileTree(false);
-            }}
-          />
+          <div className="detail-file-tree">
+            <FileTreeSidebarView
+              fileTreeState={fileTree}
+              onHide={() => {
+                setShowFileTree(false);
+              }}
+              onFileSelected={() => {
+                // The editor is WIN-8.5.
+              }}
+            />
+          </div>
         )}
         <div className="detail-content">
           {showChanges ? <ChangesContent state={diffState} /> : <EditorPlaceholder />}

@@ -1,20 +1,23 @@
-// The Changes half of apps/purepoint-macos/purepoint-macos/State/WorkspaceFilesState.swift, which
-// WorkspaceFilesSidebar (WIN-8.2) needs: the working tree's changed files, polled while the
-// sidebar is mounted, and the diffs of the expanded ones. The Files half (`fileTree`,
-// `expandedFolders`, `expandedPreviews`, `loadTreeIfNeeded`) needs FileTreeState and is WIN-8.4,
-// which completes this file and its parity-matrix row.
+// Port of apps/purepoint-macos/purepoint-macos/State/WorkspaceFilesState.swift: the workspace
+// sidebar's state. Changes (WIN-8.2/8.3): the working tree's changed files, polled while the
+// sidebar is mounted, and the diffs of the expanded ones. Files (WIN-8.4): the root's FileTreeState
+// (loaded on first use), its expanded folders and the files whose inline preview is open.
 //
 // Shape (DEC-14): what Swift's `@Observable` publishes lives in `store`; one instance per root, so
 // a read in flight can never fill a different worktree's sidebar (Swift makes a new instance on a
 // root change; `WorkspaceFilesLayout` does the same here).
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import type { FileNode } from '../model/fileNode';
+import { daemonFileHost, localFileHost, type FileHost } from '../services/fileHost';
+import { machineDaemonClient } from '../services/machines';
 import {
   fetchWorkingTreeChanges,
   fetchWorkingTreeFileDiff,
   gitErrorMessage,
   type FileDiff,
 } from '../services/git';
+import { FileTreeState } from './fileTreeState';
 
 export const WORKSPACE_FILES_MODES = ['changes', 'files', 'pointGuard'] as const;
 export type WorkspaceFilesMode = (typeof WORKSPACE_FILES_MODES)[number];
@@ -47,11 +50,17 @@ export interface WorkspaceFilesFields {
   readonly fileErrors: Readonly<Record<string, string>>;
   readonly error: string | null;
   readonly isLoading: boolean;
+  /** Relative paths of the Files tree's expanded folders. */
+  readonly expandedFolders: ReadonlySet<string>;
+  /** Relative paths of the files whose inline preview is open. */
+  readonly expandedPreviews: ReadonlySet<string>;
 }
 
 export interface WorkspaceFilesOptions {
   readonly machineId?: string | null;
   readonly git?: WorkspaceFilesGit;
+  /** Where the Files tree lists from (the machine's daemon for a remote root). */
+  readonly fileHost?: FileHost;
   /** Swift polls a remote root only while the app is active. */
   readonly isAppActive?: () => boolean;
 }
@@ -80,11 +89,20 @@ export class WorkspaceFilesState {
   private readonly isAppActive: () => boolean;
   private readonly loadingFiles = new Set<string>();
   private observing: object | null = null;
+  /** The Files mode's tree, loaded the first time the mode is shown. */
+  readonly fileTree = new FileTreeState();
+  readonly fileHost: FileHost;
+  private treeLoaded = false;
 
   constructor(rootPath: string, options: WorkspaceFilesOptions = {}) {
     this.rootPath = rootPath;
     this.machineId = options.machineId ?? null;
     this.git = options.git ?? workspaceFilesGit(this.machineId);
+    this.fileHost =
+      options.fileHost ??
+      (this.machineId === null
+        ? localFileHost
+        : daemonFileHost(this.machineId, machineDaemonClient(this.machineId)));
     this.isAppActive =
       options.isAppActive ?? (() => typeof document === 'undefined' || document.hasFocus());
     this.store = createStore<WorkspaceFilesFields>()(() => ({
@@ -95,6 +113,8 @@ export class WorkspaceFilesState {
       fileErrors: {},
       error: null,
       isLoading: true,
+      expandedFolders: new Set(),
+      expandedPreviews: new Set(),
     }));
   }
 
@@ -112,6 +132,7 @@ export class WorkspaceFilesState {
 
   setMode(mode: WorkspaceFilesMode): void {
     this.store.setState({ mode });
+    if (mode === 'files') void this.loadTreeIfNeeded();
   }
 
   /**
@@ -132,6 +153,9 @@ export class WorkspaceFilesState {
     return () => {
       if (this.observing === token) this.observing = null;
       if (timer !== null) clearTimeout(timer);
+      // Swift `defer { fileTree.stopWatching() }`; a later observe loads it again.
+      this.fileTree.stopWatching();
+      this.treeLoaded = false;
     };
   }
 
@@ -159,6 +183,36 @@ export class WorkspaceFilesState {
       if (!current()) return;
       this.store.setState({ error: gitErrorMessage(error), isLoading: false });
     }
+    if (this.s.mode === 'files' && current()) {
+      if (this.treeLoaded) await this.fileTree.refresh();
+      else await this.loadTreeIfNeeded();
+    }
+  }
+
+  /** Swift `loadTreeIfNeeded`: the tree is listed (and watched) the first time Files shows. */
+  loadTreeIfNeeded(): Promise<void> {
+    if (this.treeLoaded) return Promise.resolve();
+    this.treeLoaded = true;
+    return this.fileTree.load(this.rootPath, this.fileHost);
+  }
+
+  toggleFolder(node: FileNode): Promise<void> {
+    const folders = new Set(this.s.expandedFolders);
+    if (folders.has(node.relativePath)) {
+      folders.delete(node.relativePath);
+      this.store.setState({ expandedFolders: folders });
+      return this.fileTree.collapseNode(node);
+    }
+    folders.add(node.relativePath);
+    this.store.setState({ expandedFolders: folders });
+    return this.fileTree.expandNode(node);
+  }
+
+  togglePreview(path: string): void {
+    const previews = new Set(this.s.expandedPreviews);
+    if (previews.has(path)) previews.delete(path);
+    else previews.add(path);
+    this.store.setState({ expandedPreviews: previews });
   }
 
   toggleFile(file: FileDiff): void {

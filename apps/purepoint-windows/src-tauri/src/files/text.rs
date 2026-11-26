@@ -1,4 +1,5 @@
-//! Local text files with modification times, for the layout document (WIN-6.0).
+//! Local text files with modification times, for the layout document (WIN-6.0) and the editor
+//! (WIN-8.4: `read_document`).
 //!
 //! `.pu/workspaces.json` is written by this app, the Mac app working on the same project over
 //! SSH, and `pu grid`. The front end's cached persistence adapter reads it with its modification
@@ -81,6 +82,65 @@ pub fn read(path: &Path, max_bytes: u64) -> Result<Option<TextFile>, FsError> {
     }))
 }
 
+/// A file opened in the editor or a preview (WIN-8.4): strictly decoded, so a binary file is
+/// reported as one instead of shown as replacement characters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentFile {
+    /// Empty when `is_binary`.
+    pub text: String,
+    /// `FileIOService.decode`: a NUL byte in the first 8 KB, or bytes that are not UTF-8.
+    pub is_binary: bool,
+    pub modified_ms: u64,
+    /// The file was longer than `max_bytes`; the caller treats it as too large to open.
+    pub truncated: bool,
+}
+
+/// `FileIOService.decode` over raw bytes: `None` for a binary file.
+pub fn decode_document(bytes: Vec<u8>) -> Option<String> {
+    let scan = bytes.len().min(8192);
+    if bytes[..scan].contains(&0) {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// The file as a document, `None` when there is no file.
+pub fn read_document(path: &Path, max_bytes: u64) -> Result<Option<DocumentFile>, FsError> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(FsError::io(path, &e)),
+    };
+    let metadata = file.metadata().map_err(|e| FsError::io(path, &e))?;
+    if !metadata.is_file() {
+        return Err(FsError::Io(format!(
+            "{} cannot be opened: it is not a file.",
+            path.display()
+        )));
+    }
+    let modified_ms = modified_ms(&metadata).map_err(|e| FsError::io(path, &e))?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| FsError::io(path, &e))?;
+    if bytes.len() as u64 > max_bytes {
+        return Ok(Some(DocumentFile {
+            text: String::new(),
+            is_binary: false,
+            modified_ms,
+            truncated: true,
+        }));
+    }
+    let text = decode_document(bytes);
+    Ok(Some(DocumentFile {
+        is_binary: text.is_none(),
+        text: text.unwrap_or_default(),
+        modified_ms,
+        truncated: false,
+    }))
+}
+
 fn temp_path(path: &Path) -> PathBuf {
     let name = path
         .file_name()
@@ -121,7 +181,7 @@ pub fn write_if_unmodified(
     stat(path)?.ok_or_else(|| FsError::Io(format!("{} vanished after writing.", path.display())))
 }
 
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     body: impl FnOnce() -> Result<T, FsError> + Send + 'static,
 ) -> Result<T, FsError> {
     tauri::async_runtime::spawn_blocking(body)
@@ -143,6 +203,16 @@ pub async fn fs_read_text(
 ) -> Result<Option<TextFile>, FsError> {
     let max = max_bytes.unwrap_or(DEFAULT_MAX_BYTES);
     blocking(move || read(Path::new(&path), max)).await
+}
+
+/// `fs_read_document(path, maxBytes)`: the file for the editor, or null when there is no file.
+#[tauri::command]
+pub async fn fs_read_document(
+    path: String,
+    max_bytes: Option<u64>,
+) -> Result<Option<DocumentFile>, FsError> {
+    let max = max_bytes.unwrap_or(DEFAULT_MAX_BYTES);
+    blocking(move || read_document(Path::new(&path), max)).await
 }
 
 /// `fs_write_text_if_unmodified(path, text, expectedModifiedMs)`: the new modification time.
@@ -234,6 +304,47 @@ mod tests {
         assert_eq!(file.text, "abcd");
         assert!(file.truncated);
         assert!(!read(&path, 6).unwrap().unwrap().truncated);
+    }
+
+    #[test]
+    fn given_text_binary_and_long_files_should_read_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = dir.path().join("a.txt");
+        std::fs::write(&text, "héllo\n").unwrap();
+        let file = read_document(&text, 100).unwrap().unwrap();
+        assert_eq!(file.text, "héllo\n");
+        assert!(!file.is_binary && !file.truncated);
+        assert_eq!(Some(file.modified_ms), stat(&text).unwrap());
+
+        let nul = dir.path().join("b.bin");
+        std::fs::write(&nul, b"ab\0cd").unwrap();
+        let file = read_document(&nul, 100).unwrap().unwrap();
+        assert!(file.is_binary);
+        assert_eq!(file.text, "");
+
+        let latin1 = dir.path().join("c.txt");
+        std::fs::write(&latin1, [0x63, 0x61, 0x66, 0xe9]).unwrap();
+        assert!(read_document(&latin1, 100).unwrap().unwrap().is_binary);
+
+        let long = read_document(&text, 3).unwrap().unwrap();
+        assert!(long.truncated);
+        assert_eq!(read_document(&dir.path().join("none"), 3), Ok(None));
+        assert!(matches!(read_document(dir.path(), 3), Err(FsError::Io(_))));
+    }
+
+    #[test]
+    fn given_document_should_serialize_camel_case() {
+        let json = serde_json::to_value(DocumentFile {
+            text: "t".into(),
+            is_binary: false,
+            modified_ms: 3,
+            truncated: false,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "text": "t", "isBinary": false, "modifiedMs": 3, "truncated": false })
+        );
     }
 
     #[test]

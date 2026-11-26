@@ -4,17 +4,21 @@
 // file tree on the left, the review changes or the open file in the middle, and the project
 // channel on the right. DiffState loads for the worktree and is stopped when the screen goes.
 //
-// Differences from Swift, until their leaves land: the file tree is FileTreeSidebarView (WIN-8.4),
-// the editor and its banners (current file breadcrumb, external change, save error) are
-// EditorState and EditorContentRepresentable (WIN-8.5). Until then the editor shows its empty state, "Select a file to edit".
-import { useState } from 'react';
+// The file tree is FileTreeSidebarView (WIN-8.4), listed while shown. Difference from Swift, until
+// its leaf lands: the editor and its banners (current file breadcrumb, external change, save
+// error) are EditorState and EditorContentRepresentable (WIN-8.5); until then the editor shows its
+// empty state, "Select a file to edit".
+import { useMemo, useState } from 'react';
 import type { WorktreeModel } from '../../model/workspaceModel.ts';
 import type { DiffState } from '../../state/diffState.ts';
 import type { ProjectState } from '../../state/projectState.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { ChangesContent } from './ChangesContent.tsx';
 import { ProjectChannelView } from '../channel/ProjectChannelView.tsx';
-import { EditorPlaceholder, FileTreeSidebarPlaceholder } from './placeholders.tsx';
+import { projectFileHost } from '../../services/fileHost.ts';
+import { FileTreeSidebarView } from '../filetree/FileTreeSidebarView.tsx';
+import { useFileTreeState } from '../filetree/useFileTreeState.ts';
+import { EditorPlaceholder } from './placeholders.tsx';
 import { useDiffState } from './useDiffState.ts';
 import './detail.css';
 
@@ -43,6 +47,8 @@ export function WorktreeDetailView({
   const [showFileTree, setShowFileTree] = useState(false);
   // Swift `EditorState.showChanges` starts true.
   const [showChanges, setShowChanges] = useState(true);
+  const host = useMemo(() => projectFileHost(project), [project]);
+  const fileTree = useFileTreeState(worktree.path, host, showFileTree);
 
   return (
     <div className="detail-screen" data-view="WorktreeDetailView">
@@ -108,8 +114,8 @@ export function WorktreeDetailView({
           aria-label="Refresh"
           title="Refresh"
           onClick={() => {
-            // Swift also refreshes FileTreeState (WIN-8.4).
             diffState.refresh();
+            void fileTree.refresh();
           }}
         >
           <Icon name="arrow.clockwise" size={13} />
@@ -117,11 +123,17 @@ export function WorktreeDetailView({
       </div>
       <div className="detail-body">
         {showFileTree && (
-          <FileTreeSidebarPlaceholder
-            onHide={() => {
-              setShowFileTree(false);
-            }}
-          />
+          <div className="detail-file-tree">
+            <FileTreeSidebarView
+              fileTreeState={fileTree}
+              onHide={() => {
+                setShowFileTree(false);
+              }}
+              onFileSelected={() => {
+                // The editor is WIN-8.5.
+              }}
+            />
+          </div>
         )}
         <div className="detail-content">
           {showChanges ? <ChangesContent state={diffState} /> : <EditorPlaceholder />}

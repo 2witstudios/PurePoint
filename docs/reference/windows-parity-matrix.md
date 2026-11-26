@@ -31,7 +31,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/Conversation.swift` | 47 | `src-tauri/src/conversations/model.rs` | WIN-8.12 | ported | — |
 | `Models/DiffModel.swift` | 180 | `ui/src/model/diff.ts` (review data types are `ui/src/services/git.ts`, decoded in Rust by WIN-8.1) | WIN-6.0 | ported | — |
 | `Models/EditorTab.swift` | 142 | `ui/src/model/editorTab.ts` | WIN-8.5 | todo | — |
-| `Models/FileNode.swift` | 38 | `ui/src/model/fileNode.ts` | WIN-8.4 | todo | — |
+| `Models/FileNode.swift` | 38 | `ui/src/model/fileNode.ts` (immutable nodes, rebuilt each refresh; path helpers) | WIN-8.4 | ported | — |
 | `Models/KeyBinding+iOS.swift` | 128 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Models/KeyBinding.swift` | 449 | `ui/src/model/keyBinding.ts` | WIN-6.7 | ported | — |
 | `Models/Machine.swift` | 278 | `ui/src/model/machine.ts` (validation, ssh config aliases, destinations; the registry file and its lock are pu-core's, through `src-tauri/src/daemon/machine.rs`) | WIN-8.14 | ported | — |
@@ -122,7 +122,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/DiffState.swift` | 281 | `ui/src/state/diffState.ts` | WIN-6.0 | ported | — |
 | `State/EditorState.swift` | 263 | `ui/src/state/editorState.ts` | WIN-8.5 | todo | — |
 | `State/FileTabStore.swift` | 62 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | ported | — |
-| `State/FileTreeState.swift` | 208 | `ui/src/state/fileTreeState.ts` | WIN-8.4 | todo | — |
+| `State/FileTreeState.swift` | 208 | `ui/src/state/fileTreeState.ts`, `ui/src/services/fileHost.ts` (local: `src-tauri/src/files/tree.rs` `fs_list_dir` with `git check-ignore`; remote: daemon `fs_list`; remote watching is a 5 s poll while active) | WIN-8.4 | ported | — |
 | `State/KeyBindingState.swift` | 138 | `ui/src/state/keyBindingStore.ts` | WIN-6.7 | ported | — |
 | `State/MachineState+OpenProject.swift` | 67 | `ui/src/state/machineStateOpenProject.ts` (with `fsBrowseRequest`; the picker is `ui/src/state/remoteFolderBrowser.ts`, `ui/src/views/sidebar/RemoteFolderPicker.tsx`) | WIN-8.14 | ported | — |
 | `State/MachineState.swift` | 515 | `ui/src/state/machineState.ts` (`LiveMachineState`, `TauriMachineDirectory`; the project list is polled, not streamed) | WIN-8.14 | ported | — |
@@ -138,7 +138,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/SpawnTargetResolver.swift` | 31 | `ui/src/state/spawnTargetResolver.ts` | WIN-6.6 | ported | — |
 | `State/StreamAccumulator.swift` | 193 | `ui/src/state/sessions.ts` | WIN-8.16 | ported | — |
 | `State/TriggersState.swift` | 93 | `ui/src/state/triggersState.ts` (plus `assign_trigger`) | WIN-8.9 | ported | — |
-| `State/WorkspaceFilesState.swift` | 139 | `ui/src/state/workspaceFilesState.ts` | WIN-8.4 | todo | — |
+| `State/WorkspaceFilesState.swift` | 139 | `ui/src/state/workspaceFilesState.ts` (Files half: `fileTree`, `expandedFolders`, `expandedPreviews`; inline tree and previews in `ui/src/views/detail/WorkspaceFilesSidebar.tsx`) | WIN-8.4 | ported | — |
 | `State/WorkspaceRegistry.swift` | 749 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | ported | — |
 | `Theme/EditorTheme.swift` | 49 | `ui/src/theme/tokens.css` (`--pp-editor-*`) | WIN-5.8 | ported | — |
 | `Theme/PurePointTheme.swift` | 63 | `ui/src/theme/tokens.css` (metrics, fonts) | WIN-5.8 | ported | — |
@@ -201,12 +201,12 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Editor/EditorTextView+iOS.swift` | 98 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Editor/EditorTextView.swift` | 54 | `ui/src/views/editor/EditorTextView.tsx` | WIN-8.5 | todo | — |
 | `Views/Editor/FileTreeOutlineView+iOS.swift` | 41 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Editor/FileTreeOutlineView.swift` | 48 | `ui/src/views/editor/FileTreeOutlineView.tsx` | WIN-8.4 | todo | — |
+| `Views/Editor/FileTreeOutlineView.swift` | 48 | `ui/src/views/filetree/FileTreeOutlineView.tsx`, `ui/src/views/filetree/FileTreeDialogs.tsx` (remote Open Local Copy not offered) | WIN-8.4 | ported | — |
 | `Views/Editor/FileTreeOutlineViewController+iOS.swift` | 421 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Editor/FileTreeOutlineViewController+iOSCells.swift` | 138 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Editor/FileTreeOutlineViewController+iOSKeys.swift` | 132 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Editor/FileTreeOutlineViewController.swift` | 255 | `ui/src/views/editor/FileTreeOutlineViewController.tsx` | WIN-8.4 | todo | — |
-| `Views/Editor/FileTreeSidebarView.swift` | 46 | `ui/src/views/editor/FileTreeSidebarView.tsx` | WIN-8.4 | todo | — |
+| `Views/Editor/FileTreeOutlineViewController.swift` | 255 | `ui/src/views/filetree/FileTreeOutlineViewController.tsx`, `ui/src/views/filetree/fileTreeRows.ts` (virtualized rows; menu adds Open, Open in Default App, Rename…, Delete…) | WIN-8.4 | ported | — |
+| `Views/Editor/FileTreeSidebarView.swift` | 46 | `ui/src/views/filetree/FileTreeSidebarView.tsx` (the search field filters the listed rows) | WIN-8.4 | ported | — |
 | `Views/Editor/LineNumberRulerView+iOS.swift` | 144 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Editor/LineNumberRulerView.swift` | 135 | `ui/src/views/editor/LineNumberRulerView.tsx` | WIN-8.5 | todo | — |
 | `Views/FilePane/FilePaneView.swift` | 171 | `ui/src/views/filePane/FilePaneView.tsx` | WIN-8.5 | todo | — |
@@ -304,7 +304,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `EditorIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `FilePaneTests.swift` | all | `ui/src/views/filePane/FilePaneView.test.tsx` | WIN-8.5 | todo | Relevant cases only |
 | `FileTreeOutlineIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `FileTreeStateTests.swift` | all | `ui/src/state/fileTreeState.test.ts` | WIN-8.4 | todo | — |
+| `FileTreeStateTests.swift` | all | `ui/src/state/fileTreeState.test.ts`, `ui/src/views/filetree/fileTree.test.tsx`, `src-tauri/src/files/tree.rs` (`git check-ignore`) | WIN-8.4 | ported | — |
 | `GitReviewTests.swift` | all | `src-tauri/src/git/tests/git_review.rs` | WIN-8.1 | ported | DiffState-only assertions go with WIN-6.0; WorktreeWatcher checks with WIN-5.6 |
 | `HexEncodingTests.swift` | all | `ui/src/services/daemonConnection.test.ts` | WIN-6.0 | ported | — |
 | `HotkeyKeyCommandTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
@@ -342,7 +342,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `TerminalOutputFilterTests.swift` | all | `ui/src/views/terminal/outputFilter.test.ts` | WIN-7.3 | ported | No filter ported: xterm.js implements DEC 2026 synchronized output and clamps cursor-up itself; the test runs the Swift inputs through `@xterm/headless` |
 | `TranscriptParserTests.swift` | all | `src-tauri/src/conversations/transcript.rs` (#[cfg(test)]) | WIN-8.12 | ported | — |
 | `WorkingTreeDiffTests.swift` | all | `src-tauri/src/git/tests/working_tree_diff.rs` | WIN-8.1 | ported | — |
-| `WorkspaceFilesStateTests.swift` | all | `ui/src/state/workspaceFilesState.test.ts` | WIN-8.4 | todo | — |
+| `WorkspaceFilesStateTests.swift` | all | `ui/src/state/workspaceFilesState.test.ts` (git scripted) | WIN-8.4 | ported | — |
 | `WorkspaceFixtureTests.swift` | all | `ui/src/model/workspacePersistence.test.ts` | WIN-6.3 | ported | Swift side of the shared `docs/reference/fixtures/workspaces/` golden files; run in Xcode by WIN-11.2 |
 | `WorkspaceModelTests.swift` | all | `ui/src/model/workspaceModel.test.ts` | WIN-6.1 | ported | — |
 | `WorkspaceReconcilerTests.swift` | all | `ui/src/model/workspace.test.ts`, `ui/src/model/workspace.property.test.ts` | WIN-6.1 | ported | The `WorkspacePersistence` cases run against the WIN-6.3 port over an in-memory file |
