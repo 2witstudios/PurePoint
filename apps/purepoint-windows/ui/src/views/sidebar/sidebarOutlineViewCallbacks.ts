@@ -6,7 +6,7 @@
 // Differences from Swift:
 // - Callbacks address projects and machines by id; the live `ProjectState` is looked up here.
 // - The terminal view cache (`viewCache.remove`) is WIN-7.3; nothing is cached yet to drop.
-// - The command palette is WIN-7.5: the add buttons call the named `openCommandPalette` stub, and
+// - The add buttons open the command palette (views/palette/openPalette.ts), and
 //   `onAddTerminal` (the worktree add menu's New Terminal) arrives with the menus (WIN-7.8).
 // - A remote project's removal error goes to the daemon banner.
 // - A machine row's add button opens the remote folder picker (WIN-8.14; the Mac adds remote
@@ -14,7 +14,7 @@
 
 import type { SidebarSelection } from '../../model/sidebarItem.ts';
 import type { AppState } from '../../state/appState.ts';
-import { openCommandPalette } from '../shell/appCommands.ts';
+import { type CommandPaletteRequest, openCommandPalette } from '../palette/openPalette.ts';
 import { useMachineSheets } from './machineSheets.ts';
 import type {
   SidebarOutlineCallbacks,
@@ -28,8 +28,8 @@ function errorMessage(error: unknown): string {
 export interface WireCallbacksOptions {
   /** The shell's selection binding. */
   readonly select: (selection: SidebarSelection | null, options?: SidebarSelectOptions) => void;
-  /** Defaults to the app's `openCommandPalette` stub. */
-  readonly showCommandPalette?: typeof openCommandPalette;
+  /** Defaults to the app's command palette. */
+  readonly showCommandPalette?: (request: CommandPaletteRequest) => void;
 }
 
 /** Swift `SidebarOutlineView.wireCallbacks`. */
@@ -37,7 +37,11 @@ export function wireCallbacks(
   app: AppState,
   options: WireCallbacksOptions,
 ): SidebarOutlineCallbacks {
-  const showCommandPalette = options.showCommandPalette ?? openCommandPalette;
+  const showCommandPalette =
+    options.showCommandPalette ??
+    ((request: CommandPaletteRequest) => {
+      openCommandPalette(app, request);
+    });
   return {
     onSelectionChanged: (selection, select) => {
       options.select(selection, select);

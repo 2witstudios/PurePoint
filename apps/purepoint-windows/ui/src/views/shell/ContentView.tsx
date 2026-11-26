@@ -7,9 +7,9 @@
 // Mac's Auto Layout helper (Services/NSView+Constraints.swift).
 //
 // Differences from Swift:
-// - Point Guard's working directory (`pointGuardService`) is WIN-9.x; spawn selection
-//   (`pendingSelectAgentId`) and the session's workspace restore come with the command
-//   palette's spawns (WIN-7.5).
+// - Point Guard's working directory (`pointGuardService`) is WIN-9.x, and the session's workspace
+//   restore (`pendingSelectWorkspaceId`) is not selected here yet. A spawn's workspace is selected
+//   once the manifest delivers it (`pendingSelectAgentId`), as on the Mac.
 // - Agent signals (WIN-7.7) are projected by `startAgentSignals` (bootstrap), not a view task;
 //   the shell only consumes `pendingSignalDestination`.
 // - The menu commands' accelerators are handled here, for every command (Mac menus handle theirs
@@ -34,6 +34,8 @@ import { useAppState } from './appContext.ts';
 import { type AppCommand, createAppActions } from './appCommands.ts';
 import { appLifecycleHooks } from '../../services/appLifecycle.ts';
 import { MenuBar } from './MenuBar.tsx';
+import { CommandPaletteHost } from '../palette/CommandPalettePanel.tsx';
+import { showNewAgentPalette } from '../palette/openPalette.ts';
 import { ShellBanners } from './ShellBanners.tsx';
 import { AboutUpdateStatus, UpdateDialog } from './UpdateDialog.tsx';
 import { canCheckForUpdates } from '../../services/updater.ts';
@@ -239,6 +241,38 @@ export function ContentView() {
     [app],
   );
 
+  // Swift `selectPendingAgentIfReady`: a just-spawned agent's workspace becomes the selection
+  // once the manifest lands and reconcile gives it one.
+  useEffect(() => {
+    let clearFocus: ReturnType<typeof setTimeout> | undefined;
+    const check = () => {
+      const agentId = app.store.getState().pendingSelectAgentId;
+      const registry = app.registry;
+      if (agentId === null || registry === null) return;
+      const workspaceId = registry.workspaceIdForAgent(agentId);
+      if (workspaceId === null) return;
+      app.setPendingSelectAgentId(null);
+      app.setPendingFocusAgentId(agentId);
+      const workspace = registry.workspace(workspaceId);
+      setSelection(
+        workspace !== null && isPointGuard(workspace)
+          ? sidebarSelection.nav('dashboard')
+          : sidebarSelection.workspace(workspaceId),
+      );
+      clearTimeout(clearFocus);
+      clearFocus = setTimeout(() => {
+        app.setPendingFocusAgentId(null);
+      }, 500);
+    };
+    const unsubscribeApp = app.store.subscribe(check);
+    const unsubscribeRegistry = app.registry?.store.subscribe(check);
+    return () => {
+      clearTimeout(clearFocus);
+      unsubscribeApp();
+      unsubscribeRegistry?.();
+    };
+  }, [app]);
+
   // Swift `.onChange(of: appState.pendingSignalDestination)` → `selectSignalDestination` (WIN-7.7):
   // a notification's agent becomes the selection, its tab selected and its pane focused.
   useEffect(
@@ -287,6 +321,9 @@ export function ContentView() {
           detailRef.current?.focus();
         },
         closeWindow,
+        newAgent: () => {
+          showNewAgentPalette(app);
+        },
         checkForUpdates: () => {
           void checkForUpdates();
         },
@@ -354,6 +391,7 @@ export function ContentView() {
         </WindowChrome>
         <ShellBanners />
         <TabCloseConfirmationDialog />
+        <CommandPaletteHost />
         {showSettings && (
           <SettingsOverlay
             onClose={() => {

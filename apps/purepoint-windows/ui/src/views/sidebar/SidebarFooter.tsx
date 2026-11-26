@@ -4,9 +4,8 @@
 // each with its accelerator from the key binding store.
 //
 // Differences from Swift:
-// - The command palette is WIN-7.5: New calls the named `openCommandPalette` stub with the
-//   project it would open for. Open runs the menu's Open Project command (the folder picker,
-//   `appLifecycleHooks.openProject`, WIN-8.15).
+// - New opens the command palette (views/palette/openPalette.ts) for the active project. Open runs
+//   the menu's Open Project command (the folder picker, `appLifecycleHooks.openProject`, WIN-8.15).
 // - Add Machine (the `desktopcomputer` button) opens `AddMachineSheet` through the machine sheets
 //   store, which SidebarView renders (WIN-8.14).
 
@@ -17,7 +16,7 @@ import { useKeyBindingStore } from '../../state/keyBindingStore.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { isPointGuard } from '../../model/workspace.ts';
 import { useAppState } from '../shell/appContext.ts';
-import { openCommandPalette } from '../shell/appCommands.ts';
+import { type CommandPaletteRequest, openCommandPalette } from '../palette/openPalette.ts';
 import { appLifecycleHooks } from '../../services/appLifecycle.ts';
 import { useMachineSheets } from './machineSheets.ts';
 
@@ -50,7 +49,9 @@ function isActivePointGuard(app: AppState): boolean {
 export function showFooterCommandPalette(
   app: AppState,
   selection: SidebarSelection | null,
-  open: typeof openCommandPalette = openCommandPalette,
+  open: (request: CommandPaletteRequest) => void = (request) => {
+    openCommandPalette(app, request);
+  },
 ): void {
   const onDashboard = selection?.kind === 'nav' && selection.item === 'dashboard';
   if (onDashboard || isActivePointGuard(app)) {
@@ -64,10 +65,10 @@ export function showFooterCommandPalette(
 
 export function SidebarFooter({
   selection,
-  openPalette = openCommandPalette,
+  openPalette,
 }: {
   selection: SidebarSelection | null;
-  openPalette?: typeof openCommandPalette;
+  openPalette?: (request: CommandPaletteRequest) => void;
 }) {
   const app = useAppState();
   const bindings = useKeyBindingStore((state) => state.bindings);
