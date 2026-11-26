@@ -79,6 +79,39 @@ pub(crate) fn login_env(
     env
 }
 
+/// The Windows agent `PATH` (WINAPP-007): the tool directories, then the
+/// registry and daemon `PATH` already merged into `login_path` by
+/// [`login_env`], joined with `std::env::join_paths` (`;`). Also removes the
+/// variables agents must not inherit: `NO_COLOR` breaks the screen
+/// heuristics, and nested-session markers confuse agents.
+pub(crate) fn agent_path(
+    env: &mut Vec<(String, String)>,
+    home: Option<&std::path::Path>,
+    login_path: &str,
+) -> String {
+    let tool_dirs = home
+        .map(|home| {
+            pu_core::env_path::windows_tool_dirs(home, |key| {
+                env.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                    .map(|(_, v)| v.into())
+            })
+        })
+        .unwrap_or_default();
+    env.retain(|(k, _)| {
+        let k = k.to_ascii_uppercase();
+        k != "NO_COLOR"
+            && k != "CLAUDECODE"
+            && !k.starts_with("CLAUDE_CODE_")
+            && !k.starts_with("WT_")
+    });
+    pu_core::env_path::join_unique(
+        tool_dirs
+            .into_iter()
+            .chain(std::env::split_paths(login_path)),
+    )
+}
+
 /// The daemon's environment as UTF-8 pairs (non-UTF-8 entries are skipped,
 /// where `std::env::vars` would panic).
 pub(crate) fn daemon_env() -> Vec<(String, String)> {
@@ -268,6 +301,35 @@ mod tests {
         };
         let env = login_env(pairs(&[("PATH", r"C:\daemon")]), &none);
         assert_eq!(path_of(&env), r"C:\daemon");
+    }
+
+    #[test]
+    fn given_agent_path_should_join_with_semicolons_and_split_back() {
+        let mut env = pairs(&[
+            ("APPDATA", r"C:\Users\me\AppData\Roaming"),
+            ("NO_COLOR", "1"),
+            ("CLAUDE_CODE_ENTRYPOINT", "cli"),
+            ("WT_SESSION", "x"),
+            ("ComSpec", r"C:\WINDOWS\system32\cmd.exe"),
+        ]);
+        let login = r"C:\WINDOWS\system32;C:\Program Files\Git\cmd;C:\Users\me\.cargo\bin";
+        let path = agent_path(&mut env, Some(std::path::Path::new(r"C:\Users\me")), login);
+        assert!(!path.contains(":C:") && !path.contains(":/"), "{path}");
+        let parts: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        assert_eq!(
+            parts,
+            [
+                r"C:\Users\me\.pu\bin",
+                r"C:\Users\me\.cargo\bin",
+                r"C:\Users\me\AppData\Roaming\npm",
+                r"C:\Users\me\.local\bin",
+                r"C:\WINDOWS\system32",
+                r"C:\Program Files\Git\cmd",
+            ]
+            .map(PathBuf::from)
+        );
+        let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["APPDATA", "ComSpec"]);
     }
 
     #[test]

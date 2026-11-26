@@ -1938,6 +1938,27 @@ mod windows_catalog_tests {
         ));
     }
 
+    #[tokio::test]
+    async fn given_windows_agent_env_should_find_cmd_and_ping_through_its_path() {
+        let env = Engine::new().agent_env().await;
+        let path: Vec<_> = env
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("PATH"))
+            .collect();
+        assert_eq!(path.len(), 1, "{path:?}");
+        let parts: Vec<_> = std::env::split_paths(&path[0].1).collect();
+        assert!(parts.iter().all(|p| !p.as_os_str().is_empty()), "{parts:?}");
+        assert_eq!(std::env::join_paths(&parts).unwrap(), path[0].1.as_str());
+        for tool in ["cmd", "ping"] {
+            assert!(
+                which::which_in(tool, Some(&path[0].1), ".").is_ok(),
+                "{tool} not found in {}",
+                path[0].1
+            );
+        }
+        assert!(!env.iter().any(|(k, _)| k.eq_ignore_ascii_case("NO_COLOR")));
+    }
+
     #[test]
     fn given_shell_sentinel_should_resolve_windows_shell() {
         let (command, args) =

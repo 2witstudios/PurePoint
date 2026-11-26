@@ -476,30 +476,8 @@ impl Engine {
         // Windows (WINAPP-007): the tool directories, then the registry and
         // daemon PATH already merged by `resolve_login_env`.
         #[cfg(windows)]
-        let path = {
-            let tool_dirs = paths::home_dir()
-                .map(|home| {
-                    pu_core::env_path::windows_tool_dirs(&home, |key| {
-                        env.iter()
-                            .find(|(k, _)| k.eq_ignore_ascii_case(key))
-                            .map(|(_, v)| v.into())
-                    })
-                })
-                .unwrap_or_default();
-            // Screen heuristics need colour; nested-session markers confuse agents.
-            env.retain(|(k, _)| {
-                let k = k.to_ascii_uppercase();
-                k != "NO_COLOR"
-                    && k != "CLAUDECODE"
-                    && !k.starts_with("CLAUDE_CODE_")
-                    && !k.starts_with("WT_")
-            });
-            pu_core::env_path::join_unique(
-                tool_dirs
-                    .into_iter()
-                    .chain(std::env::split_paths(&login_path)),
-            )
-        };
+        let path =
+            crate::win_env::agent_path(&mut env, paths::home_dir().ok().as_deref(), &login_path);
 
         // Override PATH, TERM, COLORTERM in the env
         env.retain(|(k, _)| k != "PATH" && k != "TERM" && k != "COLORTERM");
