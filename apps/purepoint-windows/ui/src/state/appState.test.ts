@@ -454,3 +454,135 @@ describe('AppState machines', () => {
     );
   });
 });
+
+describe('AppState agent signals (WIN-7.7)', () => {
+  const NOW = 1792195201 * 1000;
+  const signal = {
+    schema_version: 1,
+    identity: {
+      agent_id: 'ag-1',
+      worktree_id: null,
+      launch_id: 'launch-1',
+      generation: 1,
+      native_session_id: 'native-1',
+    },
+    activity: 'working',
+    pending_attention: [
+      {
+        request_id: 'request-1',
+        kind: 'permission',
+        event_id: 'event-1',
+        turn_id: null,
+        confidence: 'authoritative',
+        actionability: { macos: false, ios: false },
+      },
+    ],
+    outcome: null,
+    observation: {
+      state: 'current',
+      last_received_at_ms: NOW - 1000,
+      expires_at_ms: NOW + 30_000,
+    },
+    evidence: null,
+  } as const;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+    return () => {
+      vi.useRealTimers();
+    };
+  });
+
+  async function signalSetup() {
+    const { AgentSignalNotifications } = await import('../services/agentSignalNotifications');
+    const registry = new WorkspaceRegistry({
+      persistence: new MemoryWorkspacePersistence(),
+      scheduler: new ManualScheduler(),
+    });
+    const toasts: string[] = [];
+    const badges: number[] = [];
+    const notifications = new AgentSignalNotifications({
+      storage: memoryStorage(),
+      postToast: (toast) => {
+        toasts.push(toast.body);
+        return Promise.resolve();
+      },
+      setBadge: (count) => {
+        badges.push(count);
+        return Promise.resolve();
+      },
+    });
+    const app = new AppState({
+      registry,
+      client: { send: () => Promise.resolve({ type: 'ok' }) },
+      startProject: () => undefined,
+      followsLocalDaemon: false,
+      storage: memoryStorage(),
+      signalNotifications: notifications,
+    });
+    app.openProject('C:\\a');
+    const project = app.projects[0] as ProjectState;
+    project.applyStatusEvent(
+      [],
+      [
+        {
+          id: 'ag-1',
+          name: 'one',
+          agent_type: 'claude',
+          status: 'running',
+          pid: 1,
+          exit_code: null,
+          idle_seconds: 0,
+          worktree_id: null,
+          started_at: '',
+          session_id: 'native-1',
+          suspended: false,
+          signal: structuredClone(signal),
+        } as unknown as import('../protocol').AgentStatusReport,
+      ],
+    );
+    await tick();
+    return { app, registry, toasts, badges };
+  }
+
+  it('routes a signal to the pane that holds its agent', async () => {
+    const { app, registry } = await signalSetup();
+    const workspaceId = registry.workspaceIdForAgent('ag-1') as string;
+    expect(workspaceId).not.toBeNull();
+    const { agents, foreground } = app.signalAlertAgents(NOW);
+    expect(foreground).toBeNull();
+    expect(agents).toHaveLength(1);
+    expect(agents[0]?.presentation.label).toBe('Permission');
+    expect(agents[0]?.destination).toMatchObject({
+      projectId: 'C:\\a',
+      agentId: 'ag-1',
+      eventId: 'event-1',
+    });
+  });
+
+  it('badges, toasts while unfocused, and routes on refocus', async () => {
+    const { app, registry, toasts, badges } = await signalSetup();
+    app.setWindowFocused(false);
+    app.updateAgentSignals();
+    expect(toasts).toEqual(['An agent needs attention.']);
+    await tick();
+    expect(badges).toEqual([1]);
+    app.setWindowFocused(true);
+    await tick();
+    expect(app.store.getState().pendingSignalDestination).toMatchObject({ agentId: 'ag-1' });
+    const target = app.takeSignalDestination(NOW);
+    expect(target?.workspaceId).toBe(registry.workspaceIdForAgent('ag-1'));
+    expect(app.activeProjectRoot).toBe('C:\\a');
+    expect(app.store.getState().pendingSignalDestination).toBeNull();
+  });
+
+  it('treats the focused, selected agent as on screen and refuses an expired route', async () => {
+    const { app, registry } = await signalSetup();
+    const workspaceId = registry.workspaceIdForAgent('ag-1') as string;
+    app.updateActiveProject({ kind: 'workspace', id: workspaceId });
+    registry.activate(workspaceId);
+    expect(app.signalAlertAgents(NOW).foreground).not.toBeNull();
+    const agent = app.signalAlertAgents(NOW).agents[0];
+    expect(agent !== undefined && app.openSignal(agent, NOW + 60_000)).toBe(false);
+  });
+});

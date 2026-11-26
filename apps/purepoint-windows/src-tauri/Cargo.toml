@@ -38,6 +38,8 @@ notify = "8.2"
 uuid = { version = "1", features = ["v4"] }
 # Ctrl+click on a terminal link opens it outside the app (WIN-7.3).
 tauri-plugin-opener = "~2.5"
+# Agent signal toasts (WIN-7.7, REQ-WINAPP-078); 2.4 builds on Tauri 2.11 and Rust 1.89.
+tauri-plugin-notification = "~2.4"
 # Point Guard runtime seal: SHA-256 of every bundled file (WIN-9.3); the version pu-core uses.
 sha2 = "0.11"
 # Point Guard chat (WIN-9.4): the bridge authenticates the v1 WebSocket by request headers a
@@ -54,6 +56,9 @@ url = "2.5"
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38"
 windows-core = "0.61"
+# The taskbar overlay badge (WIN-7.7): `ITaskbarList3` is a COM interface, which windows-sys
+# does not wrap. The version Tauri and webview2-com already lock.
+windows = { version = "0.61", features = ["Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # Daemon lifecycle: find, wait on and stop the running `pu-engine.exe` (WIN-5.3).
 # Installer (WIN-10.1): the user PATH in HKCU\Environment and the WM_SETTINGCHANGE broadcast.
 # Window chrome and placement (WIN-7.1): the caption sink, subclassing, regions and monitors.

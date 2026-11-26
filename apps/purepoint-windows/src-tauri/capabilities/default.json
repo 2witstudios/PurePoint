@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: the app-drawn title bar (WIN-7.1) drags, minimizes, maximizes and closes it; links open in the browser through the opener plugin (WIN-7.3).",
+  "description": "Main window: the app-drawn title bar (WIN-7.1) drags, minimizes, maximizes and closes it; links open in the browser through the opener plugin (WIN-7.3); agent signals post toasts through the notification plugin (WIN-7.7).",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -9,6 +9,7 @@
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
-    "opener:default"
+    "opener:default",
+    "notification:default"
   ]
 }

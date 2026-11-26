@@ -11,7 +11,10 @@
 // `machineSnapshots()` (WIN-6.5's `ProjectSnapshot` / `MachineSnapshot`).
 //
 // Differences from Swift:
-// - Agent signal notifications (`updateAgentSignals`, `pendingSignalDestination`) are WIN-7.7.
+// - Agent signal notifications (WIN-7.7): the window's focus stands in for `NSApp.isActive` and
+//   the key window (`setWindowFocused`), and a notification's route is checked against the
+//   project's status as last reported, not a fresh `status` request (the status subscription
+//   streams every change, so the reported status is current).
 // - `MachineState` is WIN-8.14: machines arrive through the injected `MachineDirectory`, and the
 //   machine list stays empty without one.
 // - The binary watcher that restarts an updated daemon is the backend's (WIN-5.3 lifecycle).
@@ -20,8 +23,18 @@
 // - Library screens' states (agents hub, schedules, triggers) are their own leaves (WIN-8.x).
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
-import type { AgentModel } from '../model/workspaceModel';
-import { isPointGuard } from '../model/workspace';
+import { type AgentModel, agentSignalPresentation, isAgentAlive } from '../model/workspaceModel';
+import { makeSignalAlertAgent, type SignalAlertAgent } from '../model/agentSignalPolicy';
+import {
+  type AgentSignalDestination,
+  type SignalRoutingTarget,
+  destinationMatches,
+  isSignalVisible,
+  signalRoutingTarget,
+} from '../model/agentSignalRouting';
+import { opaqueKey, signalQualificationKey } from '../model/agentSignalSnapshot';
+import { isPointGuard, workspaceSurfaces } from '../model/workspace';
+import type { AgentSignalNotifications } from '../services/agentSignalNotifications';
 import { parseProjectKey } from '../model/projectKey';
 import { ProjectOrderSaver, movingProject, sortedByProjectOrder } from '../model/projectOrder';
 import type { MachineSnapshot, ProjectSnapshot, SidebarSelection } from '../model/sidebarItem';
@@ -113,6 +126,8 @@ export interface AppStateFields {
   /** Workspace to select once the sidebar has it: used to restore the last session. */
   readonly pendingSelectWorkspaceId: string | null;
   readonly pendingFocusAgentId: string | null;
+  /** A notification's agent to select and focus, consumed by the shell (WIN-7.7). */
+  readonly pendingSignalDestination: AgentSignalDestination | null;
   /** Advances when any project's (or machine's) own state changes. */
   readonly projectRevision: number;
 }
@@ -137,6 +152,8 @@ export interface AppStateOptions {
   readonly pathExists?: (path: string) => boolean;
   readonly machines?: MachineDirectory | null;
   readonly projectEnvironment?: Partial<ProjectEnvironment>;
+  /** Toasts and the taskbar badge (WIN-7.7); none unless given. */
+  readonly signalNotifications?: AgentSignalNotifications | null;
 }
 
 const OPEN_PROJECTS_KEY = 'PurePointOpenProjects';
@@ -249,6 +266,9 @@ export class AppState implements ProjectStateOwner {
   private readonly localOrderSaver: ProjectOrderSaver;
   private readonly projectUnsubscribers = new Map<ProjectState, () => void>();
   private stopMachineWatcher: (() => void) | null = null;
+  private readonly signalNotifications: AgentSignalNotifications | null;
+  /** Whether the main window has focus; assumed until the window reports otherwise. */
+  private windowFocused = true;
 
   constructor(options: AppStateOptions = {}) {
     this.registry = options.registry ?? null;
@@ -266,6 +286,7 @@ export class AppState implements ProjectStateOwner {
     this.pathExists = options.pathExists ?? (() => true);
     this.machineDirectory = options.machines ?? null;
     this.projectEnvironment = options.projectEnvironment;
+    this.signalNotifications = options.signalNotifications ?? null;
     this.localOrderSaver = new ProjectOrderSaver(async (roots) => {
       const response = await this.daemon.send({
         type: 'reorder_projects',
@@ -286,6 +307,7 @@ export class AppState implements ProjectStateOwner {
       pendingSelectWorktreeId: null,
       pendingSelectWorkspaceId: null,
       pendingFocusAgentId: null,
+      pendingSignalDestination: null,
       projectRevision: 0,
     }));
   }
@@ -360,6 +382,10 @@ export class AppState implements ProjectStateOwner {
 
   setShowSettings(show: boolean): void {
     this.store.setState({ showSettings: show });
+  }
+
+  setPendingSignalDestination(destination: AgentSignalDestination | null): void {
+    this.store.setState({ pendingSignalDestination: destination });
   }
 
   /** Remote projects, every machine's. */
@@ -994,6 +1020,159 @@ export class AppState implements ProjectStateOwner {
   /** The daemon owning an agent, so terminals attach to the right machine. */
   client(agentId: string): DaemonRequester | null {
     return this.projectStateForAgent(agentId)?.client ?? null;
+  }
+
+  // MARK: Agent signals (WIN-7.7)
+
+  /** Every pane holding a surface, per project, for notification routing. */
+  get signalRoutingTargets(): SignalRoutingTarget[] {
+    const registry = this.registry;
+    if (registry === null) return [];
+    return Object.entries(registry.workspacesByProject).flatMap(([projectId, workspaces]) =>
+      workspaces.flatMap((workspace, ordinal) =>
+        workspaceSurfaces(workspace).map(({ leafId, surface }) => ({
+          projectId,
+          worktreeId:
+            workspace.container.kind === 'worktree' ? workspace.container.worktreeId : null,
+          workspaceId: workspace.id,
+          agentId: surface.content.kind === 'agent' ? surface.content.agentId : null,
+          leafId,
+          surfaceId: surface.id,
+          workspaceOrdinal: ordinal,
+        })),
+      ),
+    );
+  }
+
+  /** The workspace whose panes are on screen for the sidebar's selection. */
+  private get visibleSignalWorkspaceId(): string | null {
+    const selection = this.activeSidebarSelection;
+    if (selection?.kind === 'workspace') return selection.id;
+    const active = this.registry?.activeWorkspace ?? null;
+    if (selection?.kind === 'nav' && selection.item === 'dashboard' && active !== null) {
+      return isPointGuard(active) ? active.id : null;
+    }
+    return null;
+  }
+
+  /** The window gained or lost focus: toasts post only while it is unfocused. */
+  setWindowFocused(focused: boolean): void {
+    if (this.windowFocused === focused) return;
+    this.windowFocused = focused;
+    this.signalNotifications?.windowFocusChanged(focused);
+    this.updateAgentSignals();
+  }
+
+  /** The current agents as signal alerts, and the one on screen (Swift `updateAgentSignals`). */
+  signalAlertAgents(nowMs: number = Date.now()): {
+    agents: SignalAlertAgent[];
+    foreground: string | null;
+  } {
+    let foreground: string | null = null;
+    const targets = this.signalRoutingTargets;
+    const visibleWorkspaceId = this.visibleSignalWorkspaceId;
+    const agents = this.managedProjects.flatMap((project) =>
+      project.allAgents.map((agent) => {
+        const worktreeId = project.worktreeId(agent.id);
+        const identity = opaqueKey([project.projectId, worktreeId, agent.id]);
+        const presentation = agentSignalPresentation(agent, !project.isUnavailable, nowMs);
+        const signal = agent.signal;
+        let destination: AgentSignalDestination | null = null;
+        let target: SignalRoutingTarget | null = null;
+        if (signal !== null && presentation.eventId !== null) {
+          const candidate: AgentSignalDestination = {
+            projectId: project.projectId,
+            worktreeId,
+            agentId: agent.id,
+            launchId: signal.identity.launch_id,
+            generation: signal.identity.generation,
+            nativeSessionId: signal.identity.native_session_id,
+            eventId: presentation.eventId,
+          };
+          target = signalRoutingTarget(candidate, targets);
+          if (target !== null && destinationMatches(candidate, signal, nowMs)) {
+            destination = candidate;
+          }
+        }
+        if (
+          destination !== null &&
+          target?.workspaceId === visibleWorkspaceId &&
+          isSignalVisible(
+            {
+              appActive: this.windowFocused,
+              keyWindow: this.windowFocused,
+              settingsVisible: this.s.showSettings,
+              selectedWorkspaceId: visibleWorkspaceId,
+              activeWorkspaceId: this.registry?.activeWorkspaceId ?? null,
+              focusedAgentId: this.focusedAgentId,
+              activeProjectId: this.activeProjectRoot,
+            },
+            destination,
+          )
+        ) {
+          foreground = identity;
+        }
+        return makeSignalAlertAgent({
+          identity,
+          launch: signal?.identity.launch_id ?? '',
+          presentation,
+          qualificationKey: signal === null ? null : signalQualificationKey(signal),
+          destination,
+        });
+      }),
+    );
+    return { agents, foreground };
+  }
+
+  /** Project the agents' signals into the badge and toasts; the shell runs it every second. */
+  updateAgentSignals(nowMs: number = Date.now()): void {
+    const notifications = this.signalNotifications;
+    if (notifications === null) return;
+    const { agents, foreground } = this.signalAlertAgents(nowMs);
+    notifications.open = (agent) => Promise.resolve(this.openSignal(agent));
+    notifications.update(agents, foreground);
+  }
+
+  /** Whether a destination still names a live, reachable agent's same launch, session and event. */
+  private signalDestinationIsCurrent(destination: AgentSignalDestination, nowMs: number): boolean {
+    const project = this.projectState(destination.projectId);
+    const agent = project?.agent(destination.agentId) ?? null;
+    return (
+      project !== null &&
+      agent !== null &&
+      destinationMatches(destination, agent.signal, nowMs) &&
+      isAgentAlive(agent) &&
+      !agent.suspended &&
+      !project.isUnavailable &&
+      signalRoutingTarget(destination, this.signalRoutingTargets) !== null
+    );
+  }
+
+  /** Route a notification to its agent (Swift `signalNotifications.open`); whether it did. */
+  openSignal(agent: SignalAlertAgent, nowMs: number = Date.now()): boolean {
+    const destination = agent.destination;
+    if (destination === null || !this.signalDestinationIsCurrent(destination, nowMs)) return false;
+    this.setPendingSignalDestination(destination);
+    return true;
+  }
+
+  /**
+   * The pending notification destination's pane, consumed once (Swift ContentView
+   * `selectSignalDestination`): the active project is set and the pane's tab selected and
+   * focused. Ambiguous or expired destinations never fall back to a global ID lookup.
+   */
+  takeSignalDestination(nowMs: number = Date.now()): SignalRoutingTarget | null {
+    const destination = this.s.pendingSignalDestination;
+    if (destination === null) return null;
+    this.setPendingSignalDestination(null);
+    const registry = this.registry;
+    if (registry === null || !this.signalDestinationIsCurrent(destination, nowMs)) return null;
+    const target = signalRoutingTarget(destination, this.signalRoutingTargets);
+    if (target === null) return null;
+    this.activeProjectRoot = destination.projectId;
+    registry.selectTab(target.workspaceId, target.surfaceId);
+    registry.setFocus(target.workspaceId, target.leafId);
+    return target;
   }
 
   // MARK: Lifecycle

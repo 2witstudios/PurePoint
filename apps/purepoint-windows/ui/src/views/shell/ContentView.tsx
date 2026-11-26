@@ -7,15 +7,16 @@
 // Mac's Auto Layout helper (Services/NSView+Constraints.swift).
 //
 // Differences from Swift:
-// - Agent signals (`updateAgentSignals`, `pendingSignalDestination`) are WIN-7.7; Point Guard's
-//   working directory (`pointGuardService`) is WIN-9.x; spawn selection (`pendingSelectAgentId`)
-//   and the session's workspace restore follow the pane grid (WIN-7.4).
+// - Point Guard's working directory (`pointGuardService`) is WIN-9.x; spawn selection
+//   (`pendingSelectAgentId`) and the session's workspace restore follow the pane grid (WIN-7.4).
+// - Agent signals (WIN-7.7) are projected by `startAgentSignals` (bootstrap), not a view task;
+//   the shell only consumes `pendingSignalDestination`.
 // - The menu commands' accelerators are handled here, for every command (Mac menus handle theirs
 //   and `HotkeyMonitor` the rest; WIN-7.6 ports the monitor for terminal-focus rules).
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import { type SidebarSelection, selection as sidebarSelection } from '../../model/sidebarItem.ts';
-import { workspaceAgentIds } from '../../model/workspace.ts';
+import { isPointGuard, workspaceAgentIds } from '../../model/workspace.ts';
 import type { AppState } from '../../state/appState.ts';
 import { useKeyBindingStore } from '../../state/keyBindingStore.ts';
 import { SIDEBAR_KEY, useSidebarVisibilityStore } from '../../state/sidebarVisibilityStore.ts';
@@ -229,6 +230,25 @@ export function ContentView() {
         if (worktreeId === null) return;
         app.setPendingSelectWorktreeId(null);
         setSelection(sidebarSelection.worktree(worktreeId));
+      }),
+    [app],
+  );
+
+  // Swift `.onChange(of: appState.pendingSignalDestination)` → `selectSignalDestination` (WIN-7.7):
+  // a notification's agent becomes the selection, its tab selected and its pane focused.
+  useEffect(
+    () =>
+      app.store.subscribe((state) => {
+        if (state.pendingSignalDestination === null) return;
+        const target = app.takeSignalDestination();
+        if (target === null) return;
+        const workspace = app.registry?.workspace(target.workspaceId) ?? null;
+        const next =
+          workspace !== null && isPointGuard(workspace)
+            ? sidebarSelection.nav('dashboard')
+            : sidebarSelection.workspace(target.workspaceId);
+        selectSidebarAgents(app, next, false);
+        setSelection(next);
       }),
     [app],
   );

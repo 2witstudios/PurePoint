@@ -19,8 +19,8 @@
 //   Remove Machine — with the confirmation that menu item asks for.
 // - Context menus, the worktree add menu and project drag are WIN-7.8; the add buttons open the
 //   command palette directly (`onShowCommandPalette`).
-// - The agent signal pill shows a provisional presentation until WIN-7.7 ports
-//   `AgentModel.signalPresentation`; callers can pass their own `presentSignal`.
+// - The agent signal pill is `AgentModel.signalPresentation` (WIN-7.7) read when the row draws;
+//   callers can pass their own `presentSignal`.
 
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -60,7 +60,8 @@ import {
   workspaceRenderState,
 } from '../../model/sidebarOutline.ts';
 import { type Workspace, primaryAgentId, workspaceAgentIds } from '../../model/workspace.ts';
-import { structurallyEqual } from '../../model/workspaceModel.ts';
+import { signalAccessibilityDescription } from '../../model/agentSignalSnapshot.ts';
+import { agentSignalPresentation, structurallyEqual } from '../../model/workspaceModel.ts';
 import {
   type createSidebarExpansionStore,
   useSidebarExpansionStore,
@@ -86,28 +87,14 @@ export interface SignalPill {
   readonly accessibilityDescription: string;
 }
 
-const UNKNOWN_PILL: SignalPill = {
-  label: 'Unknown',
-  needsAttention: false,
-  accessibilityDescription: 'Unknown',
-};
-
-/**
- * The pill until WIN-7.7 ports `signalPresentation(available:)`: unknown when the project cannot
- * be reached or nothing is observed, otherwise the observed activity.
- */
-export function provisionalSignalPill(signal: WorkspaceSignal): SignalPill {
-  const snapshot = signal.snapshot;
-  if (!signal.available || snapshot === null) return UNKNOWN_PILL;
-  const needsAttention = snapshot.pending_attention.length > 0;
-  switch (snapshot.activity) {
-    case 'working':
-      return { label: 'Working', needsAttention, accessibilityDescription: 'Working' };
-    case 'idle':
-      return { label: 'Idle', needsAttention, accessibilityDescription: 'Idle' };
-    case 'unknown':
-      return { ...UNKNOWN_PILL, needsAttention };
-  }
+/** The row's pill: its first agent's signal presentation, now. */
+export function signalPill(signal: WorkspaceSignal, nowMs: number = Date.now()): SignalPill {
+  const presentation = agentSignalPresentation(signal.agent, signal.available, nowMs);
+  return {
+    label: presentation.label,
+    needsAttention: presentation.needsAttention,
+    accessibilityDescription: signalAccessibilityDescription(presentation),
+  };
 }
 
 /** How a row was chosen. */
@@ -670,7 +657,7 @@ export function SidebarOutlineViewController({
   selection = null,
   expansionStore = useSidebarExpansionStore,
   menuContext,
-  presentSignal = provisionalSignalPill,
+  presentSignal = signalPill,
   ...callbacks
 }: SidebarOutlineViewControllerProps) {
   // Rebuild the tree only when what the rows show has changed (Swift `lastRenderState`), so an

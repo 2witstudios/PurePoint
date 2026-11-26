@@ -17,10 +17,10 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 |---|---|---|---|---|---|
 | `AppCommands.swift` | 404 | `ui/src/views/shell/appCommands.ts`, `ui/src/views/shell/MenuBar.tsx` (in-app menu bar in the title bar) | WIN-7.1 | ported | — |
 | `ContentView.swift` | 364 | `ui/src/views/shell/ContentView.tsx`, `ui/src/views/shell/bootstrap.ts`, `ui/src/views/shell/sidebarWidth.ts` | WIN-7.1 | ported | — |
-| `Models/AgentSignalPendingTaps.swift` | 21 | `ui/src/model/agentSignalPendingTaps.ts` | WIN-7.7 | todo | — |
-| `Models/AgentSignalPolicy.swift` | 59 | `ui/src/model/agentSignalPolicy.ts` | WIN-7.7 | todo | — |
-| `Models/AgentSignalRouting.swift` | 59 | `ui/src/model/agentSignalRouting.ts` | WIN-7.7 | todo | — |
-| `Models/AgentSignalSnapshot.swift` | 85 | `ui/src/model/agentSignalSnapshot.ts` | WIN-7.7 | todo | — |
+| `Models/AgentSignalPendingTaps.swift` | 21 | `ui/src/model/agentSignalPendingTaps.ts` | WIN-7.7 | ported | — |
+| `Models/AgentSignalPolicy.swift` | 59 | `ui/src/model/agentSignalPolicy.ts` | WIN-7.7 | ported | — |
+| `Models/AgentSignalRouting.swift` | 59 | `ui/src/model/agentSignalRouting.ts` | WIN-7.7 | ported | — |
+| `Models/AgentSignalSnapshot.swift` | 85 | `ui/src/model/agentSignalSnapshot.ts` (`AgentModel.signalPresentation` is `agentSignalPresentation` in `ui/src/model/workspaceModel.ts`) | WIN-7.7 | ported | — |
 | `Models/AgentStatus.swift` | 48 | `ui/src/model/agentStatus.ts` | WIN-6.0 | ported | — |
 | `Models/AgentVariant.swift` | 73 | `ui/src/model/agentVariant.ts` | WIN-6.6 | ported | — |
 | `Models/AgentsHubModels.swift` | 160 | `ui/src/model/agentsHubModels.ts` | WIN-8.7 | ported | — |
@@ -58,7 +58,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Platform/NSApplication+iOS.swift` | 39 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Platform/PlatformTypes.swift` | 28 | `ui/src/model/platformTypes.ts` | WIN-6.0 | ported | — |
 | `PurePointiPadApp.swift` | 67 | — | — | excluded | Whole-file `#if os(iOS)` (iPad app entry point) |
-| `Services/AgentSignalNotifications.swift` | 173 | `ui/src/services/notifications.ts` | WIN-7.7 | todo | — |
+| `Services/AgentSignalNotifications.swift` | 173 | `ui/src/services/agentSignalNotifications.ts` (AppState glue in `ui/src/state/appState.ts`), `src-tauri/src/taskbar.rs` (taskbar overlay badge); toasts through `tauri-plugin-notification`, routed when the window next gains focus (the plugin delivers no toast click on Windows desktop) | WIN-7.7 | ported | — |
 | `Services/AttachmentUpload.swift` | 102 | `ui/src/services/attachmentUpload.ts` (Command-only paste is Ctrl-only) | WIN-9.7 | ported | — |
 | `Services/BundleSeal.swift` | 52 | `src-tauri/src/pointguard/seal.rs` (SHA-256 manifest seal; Authenticode not provisioned) | WIN-9.3 | ported | — |
 | `Services/CLIInstaller.swift` | 215 | `src-tauri/src/installer/cli.rs`, `src-tauri/src/installer/user_path.rs`, `src-tauri/src/installer/mod.rs`, `ui/src/services/installer.ts` | WIN-10.1 | ported | — |
@@ -280,7 +280,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 |---|---|---|---|---|---|
 | `ActiveProjectRoutingTests.swift` | all | `ui/src/model/sidebarOutline.test.ts` | WIN-6.5 | ported | — |
 | `AddMachineFlowTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `AgentSignalBadgeTests.swift` | all | — | — | ios-only | Badge-count rules re-expressed as new vitest cases in WIN-7.7 |
+| `AgentSignalBadgeTests.swift` | all | — | — | ios-only | Badge-count rules re-expressed as new vitest cases in WIN-7.7 (`ui/src/model/agentSignalPolicy.test.ts`, `ui/src/services/agentSignalNotifications.test.ts`) |
 | `AgentsHubModelsTests.swift` | all | `ui/src/model/agentsHubModels.test.ts` | WIN-8.7 | ported | — |
 | `AgentsHubStateTests.swift` | all | `ui/src/state/agentsHubState.test.ts` | WIN-8.7 | ported | — |
 | `AppLifecycleTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` (`AppActivityTests`), though WIN-6.0 lists it; nothing to port |

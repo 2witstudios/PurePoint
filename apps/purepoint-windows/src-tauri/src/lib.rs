@@ -10,6 +10,7 @@ pub mod installer;
 pub mod pointguard;
 pub mod secrets;
 pub mod subscriptions;
+pub mod taskbar;
 pub mod watchers;
 pub mod window_state;
 
@@ -33,6 +34,8 @@ pub fn run() {
     tauri::Builder::default()
         // Links from terminals and chat open in the user's browser (WIN-7.3).
         .plugin(tauri_plugin_opener::init())
+        // Agent signal toasts (WIN-7.7).
+        .plugin(tauri_plugin_notification::init())
         .manage(git::commands::GitState::default())
         .manage(attach::AttachState::default())
         .manage(pointguard::chat::ChatSockets::default())
@@ -82,6 +85,7 @@ pub fn run() {
             watchers::commands::watchers_restore,
             watchers::commands::watchers_discard,
             chrome::chrome_set_layout,
+            taskbar::taskbar_set_badge,
             pointguard::pointguard_status,
             pointguard::pointguard_start,
             pointguard::pointguard_stop,

@@ -8,6 +8,10 @@ import {
   type InstallerState,
 } from '../../services/installer.ts';
 import { localLayoutHostIO } from '../../services/fs.ts';
+import {
+  AgentSignalNotifications,
+  startAgentSignals,
+} from '../../services/agentSignalNotifications.ts';
 import { AppState } from '../../state/appState.ts';
 import { CachedWorkspacePersistence } from '../../state/cachedWorkspacePersistence.ts';
 import { WorkspaceRegistry } from '../../state/workspaceRegistry.ts';
@@ -20,6 +24,8 @@ export interface StartAppDeps {
   installerStatus(): Promise<InstallerState>;
   onInstallerState(handler: (state: InstallerState) => void): Promise<() => void>;
   setInstallerState(state: InstallerState): void;
+  /** Toasts and the taskbar badge from agent signals (WIN-7.7); returns its stop. */
+  startAgentSignals?(app: AppState): () => void;
 }
 
 const defaultDeps: StartAppDeps = {
@@ -30,6 +36,7 @@ const defaultDeps: StartAppDeps = {
   setInstallerState: (state) => {
     useInstallerBannerStore.getState().setInstaller(state);
   },
+  startAgentSignals,
 };
 
 function logged(what: string) {
@@ -56,7 +63,11 @@ export function createAppState(): AppState {
     },
   });
   registry = new WorkspaceRegistry({ persistence });
-  const app = new AppState({ registry, persistence });
+  const app = new AppState({
+    registry,
+    persistence,
+    signalNotifications: new AgentSignalNotifications(),
+  });
   registry.onCloseAgent = (projectId, agentId) => {
     app.projectState(projectId)?.removeAndKillAgent(agentId);
   };
@@ -90,6 +101,7 @@ export function startApp(app: AppState, deps: StartAppDeps = defaultDeps): () =>
 
   // The local daemon's projects, followed from here on (the projects subscription).
   app.restoreProjects();
+  if (deps.startAgentSignals !== undefined) keep(deps.startAgentSignals(app));
 
   return () => {
     stopped = true;

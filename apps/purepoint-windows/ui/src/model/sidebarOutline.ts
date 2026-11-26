@@ -4,7 +4,7 @@
 // The sidebar outline's platform-free model: what the tree holds, which rows are open and what a
 // row's selection means. The view only draws it. Menus live in `sidebarMenu.ts`.
 
-import type { AgentStatus, SignalSnapshot } from '../protocol';
+import type { AgentStatus } from '../protocol';
 import {
   type Workspace,
   isPointGuard,
@@ -16,7 +16,7 @@ import {
   containersEqual,
   worktreeContainer,
 } from './workspace.ts';
-import { agentDisplayName, isAgentAlive } from './workspaceModel.ts';
+import { type AgentModel, agentDisplayName, isAgentAlive } from './workspaceModel.ts';
 import { lastPathComponent } from './projectKey.ts';
 import {
   type MachineConnectionState,
@@ -39,12 +39,12 @@ export type WorkspacesByProject = Readonly<Record<string, readonly Workspace[] |
 // MARK: - Render state
 
 /**
- * A row's agent signal, before presentation. The Mac maps it through
- * `AgentModel.signalPresentation(available:)`, which WIN-7.7 ports; until then the row gets the
- * raw snapshot and whether the project can be reached.
+ * A row's agent signal, before presentation: the workspace's first agent and whether its project
+ * can be reached. The row presents it through `agentSignalPresentation` (Swift
+ * `AgentModel.signalPresentation(available:)`) when it draws, since freshness depends on the time.
  */
 export interface WorkspaceSignal {
-  readonly snapshot: SignalSnapshot | null;
+  readonly agent: AgentModel;
   readonly available: boolean;
 }
 
@@ -135,8 +135,7 @@ export function workspaceRenderState(
     paneCount: paneCount(workspace),
     tabCount: tabCount(workspace),
     status,
-    signal:
-      first === undefined ? null : { snapshot: first.signal, available: !project.isUnavailable },
+    signal: first === undefined ? null : { agent: first, available: !project.isUnavailable },
   };
 }
 

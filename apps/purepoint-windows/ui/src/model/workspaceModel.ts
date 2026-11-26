@@ -11,6 +11,11 @@ import type {
   SpawnPlacement,
   WorktreeStatus,
 } from '../protocol';
+import {
+  type AgentSignalPresentation,
+  UNKNOWN_SIGNAL_PRESENTATION,
+  signalPresentation,
+} from './agentSignalSnapshot.ts';
 
 export interface AgentModel {
   readonly id: string;
@@ -100,6 +105,28 @@ export function agentDisplayName(agent: AgentModel): string {
 /** Whether the agent's process is alive (Swift `AgentStatus.isAlive`, over the daemon's two states). */
 export function isAgentAlive(agent: AgentModel): boolean {
   return agent.status === 'running';
+}
+
+/**
+ * Swift `AgentModel.signalPresentation(available:now:)` (WIN-7.7): unknown when the project cannot
+ * be reached, Suspended for a suspended agent, otherwise its signal's presentation while the
+ * process is alive.
+ */
+export function agentSignalPresentation(
+  agent: AgentModel,
+  available = true,
+  nowMs: number = Date.now(),
+): AgentSignalPresentation {
+  if (!available) return UNKNOWN_SIGNAL_PRESENTATION;
+  if (agent.suspended) {
+    return { label: 'Suspended', eventId: null, needsAttention: false, detail: '' };
+  }
+  if (agent.signal === null) return UNKNOWN_SIGNAL_PRESENTATION;
+  return signalPresentation(agent.signal, agent.id, {
+    sessionId: agent.sessionId,
+    available: isAgentAlive(agent),
+    nowMs,
+  });
 }
 
 /**
