@@ -21,7 +21,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/AgentSignalPolicy.swift` | 59 | `ui/src/model/agentSignalPolicy.ts` | WIN-7.7 | todo | — |
 | `Models/AgentSignalRouting.swift` | 59 | `ui/src/model/agentSignalRouting.ts` | WIN-7.7 | todo | — |
 | `Models/AgentSignalSnapshot.swift` | 85 | `ui/src/model/agentSignalSnapshot.ts` | WIN-7.7 | todo | — |
-| `Models/AgentStatus.swift` | 48 | `ui/src/model/agentStatus.ts` | WIN-6.0 | todo | — |
+| `Models/AgentStatus.swift` | 48 | `ui/src/model/agentStatus.ts` | WIN-6.0 | ported | — |
 | `Models/AgentVariant.swift` | 73 | `ui/src/model/agentVariant.ts` | WIN-6.6 | ported | — |
 | `Models/AgentsHubModels.swift` | 160 | `ui/src/model/agentsHubModels.ts` | WIN-8.7 | todo | — |
 | `Models/ChannelModel.swift` | 58 | `ui/src/model/channelModel.ts` | WIN-8.10 | todo | — |
@@ -29,14 +29,14 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/CommandPaletteItem.swift` | 180 | `ui/src/model/commandPalette.ts` | WIN-6.6 | ported | — |
 | `Models/ContentBlockSplitter.swift` | 81 | `ui/src/model/content.ts` | WIN-8.16 | todo | — |
 | `Models/Conversation.swift` | 47 | `src-tauri/src/conversations/model.rs` | WIN-8.12 | ported | — |
-| `Models/DiffModel.swift` | 180 | `ui/src/model/diff.ts` | WIN-6.0 | todo | — |
+| `Models/DiffModel.swift` | 180 | `ui/src/model/diff.ts` (review data types are `ui/src/services/git.ts`, decoded in Rust by WIN-8.1) | WIN-6.0 | ported | — |
 | `Models/EditorTab.swift` | 142 | `ui/src/model/editorTab.ts` | WIN-8.5 | todo | — |
 | `Models/FileNode.swift` | 38 | `ui/src/model/fileNode.ts` | WIN-8.4 | todo | — |
 | `Models/KeyBinding+iOS.swift` | 128 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Models/KeyBinding.swift` | 449 | `ui/src/model/keyBinding.ts` | WIN-6.7 | ported | — |
 | `Models/Machine.swift` | 278 | `ui/src/model/machine.ts` | WIN-8.14 | todo | — |
-| `Models/ManifestModel.swift` | 100 | `ui/src/protocol/generated/` (replaced by generated types) | WIN-6.0 | todo | — |
-| `Models/PRModel.swift` | 33 | `ui/src/model/pr.ts` | WIN-6.0 | todo | — |
+| `Models/ManifestModel.swift` | 100 | `ui/src/protocol/generated/` (replaced by generated types; Swift's lenient decoding in `ui/src/services/daemonConnection.ts`) | WIN-6.0 | ported | — |
+| `Models/PRModel.swift` | 33 | `ui/src/model/pr.ts` (`PullRequestInfo` from `ui/src/services/git.ts`) | WIN-6.0 | ported | — |
 | `Models/PiChatDomain.swift` | 368 | `ui/src/model/piChatDomain.ts` | WIN-9.4 | todo | — |
 | `Models/PointGuardPlays.swift` | 219 | `ui/src/model/pointGuardPlays.ts` | WIN-8.13 | todo | — |
 | `Models/PointGuardRuntime.swift` | 96 | `ui/src/model/pointGuardRuntime.ts` | WIN-8.13 | todo | — |
@@ -56,7 +56,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Platform/MacControlStyles+iOS.swift` | 299 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Platform/MacTextStyles+iOS.swift` | 22 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Platform/NSApplication+iOS.swift` | 39 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Platform/PlatformTypes.swift` | 28 | `ui/src/model/platformTypes.ts` | WIN-6.0 | todo | — |
+| `Platform/PlatformTypes.swift` | 28 | `ui/src/model/platformTypes.ts` | WIN-6.0 | ported | — |
 | `PurePointiPadApp.swift` | 67 | — | — | excluded | Whole-file `#if os(iOS)` (iPad app entry point) |
 | `Services/AgentSignalNotifications.swift` | 173 | `ui/src/services/notifications.ts` | WIN-7.7 | todo | — |
 | `Services/AttachmentUpload.swift` | 102 | `ui/src/services/attachmentUpload.ts` | WIN-9.7 | todo | — |
@@ -68,14 +68,14 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/CodexConversationIndex.swift` | 160 | `src-tauri/src/conversations/codex.rs` | WIN-8.12 | ported | — |
 | `Services/DaemonAttachSession.swift` | 354 | `src-tauri/src/attach/session.rs`, `src-tauri/src/attach/mod.rs`, `ui/src/services/attach.ts` | WIN-5.4 | ported | — |
 | `Services/DaemonClient.swift` | 138 | `src-tauri/src/daemon/client.rs`, `src-tauri/src/daemon/relay.rs`, `ui/src/services/daemon.ts` | WIN-5.3 | ported | — |
-| `Services/DaemonConnection.swift` | 80 | `ui/src/services/daemonConnection.ts` | WIN-6.0 | todo | — |
+| `Services/DaemonConnection.swift` | 80 | `ui/src/services/daemonConnection.ts` | WIN-6.0 | ported | — |
 | `Services/DaemonGridSubscription.swift` | 127 | `src-tauri/src/subscriptions/grid.rs`, `ui/src/state/gridCommands.ts` | WIN-6.4 | todo | WIN-5.5 ported the stream (`grid.rs`: same backoff, 20 retries, commands on the subscription connection; `grid-event {projectRoot, command}`, `subscriptions_grid_command`); WIN-6.4 applies commands to the registry (`handleRemoteCommand`) |
 | `Services/DaemonLifecycle.swift` | 285 | `src-tauri/src/daemon/lifecycle.rs` | WIN-5.3 | ported | — |
 | `Services/DaemonProjectsSubscription.swift` | 69 | `src-tauri/src/subscriptions/projects.rs`, `ui/src/services/subscriptions.ts` | WIN-5.5 | ported | 0.5 s doubling to 10 s, never gives up; `projects-changed {projects}`; `subscriptions_start_projects` ensures the daemon first (`followLocalProjects`) |
 | `Services/DaemonProtocol.swift` | 1438 | `ui/src/protocol/generated/` (from pu-core via ts-rs) | WIN-5.2 | todo | — |
 | `Services/DaemonStatusSubscription.swift` | 143 | `src-tauri/src/subscriptions/status.rs`, `ui/src/services/subscriptions.ts` | WIN-5.5 | ported | Per project root; 0.5 s doubling to 5 s, `BUSY` retried, `subscription-state` `daemon_lost` on a dropped stream or the 4th failure; `status-event` carries the raw payload (AgentModel mapping goes with WIN-6.0); no iOS foreground handling |
-| `Services/DaemonTransport.swift` | 197 | `src-tauri/src/daemon/client.rs` (replaces the Swift transport) | WIN-6.0 | todo | — |
-| `Services/DaemonWorkspaceService.swift` | 73 | `ui/src/services/workspaceService.ts` | WIN-6.0 | todo | — |
+| `Services/DaemonTransport.swift` | 197 | `src-tauri/src/daemon/client.rs` (replaces the Swift transport), `ui/src/services/daemonConnection.ts` (`DaemonTransport` seam, `DaemonRequester` per endpoint) | WIN-6.0 | ported | — |
+| `Services/DaemonWorkspaceService.swift` | 73 | `ui/src/services/workspaceService.ts` | WIN-6.0 | ported | — |
 | `Services/FileIOService.swift` | 175 | `src-tauri/src/git/file_io.rs`, `ui/src/services/fileIO.ts` | WIN-8.5 | todo | — |
 | `Services/FileIndex.swift` | 52 | `src-tauri/src/files/index.rs`, `ui/src/services/fileIndex.ts` | WIN-6.6 | ported | — |
 | `Services/FileTreeWatcher.swift` | 96 | `src-tauri/src/watchers/file_tree.rs` | WIN-5.6 | ported | One recursive `notify` watch per root (not one source per expanded dir), skipping `FileTreeState` hidden names; `file-tree-changed {root, paths}` via `ui/src/services/watchers.ts` |
@@ -104,22 +104,22 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/SSH/SSHKeyFormat.swift` | 265 | — | — | excluded | Whole-file `#if os(iOS)`; Citadel SSH, replaced by system `ssh.exe` (DEC-5, DEC-11) |
 | `Services/SSH/SSHMachineSession.swift` | 365 | — | — | excluded | Whole-file `#if os(iOS)`; Citadel SSH, replaced by system `ssh.exe` (DEC-5, DEC-11) |
 | `Services/SSH/SSHMachineSupport.swift` | 35 | — | — | excluded | Whole-file `#if os(iOS)`; Citadel SSH, replaced by system `ssh.exe` (DEC-5, DEC-11) |
-| `Services/ShellUtilities.swift` | 15 | `src-tauri/src/daemon/process.rs` (std::process) | WIN-6.0 | todo | — |
+| `Services/ShellUtilities.swift` | 15 | `ui/src/model/shellEscape.ts`, `src-tauri/src/conversations/util.rs` (`parse_json_line`) | WIN-6.0 | ported | — |
 | `Services/SyntaxHighlightManager.swift` | 513 | `ui/src/services/syntaxHighlight.ts` | WIN-8.5 | todo | — |
 | `Services/TranscriptParser.swift` | 222 | `src-tauri/src/conversations/transcript.rs` | WIN-8.12 | ported | — |
-| `Services/UnixSocketTransport.swift` | 204 | `src-tauri/src/daemon/client.rs` (pu-transport named pipe) | WIN-6.0 | todo | — |
-| `Services/WorkspaceService.swift` | 13 | `ui/src/services/workspaceService.ts` | WIN-6.0 | todo | — |
+| `Services/UnixSocketTransport.swift` | 204 | `src-tauri/src/daemon/client.rs` (pu-transport named pipe) | WIN-6.0 | ported | — |
+| `Services/WorkspaceService.swift` | 13 | `ui/src/services/workspaceService.ts` | WIN-6.0 | ported | — |
 | `Services/WorktreeWatcher.swift` | 69 | `src-tauri/src/watchers/worktree.rs` | WIN-5.6 | ported | Same metadata paths (`.git`, HEAD, index, packed-refs, refs), 500 ms debounce; `worktrees-changed {worktreePath}` |
 | `State/AddMachineFlow+iOS.swift` | 313 | — | — | excluded | `+iOS` file (iPad build only) |
 | `State/AgentConfigState.swift` | 243 | `ui/src/state/agentConfigState.ts` | WIN-8.7 | todo | — |
 | `State/AgentsHubState.swift` | 270 | `ui/src/state/agentsHubState.ts` | WIN-8.7 | todo | — |
 | `State/AppState+LibraryScope+iOS.swift` | 123 | — | — | excluded | `+iOS` file (iPad build only) |
 | `State/AppState+PointGuardPlays.swift` | 20 | `ui/src/state/appStatePointGuardPlays.ts` | WIN-8.13 | todo | — |
-| `State/AppState.swift` | 952 | `ui/src/state/appState.ts` | WIN-6.0 | todo | — |
+| `State/AppState.swift` | 952 | `ui/src/state/appState.ts` | WIN-6.0 | ported | — |
 | `State/ChannelState.swift` | 298 | `ui/src/state/channelState.ts` | WIN-8.10 | todo | — |
 | `State/ChatState.swift` | 161 | — | — | excluded | DEC-11: legacy chat (iPad DEC-9) |
 | `State/CommandPaletteOpenCoordinator.swift` | 18 | `ui/src/state/commandPaletteOpenCoordinator.ts` | WIN-6.6 | ported | — |
-| `State/DiffState.swift` | 281 | `ui/src/state/diffState.ts` | WIN-6.0 | todo | — |
+| `State/DiffState.swift` | 281 | `ui/src/state/diffState.ts` | WIN-6.0 | ported | — |
 | `State/EditorState.swift` | 263 | `ui/src/state/editorState.ts` | WIN-8.5 | todo | — |
 | `State/FileTabStore.swift` | 62 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | ported | — |
 | `State/FileTreeState.swift` | 208 | `ui/src/state/fileTreeState.ts` | WIN-8.4 | todo | — |
@@ -128,7 +128,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/MachineState.swift` | 515 | `ui/src/state/machineState.ts` | WIN-8.14 | todo | — |
 | `State/PiChatModel.swift` | 827 | `ui/src/state/piChat.ts` | WIN-9.4 | todo | — |
 | `State/PointGuardServiceModel.swift` | 516 | `src-tauri/src/pointguard/service.rs`, `ui/src/state/pointGuardService.ts` | WIN-9.3 | todo | — |
-| `State/ProjectState.swift` | 748 | `ui/src/state/projectState.ts` | WIN-6.0 | todo | — |
+| `State/ProjectState.swift` | 748 | `ui/src/state/projectState.ts`, `ui/src/state/remoteLayoutSaver.ts`, `ui/src/state/cachedWorkspacePersistence.ts`, `ui/src/services/fs.ts`, `src-tauri/src/files/text.rs` | WIN-6.0 | ported | — |
 | `State/RemoteFolderBrowser+iOS.swift` | 242 | — | — | excluded | `+iOS` file (iPad build only) |
 | `State/ScheduleState.swift` | 282 | `ui/src/state/scheduleState.ts` | WIN-8.8 | todo | — |
 | `State/SessionListState.swift` | 164 | `ui/src/state/sessions.ts` | WIN-8.16 | todo | — |
@@ -144,7 +144,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Theme/PurePointTheme.swift` | 63 | `ui/src/theme/tokens.css` (metrics, fonts) | WIN-5.8 | ported | — |
 | `Theme/TerminalTheme.swift` | 118 | `ui/src/theme/tokens.css` (`--pp-terminal-*`) | WIN-5.8 | ported | — |
 | `Theme/Theme.swift` | 114 | `ui/src/theme/tokens.css` (colors) | WIN-5.8 | ported | — |
-| `Utilities/WorktreeNameNormalizer.swift` | 24 | `ui/src/model/worktreeName.ts` | WIN-6.0 | todo | — |
+| `Utilities/WorktreeNameNormalizer.swift` | 24 | `ui/src/model/worktreeName.ts` | WIN-6.0 | ported | — |
 | `Views/Agents/AgentCreationSheet.swift` | 156 | `ui/src/views/agents/AgentCreationSheet.tsx` | WIN-8.7 | todo | — |
 | `Views/Agents/AgentsHubView.swift` | 877 | `ui/src/views/agents/AgentsHubView.tsx` | WIN-8.7 | todo | — |
 | `Views/Agents/PromptCreationSheet.swift` | 125 | `ui/src/views/agents/PromptCreationSheet.tsx` | WIN-8.7 | todo | — |
@@ -295,9 +295,9 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `CommandPaletteOrderTests.swift` | all | `ui/src/model/commandPaletteOrder.test.ts` | WIN-6.6 | ported | — |
 | `CommandPalettePanelIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `ContentBlockSplitterTests.swift` | all | `ui/src/model/content.test.ts` | WIN-8.16 | todo | — |
-| `DaemonClientParseTests.swift` | all | `src-tauri/src/daemon/client.rs` (#[cfg(test)]), `ui/src/services/daemon.test.ts` | WIN-6.0 | todo | — |
-| `DaemonTransportTests.swift` | all | `src-tauri/src/daemon/client.rs` (#[cfg(test)]) | WIN-6.0 | todo | Platform-neutral cases only |
-| `DaemonWorkspaceServiceTests.swift` | all | `ui/src/services/workspaceService.test.ts` | WIN-6.0 | todo | — |
+| `DaemonClientParseTests.swift` | all | `ui/src/services/daemonConnection.test.ts` | WIN-6.0 | ported | The attach request case is asserted by `src-tauri/src/attach/session_tests.rs`; the three AppKit `ScrollableTerminal` cases are `it.todo` for the terminal view leaf |
+| `DaemonTransportTests.swift` | all | `ui/src/services/daemonConnection.test.ts` | WIN-6.0 | ported | Platform-neutral cases only (`sendBlocking` as `send`); Unix-socket and macOS endpoint cases are the named-pipe tests in `src-tauri/src/daemon/client.rs`; stream cases in `src-tauri/src/subscriptions/tests.rs` and `src-tauri/src/attach/session_tests.rs` |
+| `DaemonWorkspaceServiceTests.swift` | all | `ui/src/services/workspaceService.test.ts` | WIN-6.0 | ported | — |
 | `DiffLayoutTests.swift` | all | `ui/src/views/detail/diffLayout.test.ts` | WIN-8.3 | todo | — |
 | `DiffRenderingIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `DraggableSplitTests.swift` | all | `ui/src/model/paneSplit.test.ts` | WIN-6.2 | ported | — |
@@ -306,7 +306,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `FileTreeOutlineIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `FileTreeStateTests.swift` | all | `ui/src/state/fileTreeState.test.ts` | WIN-8.4 | todo | — |
 | `GitReviewTests.swift` | all | `src-tauri/src/git/tests/git_review.rs` | WIN-8.1 | ported | DiffState-only assertions go with WIN-6.0; WorktreeWatcher checks with WIN-5.6 |
-| `HexEncodingTests.swift` | all | `src-tauri/src/attach/session.rs` (#[cfg(test)]) | WIN-6.0 | todo | — |
+| `HexEncodingTests.swift` | all | `ui/src/services/daemonConnection.test.ts` | WIN-6.0 | ported | — |
 | `HotkeyKeyCommandTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `HotkeyRecorderTests.swift` | all | — | — | ios-only | Windows recorder gets new tests in WIN-8.11 |
 | `IPadWindowingTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |

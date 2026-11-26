@@ -32,6 +32,9 @@ pub fn run() {
         .manage(attach::AttachState::default())
         .invoke_handler(tauri::generate_handler![
             files::index::file_index,
+            files::text::fs_stat_text,
+            files::text::fs_read_text,
+            files::text::fs_write_text_if_unmodified,
             conversations::conversations_list,
             conversations::conversation_snippets,
             conversations::conversation_transcript,
