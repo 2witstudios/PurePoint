@@ -31,7 +31,7 @@ jobs:
   build:
     name: Build & Test
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -76,6 +76,21 @@ jobs:
           cargo clippy --locked --all-targets
           cargo test --locked --all-targets
       - run: npm run tauri -- build --debug --no-bundle
+      # End-to-end tests (WIN-5.7): the debug app above against the workspace-built daemon and CLI,
+      # through tauri-driver and the msedgedriver matching the runner's WebView2.
+      - name: Build pu and pu-engine
+        working-directory: .
+        run: cargo build --locked -p pu-cli -p pu-engine
+      - name: End-to-end tests
+        run: npm run e2e
+      - name: Retain e2e screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-app-e2e
+          path: apps/purepoint-windows/ui/e2e/artifacts
+          if-no-files-found: warn
+          retention-days: 7
 
   bridge-windows:
     name: Point Guard bridge (Windows)
