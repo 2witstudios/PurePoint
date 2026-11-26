@@ -10,6 +10,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
     GetNamedSecurityInfoW, GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT, SetNamedSecurityInfoW,
+    SetSecurityInfo,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
@@ -162,8 +163,8 @@ impl SecurityDescriptor {
     }
 }
 
-fn apply_sddl(path: &Path, sddl: &str) -> io::Result<()> {
-    let sd = sd_from_sddl(sddl)?;
+/// The DACL inside `sd`, valid while `sd` lives.
+fn sd_dacl(sd: &Sd) -> io::Result<*mut ACL> {
     let mut present = 0;
     let mut defaulted = 0;
     let mut dacl: *mut ACL = null_mut();
@@ -171,6 +172,42 @@ fn apply_sddl(path: &Path, sddl: &str) -> io::Result<()> {
     if unsafe { GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted) } == 0 {
         return Err(io::Error::last_os_error());
     }
+    Ok(dacl)
+}
+
+/// The owner-only descriptor for a new file or directory, for
+/// `SECURITY_ATTRIBUTES` at creation, so it never has an inherited DACL.
+pub fn private_descriptor(is_dir: bool) -> io::Result<SecurityDescriptor> {
+    let user = current_user_sid()?.to_string_sid()?;
+    SecurityDescriptor::from_sddl(&private_sddl(&user, is_dir))
+}
+
+/// Replace an open file's or directory's DACL with the owner-only DACL. The
+/// handle needs WRITE_DAC; no path is resolved, so no link is followed.
+pub fn set_private_dacl_handle(handle: HANDLE, is_dir: bool) -> io::Result<()> {
+    let sd = private_descriptor(is_dir)?;
+    let dacl = sd_dacl(&sd.0)?;
+    // SAFETY: handle is live; dacl points into sd which outlives the call.
+    let rc = unsafe {
+        SetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            dacl,
+            null_mut(),
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::from_raw_os_error(rc as i32));
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_sddl(path: &Path, sddl: &str) -> io::Result<()> {
+    let sd = sd_from_sddl(sddl)?;
+    let dacl = sd_dacl(&sd)?;
     let name = wide(path.as_os_str());
     // SAFETY: name is NUL-terminated, dacl points into sd which outlives the call.
     let rc = unsafe {
