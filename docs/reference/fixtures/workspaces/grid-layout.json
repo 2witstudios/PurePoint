@@ -1,0 +1,24 @@
+{
+  "ownerAgentId" : "ag-a",
+  "tree" : {
+    "axis" : "vertical",
+    "first" : {
+      "agentId" : "ag-a",
+      "type" : "leaf"
+    },
+    "ratio" : 0.5,
+    "second" : {
+      "axis" : "horizontal",
+      "first" : {
+        "agentId" : "ag-b",
+        "type" : "leaf"
+      },
+      "ratio" : 0.7,
+      "second" : {
+        "type" : "leaf"
+      },
+      "type" : "split"
+    },
+    "type" : "split"
+  }
+}

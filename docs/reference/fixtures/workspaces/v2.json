@@ -1,0 +1,64 @@
+{
+  "version" : 2,
+  "workspaces" : [
+    {
+      "filePanes" : [
+        {
+          "leafId" : 1,
+          "path" : "\/tmp\/x.md"
+        }
+      ],
+      "focusedLeafId" : 2,
+      "id" : "ws-ag-a",
+      "nextLeafId" : 3,
+      "tree" : {
+        "axis" : "vertical",
+        "first" : {
+          "agentId" : "ag-a",
+          "leafId" : 0,
+          "type" : "leaf"
+        },
+        "ratio" : 0.5,
+        "second" : {
+          "axis" : "horizontal",
+          "first" : {
+            "leafId" : 1,
+            "type" : "leaf"
+          },
+          "ratio" : 0.5,
+          "second" : {
+            "leafId" : 2,
+            "type" : "leaf"
+          },
+          "type" : "split"
+        },
+        "type" : "split"
+      },
+      "worktreeId" : "wt-1"
+    },
+    {
+      "filePanes" : [
+        {
+          "leafId" : 0
+        }
+      ],
+      "focusedLeafId" : 0,
+      "id" : "ws-ag-b",
+      "nextLeafId" : 1,
+      "tree" : {
+        "axis" : "vertical",
+        "first" : {
+          "leafId" : 0,
+          "type" : "leaf"
+        },
+        "ratio" : 0.25,
+        "second" : {
+          "agentId" : "ag-b",
+          "leafId" : 1,
+          "type" : "leaf"
+        },
+        "type" : "split"
+      }
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "version" : 4,
+  "workspaces" : [
+    {
+      "focusedLeafId" : 2,
+      "id" : "ws-ag-a",
+      "nextLeafId" : 3,
+      "nextSurfaceId" : 3,
+      "tree" : {
+        "axis" : "vertical",
+        "first" : {
+          "activeTabId" : 0,
+          "leafId" : 0,
+          "tabs" : [
+            {
+              "agentId" : "ag-a",
+              "id" : 0,
+              "kind" : "agent"
+            }
+          ],
+          "type" : "leaf"
+        },
+        "ratio" : 0.5,
+        "second" : {
+          "axis" : "horizontal",
+          "first" : {
+            "activeTabId" : 1,
+            "leafId" : 1,
+            "tabs" : [
+              {
+                "id" : 1,
+                "kind" : "file",
+                "path" : "\/tmp\/x.md"
+              }
+            ],
+            "type" : "leaf"
+          },
+          "ratio" : 0.5,
+          "second" : {
+            "activeTabId" : 2,
+            "leafId" : 2,
+            "tabs" : [
+              {
+                "id" : 2,
+                "kind" : "empty"
+              }
+            ],
+            "type" : "leaf"
+          },
+          "type" : "split"
+        },
+        "type" : "split"
+      },
+      "worktreeId" : "wt-1"
+    },
+    {
+      "focusedLeafId" : 0,
+      "id" : "ws-ag-b",
+      "nextLeafId" : 2,
+      "nextSurfaceId" : 2,
+      "tree" : {
+        "axis" : "vertical",
+        "first" : {
+          "activeTabId" : 0,
+          "leafId" : 0,
+          "tabs" : [
+            {
+              "id" : 0,
+              "kind" : "file"
+            }
+          ],
+          "type" : "leaf"
+        },
+        "ratio" : 0.25,
+        "second" : {
+          "activeTabId" : 1,
+          "leafId" : 1,
+          "tabs" : [
+            {
+              "agentId" : "ag-b",
+              "id" : 1,
+              "kind" : "agent"
+            }
+          ],
+          "type" : "leaf"
+        },
+        "type" : "split"
+      }
+    }
+  ]
+}
