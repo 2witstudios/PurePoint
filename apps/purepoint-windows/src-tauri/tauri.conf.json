@@ -30,6 +30,9 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
+    "resources": {
+      "../../../crates/pu-cli/assets/plugin/": "pu-plugin/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

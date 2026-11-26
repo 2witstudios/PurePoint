@@ -40,7 +40,14 @@ notify = "8.2"
 webview2-com = "0.38"
 windows-core = "0.61"
 # Daemon lifecycle: find, wait on and stop the running `pu-engine.exe` (WIN-5.3).
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+# Installer (WIN-10.1): the user PATH in HKCU\Environment and the WM_SETTINGCHANGE broadcast.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Environment",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 tempfile = "3"

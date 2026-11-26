@@ -49,6 +49,8 @@ pub fn run() {
             daemon::daemon_request,
             daemon::daemon_health,
             daemon::daemon_status,
+            installer::installer_status,
+            installer::installer_run,
             watchers::commands::watch_manifest,
             watchers::commands::watch_worktree,
             watchers::commands::watch_file_tree,
@@ -65,6 +67,8 @@ pub fn run() {
                 daemon.start();
                 app.manage(daemon);
                 app.manage(watchers::commands::WatcherState::new(app.handle().clone()));
+                // After the daemon state: a replaced pu-engine.exe restarts it.
+                installer::start(app.handle());
             }
             #[cfg(windows)]
             {
