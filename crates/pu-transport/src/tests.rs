@@ -150,6 +150,45 @@ async fn given_pid_file_naming_this_process_should_connect() {
     connect(&ep).await.unwrap();
 }
 
+#[cfg(windows)]
+#[test]
+fn given_server_token_trust_should_refuse_lower_integrity_and_sandboxed_servers() {
+    use win_sys::{TokenTrust, untrusted_server_reason};
+    const LOW: u32 = 0x1000;
+    const MEDIUM: u32 = 0x2000;
+    const HIGH: u32 = 0x3000;
+    let plain = |integrity| TokenTrust {
+        integrity,
+        app_container: false,
+        restricted: false,
+    };
+    assert_eq!(untrusted_server_reason(plain(MEDIUM), MEDIUM), None);
+    assert_eq!(untrusted_server_reason(plain(HIGH), MEDIUM), None);
+    assert!(untrusted_server_reason(plain(LOW), MEDIUM).is_some());
+    assert!(untrusted_server_reason(plain(MEDIUM), HIGH).is_some());
+    let sandboxed = TokenTrust {
+        app_container: true,
+        ..plain(HIGH)
+    };
+    assert!(untrusted_server_reason(sandboxed, MEDIUM).is_some());
+    let restricted = TokenTrust {
+        restricted: true,
+        ..plain(HIGH)
+    };
+    assert!(untrusted_server_reason(restricted, MEDIUM).is_some());
+}
+
+#[cfg(windows)]
+#[test]
+fn given_own_process_should_pass_server_trust_check() {
+    let me = win_sys::current_token_trust().unwrap();
+    let same = win_sys::process_trust(std::process::id()).unwrap();
+    assert_eq!(me, same);
+    assert!(!me.app_container && !me.restricted, "{me:?}");
+    assert!(me.integrity >= 0x2000, "{me:?}");
+    assert_eq!(win_sys::untrusted_server_reason(same, me.integrity), None);
+}
+
 #[tokio::test]
 async fn given_try_write_should_send_without_waiting() {
     let dir = tempfile::tempdir().unwrap();

@@ -211,6 +211,17 @@ fn verify_server(client: &NamedPipeClient, endpoint: &Endpoint, me: &Sid) -> io:
             ),
         ));
     }
+    // A sandboxed or lower-integrity process of the same user passes the
+    // SID check but must not serve a more trusted client.
+    let client_integrity = win_sys::current_token_trust()?.integrity;
+    if let Some(reason) =
+        win_sys::untrusted_server_reason(win_sys::process_trust(pid)?, client_integrity)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("refusing {}: {reason} (pid {pid})", endpoint.display()),
+        ));
+    }
     // A same-user impostor passes the SID check; the daemon's pid file
     // names the real server. A pid file whose process is gone is stale.
     if let Some(expected) = std::fs::read_to_string(endpoint.pid_path())
