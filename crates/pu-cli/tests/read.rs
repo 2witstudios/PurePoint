@@ -1,3 +1,6 @@
+// Read-source bindings cannot be saved on Windows until WIN-3.8.
+#![cfg(unix)]
+
 use pu_core::canon::CanonicalPath;
 use pu_core::read::Runtime;
 use pu_engine::read_source::{Binding, save_binding};

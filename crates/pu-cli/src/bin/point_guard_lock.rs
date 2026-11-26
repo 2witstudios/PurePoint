@@ -111,7 +111,7 @@ fn hold(args: &Args) -> Result<(), &'static str> {
 }
 #[cfg(windows)]
 fn main() {
-    // WIN-4.5: hold the Point Guard lock (LockFileEx on the inherited handle).
+    // WIN-9.1: hold the Point Guard lock (LockFileEx on the inherited handle).
     eprintln!("pu-point-guard-lock is not available on Windows yet");
     std::process::exit(1);
 }

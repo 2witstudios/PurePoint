@@ -74,7 +74,7 @@ pub fn admin_socket(state: &Path) -> PathBuf {
 
 #[cfg(windows)]
 fn euid() -> u32 {
-    // WIN-4.5: compare owner SIDs instead of uids.
+    // WIN-9.2: compare owner SIDs instead of uids.
     0
 }
 
@@ -87,7 +87,7 @@ fn euid() -> u32 {
 /// Owner-only check on an entry's metadata (never follows symlinks).
 #[cfg(windows)]
 pub fn private_entry(_meta: &std::fs::Metadata, _expect_dir: bool, _uid: u32) -> bool {
-    // WIN-4.5: owner SID + owner-only DACL check; until then nothing is private.
+    // WIN-9.2: owner SID + owner-only DACL check; until then nothing is private.
     false
 }
 
@@ -196,7 +196,7 @@ pub struct Admin {
 impl Admin {
     #[cfg(windows)]
     pub fn connect(_state: &Path) -> Result<Self, CliError> {
-        // WIN-4.5: verify and connect to the bridge's Windows admin endpoint.
+        // WIN-9.2: verify and connect to the bridge's Windows admin endpoint.
         Err(CliError::Other(
             "Point Guard phone hosting is not available on Windows yet".into(),
         ))
@@ -204,7 +204,7 @@ impl Admin {
 
     #[cfg(windows)]
     pub fn call(&self, _request: Value) -> Result<Value, CliError> {
-        // WIN-4.5: HTTP over the bridge's Windows admin endpoint.
+        // WIN-9.2: HTTP over the bridge's Windows admin endpoint.
         Err(CliError::Other(
             "Point Guard phone hosting is not available on Windows yet".into(),
         ))
@@ -439,7 +439,7 @@ pub fn unit_file() -> Result<PathBuf, CliError> {
 /// no other user can write: the unit runs as the owner on its next start.
 #[cfg(windows)]
 pub fn write_unit_file(_file: &Path, _unit: &str) -> Result<(), CliError> {
-    // WIN-4.5: Windows has no systemd unit; replace with the Windows service story.
+    // WIN-9.2: Windows has no systemd unit; replace with the Windows service story.
     Err(CliError::Other(
         "Point Guard phone hosting is not available on Windows yet".into(),
     ))
@@ -644,6 +644,8 @@ pub fn chat_level(device: &Value) -> &'static str {
 mod tests {
     use super::*;
 
+    // POSIX paths and systemd units: Linux-only (Windows: WIN-9.2).
+    #[cfg(unix)]
     #[test]
     fn given_xdg_state_should_use_it_only_when_absolute() {
         let home = Path::new("/home/u");
@@ -691,10 +693,12 @@ mod tests {
         assert!(check_manifest(&json!({}), "1.2.3").is_err());
     }
 
+    #[cfg(unix)]
     fn sample_unit() -> String {
         unit_with_home("/home/a b").unwrap()
     }
 
+    #[cfg(unix)]
     fn unit_with_home(home: &str) -> Result<String, CliError> {
         let home = Path::new(home);
         systemd_unit(&UnitPaths {
@@ -706,6 +710,8 @@ mod tests {
         })
     }
 
+    // POSIX paths and systemd units: Linux-only (Windows: WIN-9.2).
+    #[cfg(unix)]
     #[test]
     fn given_home_should_write_an_unquoted_working_directory_and_refuse_injection() {
         assert!(sample_unit().contains("\nWorkingDirectory=/home/a b\n"));
@@ -724,6 +730,8 @@ mod tests {
         }
     }
 
+    // POSIX paths and systemd units: Linux-only (Windows: WIN-9.2).
+    #[cfg(unix)]
     #[test]
     fn given_paths_should_render_hardened_unit_with_explicit_environment() {
         let unit = sample_unit();
@@ -745,6 +753,8 @@ mod tests {
         assert!(!unit.contains("PI_MOBILE_HOST="));
     }
 
+    // POSIX paths and systemd units: Linux-only (Windows: WIN-9.2).
+    #[cfg(unix)]
     #[test]
     fn given_unit_should_recover_the_payload_it_runs() {
         assert_eq!(
@@ -807,6 +817,8 @@ mod tests {
         assert_eq!(mode(fresh.parent().unwrap()) & 0o022, 0);
     }
 
+    // POSIX paths and systemd units: Linux-only (Windows: WIN-9.2).
+    #[cfg(unix)]
     #[test]
     fn given_installed_unit_should_start_only_the_one_this_pu_writes() {
         let expected = sample_unit();
