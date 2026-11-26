@@ -8,7 +8,7 @@ import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { openRuntimeState } from "./runtime-state.js";
-import { privateTemp } from "./private-temp.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 // Skipped on Windows: POSIX /bin/ps, /usr/bin/true and signals (Unix only).
 const posixOnly = {
   skip: process.platform === "win32" && "POSIX /bin/ps, /usr/bin/true and signals (Unix only)",

@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { openTrustStore } from "./trust.js";
 import { ensureHostTLS } from "./trust-tls.js";
-import { privateTemp } from "./private-temp.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 // Skipped on Windows: runs /usr/bin/openssl (Unix only); the rest run there with the lock helper.
 const posixOnly = {
   skip: process.platform === "win32" && "runs /usr/bin/openssl (Unix only)",

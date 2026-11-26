@@ -7,7 +7,7 @@
 //   bin\node.exe               from the official Node zip pinned in
 //                              apps/purepoint-mobile/runtime/node-release.json ("win-<arch>")
 //   bin\point-guard-lock.exe   the freshly built pu-point-guard-lock.exe (--lock-helper)
-//   bridge\                    apps/purepoint-mobile/bridge without *.test.js
+//   bridge\                    apps/purepoint-mobile/bridge without *.test.js or *.test-helper.js
 //   node_modules\              production dependencies from the lock (npm ci --omit=dev
 //                              --ignore-scripts), foreign native prebuilds removed
 //   docs\, support\, package.json
@@ -46,6 +46,14 @@ export const PATHS = {
 };
 
 /** Lowercase hex SHA-256 of a file. */
+/**
+ * Whether a bridge source file ships in the runtime: tests (`*.test.js`) and their helpers
+ * (`*.test-helper.js`) stay in the repo.
+ */
+export function shipsInRuntime(source) {
+  return !/\.test(-helper)?\.js$/.test(source);
+}
+
 export function fileSha256(file) {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
@@ -214,7 +222,7 @@ export async function stage(args) {
     pruneForeignNatives(path.join(target, 'node_modules', '@earendil-works', 'pi-tui', 'native'));
     fs.cpSync(path.join(MOBILE, 'bridge'), path.join(target, 'bridge'), {
       recursive: true,
-      filter: (source) => !source.endsWith('.test.js'),
+      filter: shipsInRuntime,
     });
     fs.cpSync(path.join(MOBILE, 'docs'), path.join(target, 'docs'), { recursive: true });
     fs.cpSync(path.join(MOBILE, 'support'), path.join(target, 'support'), { recursive: true });

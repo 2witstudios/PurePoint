@@ -12,7 +12,7 @@ import { terminalConnection } from "./terminals.js";
 import { serve } from "./network.js";
 import { openTrustStore } from "./trust.js";
 import { daemonEndpoint } from "./pipe-name.js";
-import { privateTemp } from "./private-temp.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 
 async function until(fn) {
   for (let i = 0; i < 300; i++) {

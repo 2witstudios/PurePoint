@@ -15,7 +15,7 @@ import path from "node:path";
 import { acquirePrivateLock } from "./lock-helper.js";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { privateTemp } from "./private-temp.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 // Skipped on Windows: POSIX signals, /usr/bin/true and file modes (Unix only).
 const posixOnly = {
   skip: process.platform === "win32" && "POSIX signals, /usr/bin/true and file modes (Unix only)",

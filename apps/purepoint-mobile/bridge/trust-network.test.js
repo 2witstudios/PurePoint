@@ -9,7 +9,7 @@ import WebSocket from "ws";
 import { serve } from "./network.js";
 import { openTrustStore } from "./trust.js";
 import { Controller } from "./controller.js";
-import { privateTemp } from "./private-temp.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 function connect(url, credential, clientId) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, {
