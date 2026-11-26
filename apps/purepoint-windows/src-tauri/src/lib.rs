@@ -11,6 +11,7 @@ pub mod pointguard;
 pub mod secrets;
 pub mod subscriptions;
 pub mod taskbar;
+pub mod updater;
 pub mod watchers;
 pub mod window_state;
 
@@ -36,6 +37,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // Agent signal toasts (WIN-7.7).
         .plugin(tauri_plugin_notification::init())
+        // In-place updates (WIN-10.3): the app's `updater_*` commands drive it.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(git::commands::GitState::default())
         .manage(attach::AttachState::default())
         .manage(pointguard::chat::ChatSockets::default())
@@ -65,6 +68,10 @@ pub fn run() {
             daemon::daemon_status,
             installer::installer_status,
             installer::installer_run,
+            updater::updater_status,
+            updater::updater_check,
+            updater::updater_download,
+            updater::updater_install,
             subscriptions::subscriptions_start_project,
             subscriptions::subscriptions_stop_project,
             subscriptions::subscriptions_start_projects,
@@ -132,6 +139,7 @@ pub fn run() {
                 let pointguard = pointguard::PointGuardState::for_app(app.handle());
                 pointguard.start_at_launch();
                 app.manage(pointguard);
+                updater::manage(app.handle());
             }
             #[cfg(windows)]
             {

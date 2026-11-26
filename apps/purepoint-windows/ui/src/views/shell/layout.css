@@ -263,6 +263,11 @@
   outline: none;
 }
 
+.menu-dropdown [role='menuitem']:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 .menu-item-label {
   flex: 1;
 }
@@ -399,6 +404,7 @@
 
 .settings-panel {
   display: flex;
+  flex-direction: column;
   width: var(--pp-settings-width);
   height: var(--pp-settings-height);
   max-width: calc(100% - 32px);
@@ -407,4 +413,105 @@
   background: var(--pp-app-background);
   box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
   outline: none;
+}
+
+/* The update dialog (WIN-10.3): Sparkle's update window as a modal over the app. */
+.update-dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.update-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 440px;
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 64px);
+  padding: 20px;
+  border-radius: 12px;
+  background: var(--pp-app-background);
+  color: var(--pp-primary-text);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+  font: 400 13px var(--pp-font-ui);
+  outline: none;
+}
+
+.update-dialog-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.update-dialog-detail {
+  margin: 0;
+  color: var(--secondary-text);
+  overflow-wrap: anywhere;
+}
+
+.update-dialog-progress {
+  width: 100%;
+}
+
+.update-dialog-notes {
+  min-height: 0;
+  overflow: auto;
+}
+
+.update-dialog-notes h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.update-dialog-notes pre {
+  margin: 0;
+  font: var(--pp-small-font);
+  white-space: pre-wrap;
+}
+
+.update-dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.update-dialog-button {
+  min-width: 80px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--menu-border);
+  border-radius: 4px;
+  background: var(--menu-background);
+  color: inherit;
+  font: inherit;
+}
+
+.update-dialog-button:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+.update-dialog-button:disabled {
+  opacity: 0.4;
+}
+
+.update-dialog-default {
+  font-weight: 600;
+}
+
+.about-update-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  font: 400 12px var(--pp-font-ui);
+}
+
+.about-update-line {
+  color: var(--secondary-text);
 }

@@ -238,6 +238,14 @@ impl DaemonLifecycle {
         result
     }
 
+    /// Shut the running daemon down (`Shutdown`, then terminate after 3 s) before an update
+    /// installs (WIN-10.3); agents are suspended and resume on the next start.
+    pub async fn stop_daemon(&self) {
+        let _serial = self.operation.lock().await;
+        self.stop_existing().await;
+        self.set_state(ConnectionState::Idle);
+    }
+
     /// One health request (the `daemon_health` command).
     pub async fn health(&self) -> Result<Response, DaemonError> {
         self.client

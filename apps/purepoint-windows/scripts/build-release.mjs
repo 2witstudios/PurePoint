@@ -10,10 +10,16 @@
 //      dir, beside the app exe, where the installer and daemon lifecycle look first) and
 //      PointGuard\. They are not in tauri.conf.json itself because tauri-build copies every
 //      resource on each cargo build, so `cargo clippy`/`cargo test` would need them staged.
+//      With TAURI_UPDATER_PUBKEY it also sets the updater's public key (WIN-10.3), replacing
+//      the committed placeholder; without it the app shows "Updates not configured".
 //   4. tauri build --bundles nsis, with PUREPOINT_POINTGUARD_MANIFEST_SHA256 set to the staged
 //      manifest's digest, so the release exe accepts only that manifest.
+//   5. With TAURI_SIGNING_PRIVATE_KEY (or _PATH), sign each installer for the updater
+//      (`<setup>.exe.sig`, bound to the version) and write the feed, latest-windows.json, beside
+//      it; otherwise skip both with a warning. See updater-feed.mjs for the feed and keys.
 //
-// Output: src-tauri/target/release/bundle/nsis/PurePoint_<version>_<arch>-setup.exe (unsigned).
+// Output: src-tauri/target/release/bundle/nsis/PurePoint_<version>_<arch>-setup.exe (no
+// Authenticode signature), and with a signing key its .sig and latest-windows.json.
 //
 // Usage: node scripts/build-release.mjs [--jobs N] [--arch x64|arm64] [--cache <dir>]
 //        [--node-zip <zip>]
@@ -26,6 +32,13 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { REPO, stage } from './stage-pointguard-runtime.mjs';
+import {
+  feedManifest,
+  signInstaller,
+  updaterConfig,
+  updaterKeys,
+  writeFeed,
+} from './updater-feed.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.resolve(here, '..');
@@ -59,10 +72,14 @@ function run(command, args, options = {}) {
   execFileSync(command, args, { stdio: 'inherit', ...options });
 }
 
-/** The merged Tauri config: the bundled binaries and runtime as resources (absolute sources). */
-export function bundleConfig({ binDir, pointGuard }) {
+/**
+ * The merged Tauri config: the bundled binaries and runtime as resources (absolute sources), and
+ * the updater's release public key when there is one.
+ */
+export function bundleConfig({ binDir, pointGuard, pubkey = null }) {
   const source = (p) => p.split(path.sep).join('/');
   return {
+    ...updaterConfig(pubkey),
     bundle: {
       resources: {
         [source(path.join(binDir, 'pu.exe'))]: 'pu.exe',
@@ -77,7 +94,20 @@ async function main() {
   if (process.platform !== 'win32') throw new Error('Build the Windows installer on Windows.');
   const args = parseArgs(process.argv.slice(2));
   const triple = TARGETS[args.arch];
+  // Before any build, so a key without its pair fails fast.
+  const keys = updaterKeys();
+  if (keys.pubkey === null)
+    console.warn(
+      'build-release: warning: TAURI_UPDATER_PUBKEY is not set; the app keeps the placeholder key and shows "Updates not configured".',
+    );
+  // The signing key goes only to the signer, never to cargo or the bundler.
   const env = { ...process.env };
+  for (const name of [
+    'TAURI_SIGNING_PRIVATE_KEY',
+    'TAURI_SIGNING_PRIVATE_KEY_PATH',
+    'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
+  ])
+    delete env[name];
   if (args.jobs) env.CARGO_BUILD_JOBS = args.jobs;
   const cross = args.arch !== 'x64' || process.arch !== 'x64';
 
@@ -104,7 +134,10 @@ async function main() {
   console.log(`Staged ${pointGuard} (manifest SHA-256 ${digest})`);
 
   const config = path.join(INPUTS, 'tauri.bundle.conf.json');
-  fs.writeFileSync(config, JSON.stringify(bundleConfig({ binDir, pointGuard }), null, 2) + '\n');
+  fs.writeFileSync(
+    config,
+    JSON.stringify(bundleConfig({ binDir, pointGuard, pubkey: keys.pubkey }), null, 2) + '\n',
+  );
 
   // npm's tauri shim is a .cmd: run the CLI's JS entry with this Node instead.
   const cli = path.join(APP, 'node_modules', '@tauri-apps', 'cli', 'tauri.js');
@@ -122,6 +155,32 @@ async function main() {
     const size = fs.statSync(path.join(nsis, file)).size;
     console.log(`Installer: ${path.join(nsis, file)} (${(size / 1048576).toFixed(1)} MiB)`);
   }
+
+  if (!keys.canSign) {
+    console.warn(
+      'build-release: warning: TAURI_SIGNING_PRIVATE_KEY is not set; no updater signature or latest-windows.json was written.',
+    );
+    return;
+  }
+  const { version } = JSON.parse(fs.readFileSync(path.join(TAURI, 'tauri.conf.json'), 'utf8'));
+  const signed = installers
+    .filter((file) => file.includes(`_${version}_`))
+    .map((file) => ({
+      arch: args.arch,
+      file,
+      signature: signInstaller({ cli, file: path.join(nsis, file), version }),
+    }));
+  if (signed.length === 0) throw new Error(`No installer for version ${version} in ${nsis}`);
+  const feed = writeFeed(
+    nsis,
+    feedManifest({
+      version,
+      notes: process.env.PUREPOINT_RELEASE_NOTES ?? '',
+      pubDate: new Date(),
+      installers: signed,
+    }),
+  );
+  console.log(`Update feed: ${feed}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

@@ -19,6 +19,7 @@ function deps(): AppActionDeps {
     focusSidebar: vi.fn(),
     focusContent: vi.fn(),
     closeWindow: vi.fn(),
+    checkForUpdates: vi.fn(),
   };
 }
 
@@ -44,6 +45,7 @@ describe('app menus', () => {
     expect(commandLabel('closeAgent')).toBe('Close Tab');
     expect(commandLabel('selectTab3')).toBe('Go to Tab 3');
     expect(commandLabel('exit')).toBe('Exit');
+    expect(commandLabel('checkForUpdates')).toBe('Check for Updates…');
     expect(acceleratorLabel('newAgent', bindings)).toBe('Ctrl+Shift+N');
     expect(acceleratorLabel('settings', bindings)).toBe('Ctrl+,');
     expect(acceleratorLabel('splitBelow', bindings)).toBe('Alt+Shift+-');
@@ -63,6 +65,8 @@ describe('app actions', () => {
     actions.focusContent();
     actions.focusSidebar();
     actions.exit();
+    actions.checkForUpdates();
+    expect(d.checkForUpdates).toHaveBeenCalledOnce();
     expect(d.selectNav).toHaveBeenCalledWith('agents');
     expect(d.toggleSidebar).toHaveBeenCalledWith('toggleWorkspaceSidebar');
     expect(d.showSettings).toHaveBeenCalledOnce();

@@ -126,6 +126,21 @@ impl PointGuardState {
     pub fn stop_for_termination(&self) {
         self.service.stop_for_termination();
     }
+
+    /// Before an update installs (WIN-10.3): the quit decision (stop Point Guard, or ask to stop
+    /// the owned run) and then the exit wait, as Quit does. False when the user kept it running.
+    pub async fn stop_for_update(&self) -> bool {
+        if self.service.is_active() {
+            let approved =
+                lifecycle::may_terminate(&self.service, Arc::new(MessageBoxPrompt)).await;
+            if !approved {
+                return false;
+            }
+            self.gate.finish(true);
+        }
+        self.service.stop_for_termination();
+        true
+    }
 }
 
 /// The current state (the last `pointguard-state` payload).

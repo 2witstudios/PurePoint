@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: the app-drawn title bar (WIN-7.1) drags, minimizes, maximizes and closes it; links open in the browser through the opener plugin (WIN-7.3); agent signals post toasts through the notification plugin (WIN-7.7).",
+  "description": "Main window: the app-drawn title bar (WIN-7.1) drags, minimizes, maximizes and closes it; links open in the browser through the opener plugin (WIN-7.3); agent signals post toasts through the notification plugin (WIN-7.7). The updater plugin (WIN-10.3) gets no permission here: the app's own updater_* commands check, download and install, so an install always passes the release-key check and stops Point Guard and the daemon first.",
   "windows": ["main"],
   "permissions": [
     "core:default",

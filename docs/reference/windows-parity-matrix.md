@@ -62,7 +62,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/AttachmentUpload.swift` | 102 | `ui/src/services/attachmentUpload.ts` (Command-only paste is Ctrl-only) | WIN-9.7 | ported | — |
 | `Services/BundleSeal.swift` | 52 | `src-tauri/src/pointguard/seal.rs` (SHA-256 manifest seal; Authenticode not provisioned) | WIN-9.3 | ported | — |
 | `Services/CLIInstaller.swift` | 215 | `src-tauri/src/installer/cli.rs`, `src-tauri/src/installer/user_path.rs`, `src-tauri/src/installer/mod.rs`, `ui/src/services/installer.ts` | WIN-10.1 | ported | — |
-| `Services/CheckForUpdatesViewModel.swift` | 25 | `ui/src/services/updater.ts` (tauri-plugin-updater) | WIN-10.3 | todo | — |
+| `Services/CheckForUpdatesViewModel.swift` | 25 | `src-tauri/src/updater.rs` (tauri-plugin-updater; Point Guard and the daemon stop before the installer runs), `ui/src/services/updater.ts`, `ui/src/state/updaterStore.ts`, `ui/src/views/shell/UpdateDialog.tsx` (Sparkle's update window as an in-app dialog, and the About status) | WIN-10.3 | ported | — |
 | `Services/ClaudeConversationIndex.swift` | 497 | `src-tauri/src/conversations/claude.rs`, `src-tauri/src/conversations/util.rs`, `ui/src/services/conversations.ts` | WIN-8.12 | ported | — |
 | `Services/ClaudeProcess.swift` | 168 | — | — | excluded | DEC-11: legacy chat; WIN-8.12 grep found no caller outside `State/ChatState.swift` (which declares `ClaudeProcessProvider`) and `ClaudeProcessTests`, and nothing constructs it |
 | `Services/CodexConversationIndex.swift` | 160 | `src-tauri/src/conversations/codex.rs` | WIN-8.12 | ported | — |

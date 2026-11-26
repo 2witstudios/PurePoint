@@ -29,6 +29,9 @@ import { useAppState } from './appContext.ts';
 import { type AppCommand, createAppActions } from './appCommands.ts';
 import { MenuBar } from './MenuBar.tsx';
 import { ShellBanners } from './ShellBanners.tsx';
+import { AboutUpdateStatus, UpdateDialog } from './UpdateDialog.tsx';
+import { canCheckForUpdates } from '../../services/updater.ts';
+import { checkForUpdates, useUpdaterStore } from '../../state/updaterStore.ts';
 import {
   SIDEBAR_IDEAL_WIDTH,
   SIDEBAR_MAX_WIDTH,
@@ -149,7 +152,10 @@ export function SidebarResizer({ store = useSidebarWidthStore }) {
   );
 }
 
-/** Settings as an overlay (Swift `appState.showSettings`); the screen itself is WIN-8.11. */
+/**
+ * Settings as an overlay (Swift `appState.showSettings`); the screen itself is WIN-8.11. Until
+ * then the About pane's update row (SettingsAboutView's Check for Updates…) sits under it.
+ */
 function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -177,6 +183,7 @@ function SettingsOverlay({ onClose }: { onClose: () => void }) {
         }}
       >
         <ScreenPlaceholder icon="gear" title="Settings" view="SettingsView" />
+        <AboutUpdateStatus />
       </div>
     </div>
   );
@@ -195,6 +202,7 @@ export function ContentView() {
   const sidebarShown = useSidebarVisibilityStore((state) => state.sidebarShown);
   const sidebarWidth = useSidebarWidthStore((state) => state.width);
   const showSettings = useStore(app.store, (state) => state.showSettings);
+  const updatesCanCheck = useUpdaterStore((state) => canCheckForUpdates(state.status));
   const [selection, setSelection] = useState<SidebarSelection | null>(() =>
     sidebarSelection.nav('dashboard'),
   );
@@ -280,6 +288,9 @@ export function ContentView() {
           detailRef.current?.focus();
         },
         closeWindow,
+        checkForUpdates: () => {
+          void checkForUpdates();
+        },
       });
       actions[command]();
     },
@@ -322,7 +333,10 @@ export function ContentView() {
           <DetailView selection={selection} />
         </main>
         <WindowChrome>
-          <MenuBar onCommand={runCommand} />
+          <MenuBar
+            onCommand={runCommand}
+            isDisabled={(command) => command === 'checkForUpdates' && !updatesCanCheck}
+          />
           <button
             type="button"
             className="title-bar-button"
@@ -344,6 +358,7 @@ export function ContentView() {
             }}
           />
         )}
+        <UpdateDialog />
       </div>
     </TitlebarClearanceProvider>
   );

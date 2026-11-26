@@ -28,6 +28,16 @@
       "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "PLACEHOLDER-NOT-A-KEY: set TAURI_UPDATER_PUBKEY when running scripts/build-release.mjs",
+      "endpoints": [
+        "https://github.com/2witstudios/purepoint/releases/download/appcast/latest-windows.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": { "installMode": "passive" }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis"],

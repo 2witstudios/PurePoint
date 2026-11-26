@@ -14,6 +14,8 @@ import {
 export interface MenuBarProps {
   onCommand: (command: AppCommand) => void;
   menus?: readonly AppMenu[];
+  /** Commands shown disabled (Check for Updates… while an update runs, Swift `.disabled`). */
+  isDisabled?: (command: AppCommand) => boolean;
 }
 
 function menuItems(container: HTMLElement | null): HTMLButtonElement[] {
@@ -22,7 +24,7 @@ function menuItems(container: HTMLElement | null): HTMLButtonElement[] {
     : [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
 }
 
-export function MenuBar({ onCommand, menus = APP_MENUS }: MenuBarProps) {
+export function MenuBar({ onCommand, menus = APP_MENUS, isDisabled }: MenuBarProps) {
   const bindings = useKeyBindingStore((state) => state.bindings);
   const [openId, setOpenId] = useState<string | null>(null);
   /** Whether opening the menu should focus its first item (it was opened from the keyboard). */
@@ -140,6 +142,7 @@ export function MenuBar({ onCommand, menus = APP_MENUS }: MenuBarProps) {
                       <button
                         type="button"
                         role="menuitem"
+                        disabled={isDisabled?.(entry) === true}
                         onClick={() => {
                           close(false);
                           onCommand(entry);

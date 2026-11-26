@@ -1,6 +1,7 @@
 // App startup (WIN-7.1): what purepoint_macosApp.swift and ContentView start when the window
 // opens — the theme following Windows, AppState's backend listeners (daemon state into the
-// banner), the first daemon status, the projects subscription, and the installer's state.
+// banner), the first daemon status, the projects subscription, the installer's state, and the
+// updater's state (WIN-10.3).
 import { daemonStatus, type DaemonConnectionState } from '../../services/daemon.ts';
 import {
   installerStatus,
@@ -8,6 +9,8 @@ import {
   type InstallerState,
 } from '../../services/installer.ts';
 import { localLayoutHostIO } from '../../services/fs.ts';
+import { onUpdaterState, updaterStatus } from '../../services/updater.ts';
+import { useUpdaterStore } from '../../state/updaterStore.ts';
 import {
   AgentSignalNotifications,
   startAgentSignals,
@@ -26,6 +29,8 @@ export interface StartAppDeps {
   setInstallerState(state: InstallerState): void;
   /** Toasts and the taskbar badge from agent signals (WIN-7.7); returns its stop. */
   startAgentSignals?(app: AppState): () => void;
+  /** Follows `updater-state` into the updater store (WIN-10.3); returns its stop. */
+  startUpdater?(): () => void;
 }
 
 const defaultDeps: StartAppDeps = {
@@ -37,7 +42,27 @@ const defaultDeps: StartAppDeps = {
     useInstallerBannerStore.getState().setInstaller(state);
   },
   startAgentSignals,
+  startUpdater,
 };
+
+/** The updater store follows the backend: its events, then its current state. */
+export function startUpdater(store = useUpdaterStore): () => void {
+  let stopped = false;
+  let unlisten: (() => void) | null = null;
+  onUpdaterState((state) => {
+    store.getState().setStatus(state);
+  }).then((stop) => {
+    if (stopped) stop();
+    else unlisten = stop;
+  }, logged('listening for the updater'));
+  updaterStatus().then((state) => {
+    if (!stopped) store.getState().setStatus(state);
+  }, logged('reading the updater status'));
+  return () => {
+    stopped = true;
+    unlisten?.();
+  };
+}
 
 function logged(what: string) {
   return (error: unknown) => {
@@ -102,6 +127,7 @@ export function startApp(app: AppState, deps: StartAppDeps = defaultDeps): () =>
   // The local daemon's projects, followed from here on (the projects subscription).
   app.restoreProjects();
   if (deps.startAgentSignals !== undefined) keep(deps.startAgentSignals(app));
+  if (deps.startUpdater !== undefined) keep(deps.startUpdater());
 
   return () => {
     stopped = true;
