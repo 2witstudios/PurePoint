@@ -35,6 +35,9 @@ struct CodexConversationIndexTests {
             "rollout-2026-11-26T10-00-00-\(sessionID).jsonl")
         try Data("{\"payload\":{\"cwd\":\"/srv/app\",\"git\":{\"branch\":\"main\"}}}".utf8)
             .write(to: rolloutURL)
+        if !FileManager.default.fileExists(atPath: rolloutURL.path) {
+            preconditionFailure("DIAG setup: rollout missing after write at \(rolloutURL.path)")
+        }
 
         let sessions = [
             Conversation(
@@ -46,10 +49,21 @@ struct CodexConversationIndexTests {
 
         let enriched = try CodexConversationIndex.enrichWithMetadata(sessions, baseURL: tempRoot)
 
-        #expect(enriched.count == 1)
-        #expect(enriched[0].transcriptPath == rolloutURL.path)
-        #expect(enriched[0].projectPath == "/srv/app")
-        #expect(enriched[0].gitBranch == "main")
+        // TEMP DIAGNOSTIC (revert to #expect once the macOS-only failure is identified):
+        // fatalError messages reach the CI log's stderr; Swift Testing issue details do not.
+        if enriched.count != 1 {
+            preconditionFailure("DIAG count=\(enriched.count) enriched=\(enriched)")
+        }
+        if enriched[0].transcriptPath != rolloutURL.path {
+            preconditionFailure(
+                "DIAG transcript=\(enriched[0].transcriptPath ?? "nil") expected=\(rolloutURL.path)")
+        }
+        if enriched[0].projectPath != "/srv/app" {
+            preconditionFailure("DIAG project=\(enriched[0].projectPath ?? "nil")")
+        }
+        if enriched[0].gitBranch != "main" {
+            preconditionFailure("DIAG branch=\(enriched[0].gitBranch ?? "nil")")
+        }
     }
 
     private static func makeTemporaryDirectory() throws -> URL {
