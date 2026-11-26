@@ -17,8 +17,9 @@ import {
   type CommandPaletteResult,
   type PaletteFileEntry,
   buildItems,
+  builtInItem,
 } from '../../model/commandPalette.ts';
-import { allVariants, variantsWithWorktree } from '../../model/agentVariant.ts';
+import { TERMINAL, allVariants, variantsWithWorktree } from '../../model/agentVariant.ts';
 import type { AgentDefinition, SwarmDefinition } from '../../model/agentsHubModels.ts';
 import type { SidebarSelection } from '../../model/sidebarItem.ts';
 import { isPointGuard, leafIdOfSurface } from '../../model/workspace.ts';
@@ -151,6 +152,31 @@ function showForProject(
     showPalette({
       items: projectItems(hub, includeWorktree, includeSwarms),
       usePointGuardNames: palettePreferences().usePointGuardNames,
+      onSelect: (result) => {
+        project.handlePaletteResult(result, selection, async (root, name) => {
+          await hub.runSwarm(root, name);
+        });
+      },
+    });
+  });
+}
+
+/**
+ * The worktree add menu's New Terminal when Point Guard does not name agents (Swift
+ * `onAddTerminal`): the palette with only Terminal, already chosen, so it asks for the name.
+ */
+export function showAddTerminalPalette(
+  app: AppState,
+  project: ProjectState,
+  selection: SidebarSelection | null,
+): void {
+  const hub = agentsHubStateFor(app);
+  const terminal = builtInItem(TERMINAL);
+  void requestPaletteOpen(() => {
+    showPalette({
+      items: [terminal],
+      usePointGuardNames: false,
+      initialItem: terminal,
       onSelect: (result) => {
         project.handlePaletteResult(result, selection, async (root, name) => {
           await hub.runSwarm(root, name);

@@ -249,8 +249,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Sidebar/SidebarOutlineView+Callbacks.swift` | 124 | `ui/src/views/sidebar/sidebarOutlineViewCallbacks.ts` | WIN-7.2 | ported | — |
 | `Views/Sidebar/SidebarOutlineView+iOS.swift` | 37 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarOutlineView.swift` | 37 | `ui/src/views/sidebar/SidebarOutlineView.tsx` | WIN-7.2 | ported | — |
-| `Views/Sidebar/SidebarOutlineViewController+Actions.swift` | 128 | `ui/src/views/sidebar/sidebarOutlineViewControllerActions.ts` | WIN-7.8 | todo | — |
-| `Views/Sidebar/SidebarOutlineViewController+ProjectDrag.swift` | 54 | `ui/src/views/sidebar/sidebarOutlineViewControllerProjectDrag.ts` | WIN-7.8 | todo | — |
+| `Views/Sidebar/SidebarOutlineViewController+Actions.swift` | 128 | `ui/src/views/sidebar/sidebarOutlineViewControllerActions.ts`, `ui/src/views/sidebar/SidebarContextMenu.tsx` (in-page context and worktree add menus; right-click, the menu key or Shift+F10) | WIN-7.8 | ported | — |
+| `Views/Sidebar/SidebarOutlineViewController+ProjectDrag.swift` | 54 | `ui/src/views/sidebar/sidebarOutlineViewControllerProjectDrag.ts` (HTML5 drag and drop; a project row's top or bottom half drops before or after it) | WIN-7.8 | ported | — |
 | `Views/Sidebar/SidebarOutlineViewController+iOS.swift` | 593 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarOutlineViewController+iOSCells.swift` | 344 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarOutlineViewController+iOSKeys.swift` | 109 | — | — | excluded | `+iOS` file (iPad build only) |

@@ -6,15 +6,23 @@
 // Differences from Swift:
 // - Callbacks address projects and machines by id; the live `ProjectState` is looked up here.
 // - The terminal view cache (`viewCache.remove`) is WIN-7.3; nothing is cached yet to drop.
-// - The add buttons open the command palette (views/palette/openPalette.ts), and
-//   `onAddTerminal` (the worktree add menu's New Terminal) arrives with the menus (WIN-7.8).
+// - The add buttons open the command palette (views/palette/openPalette.ts); the worktree add
+//   menu's New Terminal (`onAddTerminal`) spawns a terminal, or asks the palette for its name when
+//   Point Guard does not name agents (WIN-7.8).
+// - Hide on This PC (`onHideProject`) is `AppState.closeProject`, which hides a remote project on
+//   this PC only. The terminal view cache drops hidden terminals on its own (WIN-7.3).
 // - A remote project's removal error goes to the daemon banner.
 // - A machine row's add button opens the remote folder picker (WIN-8.14; the Mac adds remote
 //   projects from the CLI or another device, the iPad from this picker).
 
 import type { SidebarSelection } from '../../model/sidebarItem.ts';
 import type { AppState } from '../../state/appState.ts';
-import { type CommandPaletteRequest, openCommandPalette } from '../palette/openPalette.ts';
+import {
+  type CommandPaletteRequest,
+  openCommandPalette,
+  palettePreferences,
+  showAddTerminalPalette,
+} from '../palette/openPalette.ts';
 import { useMachineSheets } from './machineSheets.ts';
 import type {
   SidebarOutlineCallbacks,
@@ -30,6 +38,8 @@ export interface WireCallbacksOptions {
   readonly select: (selection: SidebarSelection | null, options?: SidebarSelectOptions) => void;
   /** Defaults to the app's command palette. */
   readonly showCommandPalette?: (request: CommandPaletteRequest) => void;
+  /** Swift `settingsState.usePointGuardNames`; defaults to the palette preference. */
+  readonly pointGuardNamesAgents?: () => boolean;
 }
 
 /** Swift `SidebarOutlineView.wireCallbacks`. */
@@ -37,6 +47,10 @@ export function wireCallbacks(
   app: AppState,
   options: WireCallbacksOptions,
 ): SidebarOutlineCallbacks {
+  const pointGuardNamesAgents =
+    options.pointGuardNamesAgents ?? (() => palettePreferences().usePointGuardNames);
+  const machine = (machineId: string) =>
+    app.machines.find((candidate) => candidate.machine.id === machineId);
   const showCommandPalette =
     options.showCommandPalette ??
     ((request: CommandPaletteRequest) => {
@@ -94,6 +108,55 @@ export function wireCallbacks(
 
     onOpenRemoteProject: (machineId) => {
       useMachineSheets.getState().openFolderPicker(machineId);
+    },
+
+    // The worktree add menu's New Terminal: Point Guard names it, or the palette asks for a name.
+    onAddTerminal: (projectId, worktreeId) => {
+      const project = app.projectState(projectId);
+      if (project === null) return;
+      const selection: SidebarSelection = { kind: 'worktree', id: worktreeId };
+      if (pointGuardNamesAgents()) {
+        project.createAgent({ agent: 'terminal', prompt: '', selection });
+      } else {
+        showAddTerminalPalette(app, project, selection);
+      }
+    },
+
+    onKillWorktreeAgents: (projectId, worktreeId) => {
+      app.projectState(projectId)?.killWorktreeAgents(worktreeId);
+    },
+
+    onKillAllProjectAgents: (projectId) => {
+      app.projectState(projectId)?.killAllAgents();
+    },
+
+    onHideProject: (projectId) => {
+      app.closeProject(projectId);
+    },
+
+    onRetryLayout: (projectId) => {
+      app.projectState(projectId)?.retryRemoteLayout();
+    },
+
+    onMoveProject: (projectId, index) => {
+      const project = app.projectState(projectId);
+      if (project !== null) app.moveProject(project, index);
+    },
+
+    onConnectMachine: (machineId) => {
+      machine(machineId)?.connect();
+    },
+
+    onDisconnectMachine: (machineId) => {
+      machine(machineId)?.disconnect({ remember: true });
+    },
+
+    onShowHiddenProjects: (machineId) => {
+      machine(machineId)?.showHiddenProjects();
+    },
+
+    onDismissMachineError: (machineId) => {
+      machine(machineId)?.dismissError();
     },
   };
 }
