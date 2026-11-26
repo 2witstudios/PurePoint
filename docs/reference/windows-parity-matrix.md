@@ -30,7 +30,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/ContentBlockSplitter.swift` | 81 | `ui/src/model/content.ts` | WIN-8.16 | ported | — |
 | `Models/Conversation.swift` | 47 | `src-tauri/src/conversations/model.rs` | WIN-8.12 | ported | — |
 | `Models/DiffModel.swift` | 180 | `ui/src/model/diff.ts` (review data types are `ui/src/services/git.ts`, decoded in Rust by WIN-8.1) | WIN-6.0 | ported | — |
-| `Models/EditorTab.swift` | 142 | `ui/src/model/editorTab.ts` | WIN-8.5 | todo | — |
+| `Models/EditorTab.swift` | 142 | `ui/src/model/editorTab.ts` (`EditorTab`, `editorLanguageIcon`), `ui/src/model/editorLanguage.ts` (`detect`) | WIN-8.5 | ported | — |
 | `Models/FileNode.swift` | 38 | `ui/src/model/fileNode.ts` (immutable nodes, rebuilt each refresh; path helpers) | WIN-8.4 | ported | — |
 | `Models/KeyBinding+iOS.swift` | 128 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Models/KeyBinding.swift` | 449 | `ui/src/model/keyBinding.ts` | WIN-6.7 | ported | — |
@@ -76,7 +76,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/DaemonStatusSubscription.swift` | 143 | `src-tauri/src/subscriptions/status.rs`, `ui/src/services/subscriptions.ts` | WIN-5.5 | ported | Per project root; 0.5 s doubling to 5 s, `BUSY` retried, `subscription-state` `daemon_lost` on a dropped stream or the 4th failure; `status-event` carries the raw payload (AgentModel mapping goes with WIN-6.0); no iOS foreground handling |
 | `Services/DaemonTransport.swift` | 197 | `src-tauri/src/daemon/client.rs` (replaces the Swift transport), `ui/src/services/daemonConnection.ts` (`DaemonTransport` seam, `DaemonRequester` per endpoint) | WIN-6.0 | ported | — |
 | `Services/DaemonWorkspaceService.swift` | 73 | `ui/src/services/workspaceService.ts` | WIN-6.0 | ported | — |
-| `Services/FileIOService.swift` | 175 | `src-tauri/src/git/file_io.rs`, `ui/src/services/fileIO.ts` | WIN-8.5 | todo | — |
+| `Services/FileIOService.swift` | 175 | `ui/src/services/fileHost.ts` (reads, binary detection, conditional writes; local and daemon), `src-tauri/src/files/text.rs` (`fs_read_document`) (remote Open Local Copy not ported) | WIN-8.5 | ported | — |
 | `Services/FileIndex.swift` | 52 | `src-tauri/src/files/index.rs`, `ui/src/services/fileIndex.ts` | WIN-6.6 | ported | — |
 | `Services/FileTreeWatcher.swift` | 96 | `src-tauri/src/watchers/file_tree.rs` | WIN-5.6 | ported | One recursive `notify` watch per root (not one source per expanded dir), skipping `FileTreeState` hidden names; `file-tree-changed {root, paths}` via `ui/src/services/watchers.ts` |
 | `Services/GitService.swift` | 891 | `src-tauri/src/git/{service,review,pr,patch,runner,model,commands}.rs`, `ui/src/services/git.ts` | WIN-8.1 | ported | — |
@@ -105,7 +105,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/SSH/SSHMachineSession.swift` | 365 | — | — | excluded | Whole-file `#if os(iOS)`; Citadel SSH, replaced by system `ssh.exe` (DEC-5, DEC-11) |
 | `Services/SSH/SSHMachineSupport.swift` | 35 | — | — | excluded | Whole-file `#if os(iOS)`; Citadel SSH, replaced by system `ssh.exe` (DEC-5, DEC-11) |
 | `Services/ShellUtilities.swift` | 15 | `ui/src/model/shellEscape.ts`, `src-tauri/src/conversations/util.rs` (`parse_json_line`) | WIN-6.0 | ported | — |
-| `Services/SyntaxHighlightManager.swift` | 513 | `ui/src/services/syntaxHighlight.ts` | WIN-8.5 | todo | — |
+| `Services/SyntaxHighlightManager.swift` | 513 | `ui/src/services/syntaxHighlight.ts` (CodeMirror grammars from `codeHighlight.ts` for every tree-sitter language, plus C and Java) | WIN-8.5 | ported | — |
 | `Services/TranscriptParser.swift` | 222 | `src-tauri/src/conversations/transcript.rs` | WIN-8.12 | ported | — |
 | `Services/UnixSocketTransport.swift` | 204 | `src-tauri/src/daemon/client.rs` (pu-transport named pipe) | WIN-6.0 | ported | — |
 | `Services/WorkspaceService.swift` | 13 | `ui/src/services/workspaceService.ts` | WIN-6.0 | ported | — |
@@ -120,7 +120,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/ChatState.swift` | 161 | — | — | excluded | DEC-11: legacy chat (iPad DEC-9) |
 | `State/CommandPaletteOpenCoordinator.swift` | 18 | `ui/src/state/commandPaletteOpenCoordinator.ts` | WIN-6.6 | ported | — |
 | `State/DiffState.swift` | 281 | `ui/src/state/diffState.ts` | WIN-6.0 | ported | — |
-| `State/EditorState.swift` | 263 | `ui/src/state/editorState.ts` | WIN-8.5 | todo | — |
+| `State/EditorState.swift` | 263 | `ui/src/state/editorState.ts` (every save conditional, local too; `OpenEditors` is the registry's file tab sessions) | WIN-8.5 | ported | — |
 | `State/FileTabStore.swift` | 62 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | ported | — |
 | `State/FileTreeState.swift` | 208 | `ui/src/state/fileTreeState.ts`, `ui/src/services/fileHost.ts` (local: `src-tauri/src/files/tree.rs` `fs_list_dir` with `git check-ignore`; remote: daemon `fs_list`; remote watching is a 5 s poll while active) | WIN-8.4 | ported | — |
 | `State/KeyBindingState.swift` | 138 | `ui/src/state/keyBindingStore.ts` | WIN-6.7 | ported | — |
@@ -196,10 +196,10 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Detail/WorkspaceFilesSplit+iOS.swift` | 125 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Detail/WorktreeDetailView.swift` | 285 | `ui/src/views/detail/WorktreeDetailView.tsx` | WIN-8.2 | ported | — |
 | `Views/Editor/EditorNSView+iOS.swift` | 138 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Editor/EditorNSView.swift` | 134 | `ui/src/views/editor/EditorNSView.tsx` | WIN-8.5 | todo | — |
-| `Views/Editor/EditorNoticeBanners.swift` | 54 | `ui/src/views/editor/EditorNoticeBanners.tsx` | WIN-8.5 | todo | — |
+| `Views/Editor/EditorNSView.swift` | 134 | `ui/src/views/editor/EditorNSView.tsx` (CodeMirror 6), `ui/src/views/filePane/FileEditorContent.tsx` | WIN-8.5 | ported | — |
+| `Views/Editor/EditorNoticeBanners.swift` | 54 | `ui/src/views/editor/EditorNoticeBanners.tsx` | WIN-8.5 | ported | — |
 | `Views/Editor/EditorTextView+iOS.swift` | 98 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Editor/EditorTextView.swift` | 54 | `ui/src/views/editor/EditorTextView.tsx` | WIN-8.5 | todo | — |
+| `Views/Editor/EditorTextView.swift` | 54 | `ui/src/views/editor/EditorTextView.ts` (CodeMirror extensions: undo, find, Ctrl+S, Tab) | WIN-8.5 | ported | — |
 | `Views/Editor/FileTreeOutlineView+iOS.swift` | 41 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Editor/FileTreeOutlineView.swift` | 48 | `ui/src/views/filetree/FileTreeOutlineView.tsx`, `ui/src/views/filetree/FileTreeDialogs.tsx` (remote Open Local Copy not offered) | WIN-8.4 | ported | — |
 | `Views/Editor/FileTreeOutlineViewController+iOS.swift` | 421 | — | — | excluded | `+iOS` file (iPad build only) |
@@ -208,8 +208,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Editor/FileTreeOutlineViewController.swift` | 255 | `ui/src/views/filetree/FileTreeOutlineViewController.tsx`, `ui/src/views/filetree/fileTreeRows.ts` (virtualized rows; menu adds Open, Open in Default App, Rename…, Delete…) | WIN-8.4 | ported | — |
 | `Views/Editor/FileTreeSidebarView.swift` | 46 | `ui/src/views/filetree/FileTreeSidebarView.tsx` (the search field filters the listed rows) | WIN-8.4 | ported | — |
 | `Views/Editor/LineNumberRulerView+iOS.swift` | 144 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Editor/LineNumberRulerView.swift` | 135 | `ui/src/views/editor/LineNumberRulerView.tsx` | WIN-8.5 | todo | — |
-| `Views/FilePane/FilePaneView.swift` | 171 | `ui/src/views/filePane/FilePaneView.tsx` | WIN-8.5 | todo | — |
+| `Views/Editor/LineNumberRulerView.swift` | 135 | `ui/src/views/editor/LineNumberRulerView.ts` (CodeMirror line-number gutter) | WIN-8.5 | ported | — |
+| `Views/FilePane/FilePaneView.swift` | 171 | `ui/src/views/filePane/FilePaneView.tsx` (in `PaneCellView`'s file tabs) | WIN-8.5 | ported | — |
 | `Views/FilePane/MarkdownPreviewView+iOS.swift` | 98 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/FilePane/MarkdownPreviewView.swift` | 68 | `ui/src/views/filePane/MarkdownPreviewView.tsx` | WIN-8.6 | todo | — |
 | `Views/MockUI/MockWorkspaceComponents.swift` | 101 | — | — | excluded | DEC-11: `Views/MockUI` is unreferenced |
@@ -302,7 +302,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `DiffRenderingIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `DraggableSplitTests.swift` | all | `ui/src/model/paneSplit.test.ts` | WIN-6.2 | ported | — |
 | `EditorIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `FilePaneTests.swift` | all | `ui/src/views/filePane/FilePaneView.test.tsx` | WIN-8.5 | todo | Relevant cases only |
+| `FilePaneTests.swift` | all | `ui/src/views/filePane/FilePaneView.test.tsx`, `ui/src/state/editorState.test.ts` | WIN-8.5 | ported | Relevant cases only |
 | `FileTreeOutlineIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `FileTreeStateTests.swift` | all | `ui/src/state/fileTreeState.test.ts`, `ui/src/views/filetree/fileTree.test.tsx`, `src-tauri/src/files/tree.rs` (`git check-ignore`) | WIN-8.4 | ported | — |
 | `GitReviewTests.swift` | all | `src-tauri/src/git/tests/git_review.rs` | WIN-8.1 | ported | DiffState-only assertions go with WIN-6.0; WorktreeWatcher checks with WIN-5.6 |

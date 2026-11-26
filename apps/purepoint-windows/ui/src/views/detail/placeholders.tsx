@@ -31,12 +31,3 @@ export function EmptyState({ icon, children }: { icon: SfSymbolName; children: R
     </div>
   );
 }
-
-/** Swift `editorPlaceholder`: no file open. The editor itself is WIN-8.5. */
-export function EditorPlaceholder() {
-  return (
-    <EmptyState icon="doc.text">
-      <span>Select a file to edit</span>
-    </EmptyState>
-  );
-}

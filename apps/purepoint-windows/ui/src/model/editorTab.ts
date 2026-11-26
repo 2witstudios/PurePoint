@@ -1,5 +1,6 @@
 // Port of apps/purepoint-macos/purepoint-macos/Models/EditorTab.swift: `EditorLanguage.icon` (the
-// file tree's row icons, WIN-8.4). `EditorLanguage.detect` is `./editorLanguage.ts`.
+// file tree's row icons, WIN-8.4) and `EditorTab`, the editor's open file (WIN-8.5).
+// `EditorLanguage.detect` is `./editorLanguage.ts`.
 import type { SfSymbolName } from '../theme/icons';
 import type { EditorLanguage } from './editorLanguage';
 
@@ -51,4 +52,19 @@ export function editorLanguageIcon(language: EditorLanguage): SfSymbolName {
     case 'plaintext':
       return 'doc';
   }
+}
+
+/** Swift `EditorTab`: the file an editor has open. */
+export interface EditorTab {
+  /** The absolute path. */
+  readonly id: string;
+  readonly name: string;
+  readonly content: string;
+  readonly isDirty: boolean;
+  /** The modification time of the version shown (Swift `lastModified`). */
+  readonly lastModified: number | null;
+  readonly isBinary: boolean;
+  readonly language: EditorLanguage;
+  /** Shown but not editable: a remote file too large to save back (over 750 KB). */
+  readonly isReadOnly: boolean;
 }

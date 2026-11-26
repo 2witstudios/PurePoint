@@ -6,18 +6,20 @@
 // (keyed by agent ID), so switching back is instant and keeps scrollback.
 //
 // Differences from Swift:
-// - The file navigator (`FilePaneView`) is WIN-8.4/8.5 and Point Guard's chat surface is WIN-9.x;
-//   their tabs show placeholders naming those views.
+// - A file tab is FilePaneView (WIN-8.5), rooted at `AppState.fileRoot` on the project's host.
+// - Point Guard's chat surface is WIN-9.x; its tab shows a placeholder naming that view.
 // - The empty tab's New Agent button, and the tab a split or New Tab creates, open the command
 //   palette (views/palette/openPalette.ts `openEmptyTabPalette`).
 // - While a tab is dragged, the content is covered by a drop overlay: the centre appends the tab
 //   to this pane, an edge splits it off on that side (tabDrag.ts).
-import { type DragEvent, useEffect, useState } from 'react';
+import { type DragEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from 'zustand';
 import { paneActiveTab } from '../../model/workspace.ts';
 import type { WorkspaceRegistry } from '../../state/workspaceRegistry.ts';
+import { projectFileHost } from '../../services/fileHost.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { ScreenPlaceholder } from '../detail/placeholders.tsx';
+import { FilePaneView } from '../filePane/FilePaneView.tsx';
 import { openEmptyTabPalette } from '../palette/openPalette.ts';
 import { useAppState } from '../shell/appContext.ts';
 import { TerminalPane } from '../terminal/TerminalPane.tsx';
@@ -112,7 +114,16 @@ function PaneContent({
         />
       );
     case 'file':
-      return <ScreenPlaceholder icon="doc.text" title="Files" view="FilePaneView" />;
+      return (
+        <FileTab
+          key={surfaceId}
+          workspaceId={workspaceId}
+          surfaceId={surfaceId}
+          path={content.path}
+          isFocused={isFocused}
+          registry={registry}
+        />
+      );
     case 'empty':
       return (
         <EmptyTabView
@@ -123,6 +134,44 @@ function PaneContent({
         />
       );
   }
+}
+
+/** Swift `PaneCellView`'s `.file` case: the tab's FilePaneView, one per tab. */
+function FileTab({
+  workspaceId,
+  surfaceId,
+  path,
+  isFocused,
+  registry,
+}: {
+  workspaceId: string;
+  surfaceId: number;
+  path: string | null;
+  isFocused: boolean;
+  registry: WorkspaceRegistry;
+}) {
+  const app = useAppState();
+  const rootPath = useStore(app.store, () => app.fileRoot(workspaceId));
+  const projectId = registry.projectRoot(workspaceId);
+  const project = projectId === null ? null : app.projectState(projectId);
+  const host = useMemo(() => projectFileHost(project), [project]);
+  const onPathChange = useCallback(
+    (next: string) => {
+      registry.openFile(workspaceId, surfaceId, next);
+    },
+    [registry, surfaceId, workspaceId],
+  );
+  if (rootPath === null) return null;
+  return (
+    <FilePaneView
+      rootPath={rootPath}
+      host={host}
+      initialPath={path}
+      session={registry.fileTabs.session(workspaceId, surfaceId, path)}
+      isFocused={isFocused}
+      onPathChange={onPathChange}
+    />
+  );
 }
 
 /** Swift `EmptyTabView`: an empty tab, which opens the palette to spawn an agent or open files. */

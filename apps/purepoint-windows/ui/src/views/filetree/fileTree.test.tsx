@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { pathName, parentPath, relativePath, samePath, joinPath } from '../../model/fileNode';
 import { memoryFileHost } from '../../services/fileHost.fixtures';
+import { stubScrollViewLayout } from '../../test/virtualLayout';
 import { FileTreeState } from '../../state/fileTreeState';
 import { FileTreeSidebarView } from './FileTreeSidebarView';
 import { validFileName } from './FileTreeDialogs';
@@ -12,29 +13,8 @@ import { fileTreeRows } from './fileTreeRows';
 
 const ROOT = 'C:\\repo';
 
-// jsdom has no layout: the outline is 240 × 2000 px, so the virtualizer draws every row.
-const isOutline = (element: Element) => element.classList.contains('file-tree-outline');
-// eslint-disable-next-line @typescript-eslint/unbound-method -- called with each element below
-const realRect = Element.prototype.getBoundingClientRect;
-Element.prototype.getBoundingClientRect = function (this: Element) {
-  return isOutline(this) ? new DOMRect(0, 0, 240, 2000) : realRect.call(this);
-};
-for (const [property, size] of [
-  ['clientWidth', 240],
-  ['clientHeight', 2000],
-] as const) {
-  Object.defineProperty(HTMLElement.prototype, property, {
-    configurable: true,
-    get(this: HTMLElement) {
-      return isOutline(this) ? size : 0;
-    },
-  });
-}
-globalThis.ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
+// The outline is 240 × 2000 px, so the virtualizer draws every row.
+stubScrollViewLayout('file-tree-outline', 240, 2000);
 
 interface SpyGlobal {
   __PU_OPENER_SPY__?: string[];

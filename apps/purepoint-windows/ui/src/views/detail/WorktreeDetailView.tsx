@@ -4,10 +4,9 @@
 // file tree on the left, the review changes or the open file in the middle, and the project
 // channel on the right. DiffState loads for the worktree and is stopped when the screen goes.
 //
-// The file tree is FileTreeSidebarView (WIN-8.4), listed while shown. Difference from Swift, until
-// its leaf lands: the editor and its banners (current file breadcrumb, external change, save
-// error) are EditorState and EditorContentRepresentable (WIN-8.5); until then the editor shows its
-// empty state, "Select a file to edit".
+// The file tree is FileTreeSidebarView (WIN-8.4), listed while shown; the editor and its banners
+// (current file breadcrumb, external change, save error) are EditorState and FileEditorContent
+// (WIN-8.5).
 import { useMemo, useState } from 'react';
 import type { WorktreeModel } from '../../model/workspaceModel.ts';
 import type { DiffState } from '../../state/diffState.ts';
@@ -18,7 +17,10 @@ import { ProjectChannelView } from '../channel/ProjectChannelView.tsx';
 import { projectFileHost } from '../../services/fileHost.ts';
 import { FileTreeSidebarView } from '../filetree/FileTreeSidebarView.tsx';
 import { useFileTreeState } from '../filetree/useFileTreeState.ts';
-import { EditorPlaceholder } from './placeholders.tsx';
+import { useStore } from 'zustand';
+import { detectEditorLanguage } from '../../model/editorLanguage.ts';
+import { editorLanguageIcon } from '../../model/editorTab.ts';
+import { FileEditorContent, useEditorState } from '../filePane/FileEditorContent.tsx';
 import { useDiffState } from './useDiffState.ts';
 import './detail.css';
 
@@ -45,10 +47,15 @@ export function WorktreeDetailView({
   );
   const [showChannel, setShowChannel] = useState(false);
   const [showFileTree, setShowFileTree] = useState(false);
-  // Swift `EditorState.showChanges` starts true.
-  const [showChanges, setShowChanges] = useState(true);
   const host = useMemo(() => projectFileHost(project), [project]);
   const fileTree = useFileTreeState(worktree.path, host, showFileTree);
+  const editor = useEditorState(worktree.path, host);
+  // Swift `EditorState.showChanges` (starts true; opening a file clears it).
+  const showChanges = useStore(editor.store, (s) => s.showChanges);
+  const file = useStore(editor.store, (s) => s.currentFile);
+  const setShowChanges = (shown: boolean | ((shown: boolean) => boolean)) => {
+    editor.setShowChanges(typeof shown === 'function' ? shown(showChanges) : shown);
+  };
 
   return (
     <div className="detail-screen" data-view="WorktreeDetailView">
@@ -70,6 +77,14 @@ export function WorktreeDetailView({
         <Icon name="arrow.triangle.branch" size={14} className="detail-header-icon" />
         <span className="detail-title">{worktree.name}</span>
         <span className="detail-branch-chip">{worktree.branch}</span>
+        {file !== null && !showChanges && (
+          <span className="detail-breadcrumb" data-testid="detail-breadcrumb">
+            <Icon name="chevron.right" size={9} />
+            <Icon name={editorLanguageIcon(detectEditorLanguage(file.name))} size={11} />
+            <span>{file.name}</span>
+            {file.isDirty && <span className="detail-dirty-dot" aria-label="Unsaved changes" />}
+          </span>
+        )}
         <span className="detail-spacer" />
         <button
           type="button"
@@ -129,14 +144,18 @@ export function WorktreeDetailView({
               onHide={() => {
                 setShowFileTree(false);
               }}
-              onFileSelected={() => {
-                // The editor is WIN-8.5.
+              onFileSelected={(path, name) => {
+                void editor.openFile(path, name);
               }}
             />
           </div>
         )}
         <div className="detail-content">
-          {showChanges ? <ChangesContent state={diffState} /> : <EditorPlaceholder />}
+          {showChanges ? (
+            <ChangesContent state={diffState} />
+          ) : (
+            <FileEditorContent editor={editor} emptyText="Select a file to edit" />
+          )}
         </div>
         {showChannel && project !== null && (
           <div className="detail-channel">

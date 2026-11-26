@@ -4,9 +4,8 @@
 // name, worktree count, changes toggle, Refresh), the file tree (shown by default) and the
 // review changes or the open file. DiffState loads for the project root.
 //
-// The file tree is FileTreeSidebarView (WIN-8.4). Difference from Swift, as in
-// WorktreeDetailView: the editor and its banners are WIN-8.5; until then the editor shows its
-// empty state.
+// The file tree is FileTreeSidebarView (WIN-8.4) and the editor FileEditorContent (WIN-8.5), as in
+// WorktreeDetailView.
 import { useMemo, useState } from 'react';
 import { useStore } from 'zustand';
 import type { DiffState } from '../../state/diffState.ts';
@@ -16,7 +15,9 @@ import { ChangesContent } from './ChangesContent.tsx';
 import { projectFileHost } from '../../services/fileHost.ts';
 import { FileTreeSidebarView } from '../filetree/FileTreeSidebarView.tsx';
 import { useFileTreeState } from '../filetree/useFileTreeState.ts';
-import { EditorPlaceholder } from './placeholders.tsx';
+import { detectEditorLanguage } from '../../model/editorLanguage.ts';
+import { editorLanguageIcon } from '../../model/editorTab.ts';
+import { FileEditorContent, useEditorState } from '../filePane/FileEditorContent.tsx';
 import { useDiffState } from './useDiffState.ts';
 import './detail.css';
 
@@ -32,9 +33,14 @@ export function RootCheckoutDetailView({ project, createDiffState }: RootCheckou
     createDiffState,
   );
   const [showFileTree, setShowFileTree] = useState(true);
-  const [showChanges, setShowChanges] = useState(true);
   const host = useMemo(() => projectFileHost(project), [project]);
   const fileTree = useFileTreeState(project.projectRoot, host, showFileTree);
+  const editor = useEditorState(project.projectRoot, host);
+  const showChanges = useStore(editor.store, (s) => s.showChanges);
+  const file = useStore(editor.store, (s) => s.currentFile);
+  const setShowChanges = (shown: (shown: boolean) => boolean) => {
+    editor.setShowChanges(shown(showChanges));
+  };
 
   return (
     <div className="detail-screen" data-view="RootCheckoutDetailView">
@@ -55,6 +61,14 @@ export function RootCheckoutDetailView({ project, createDiffState }: RootCheckou
         <Icon name="folder.fill" size={14} className="detail-header-icon" />
         <span className="detail-title">{project.projectName}</span>
         <span className="detail-subtitle">{`${String(worktreeCount)} worktrees`}</span>
+        {file !== null && !showChanges && (
+          <span className="detail-breadcrumb" data-testid="detail-breadcrumb">
+            <Icon name="chevron.right" size={9} />
+            <Icon name={editorLanguageIcon(detectEditorLanguage(file.name))} size={11} />
+            <span>{file.name}</span>
+            {file.isDirty && <span className="detail-dirty-dot" aria-label="Unsaved changes" />}
+          </span>
+        )}
         <span className="detail-spacer" />
         <button
           type="button"
@@ -89,14 +103,18 @@ export function RootCheckoutDetailView({ project, createDiffState }: RootCheckou
               onHide={() => {
                 setShowFileTree(false);
               }}
-              onFileSelected={() => {
-                // The editor is WIN-8.5.
+              onFileSelected={(path, name) => {
+                void editor.openFile(path, name);
               }}
             />
           </div>
         )}
         <div className="detail-content">
-          {showChanges ? <ChangesContent state={diffState} /> : <EditorPlaceholder />}
+          {showChanges ? (
+            <ChangesContent state={diffState} />
+          ) : (
+            <FileEditorContent editor={editor} emptyText="Select a file to edit" />
+          )}
         </div>
       </div>
     </div>
