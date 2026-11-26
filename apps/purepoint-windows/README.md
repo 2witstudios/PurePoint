@@ -50,6 +50,7 @@ What the types mean:
 ## Layout
 
 - `ui/src/{protocol,model,state,services,views,theme}`: front-end folders. State lives in Zustand stores (DEC-14).
+- `ui/src/theme/`: design tokens ported from the macOS `Theme/` folder (`tokens.css`, named in `tokens.ts`), the light/dark/system theme store (`themeStore.ts`, sets `<html data-theme>`) and the SF Symbol to Lucide icon map (`icons.ts`, `<Icon name="gear" />`). `node ../../scripts/extract-swift-tokens.mjs` lists the Swift tokens; `tokens.test.ts` fails when one has no CSS counterpart.
 - `src-tauri/`: its own Cargo workspace with its own `Cargo.lock`, excluded from the root workspace (DEC-7). It depends on `crates/pu-core` by path. Each backend module names the leaf that fills it in.
 - The window has no native decorations (DEC-10). `ui/src/views/TitleBar.tsx` is a placeholder drag strip with window controls until WIN-7.1 builds the real chrome.
 

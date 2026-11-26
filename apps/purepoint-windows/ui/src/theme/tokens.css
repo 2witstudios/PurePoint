@@ -1,0 +1,265 @@
+/*
+ * PurePoint design tokens, ported from apps/purepoint-macos/purepoint-macos/Theme/ (WIN-5.8).
+ *
+ * Light values sit on :root; dark overrides apply under [data-theme='dark'] (set by themeStore.ts) and,
+ * before the store runs or when the preference is "system", under prefers-color-scheme: dark.
+ * The two dark blocks must stay identical; tokens.test.ts checks them against the Swift sources.
+ * Naming and value rules: see tokens.ts. Comments name the Swift token each property ports.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Font stacks (DEC-9) */
+  --pp-font-ui: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --pp-font-mono: 'Cascadia Mono', Consolas, monospace;
+
+  /* NSColor system colors (see SYSTEM_COLORS in tokens.ts) */
+  --pp-system-window-background: #ececec; /* NSColor.windowBackgroundColor */
+  --pp-system-control-background: #ffffff; /* NSColor.controlBackgroundColor */
+  --pp-system-tertiary-label: rgba(0, 0, 0, 0.26); /* NSColor.tertiaryLabelColor */
+  --pp-system-black: #000000; /* NSColor.black */
+  --pp-system-clear: transparent; /* NSColor.clear */
+
+  /* PurePointTheme.swift: metrics (pt -> px) */
+  --pp-nav-row-height: 26px; /* PurePointTheme.navRowHeight */
+  --pp-sidebar-row-height: 24px; /* PurePointTheme.sidebarRowHeight */
+  --pp-status-dot-size: 6px; /* PurePointTheme.statusDotSize */
+  --pp-padding: 8px; /* PurePointTheme.padding */
+  --pp-footer-height: 36px; /* PurePointTheme.footerHeight */
+  --pp-tree-indent: 16px; /* PurePointTheme.treeIndent */
+  --pp-sidebar-min-width: 200px; /* PurePointTheme.sidebarMinWidth */
+  --pp-sidebar-ideal-width: 240px; /* PurePointTheme.sidebarIdealWidth */
+  --pp-sidebar-max-width: 320px; /* PurePointTheme.sidebarMaxWidth */
+  --pp-window-min-width: 700px; /* PurePointTheme.windowMinWidth */
+  --pp-window-min-height: 400px; /* PurePointTheme.windowMinHeight */
+  --pp-window-default-width: 1000px; /* PurePointTheme.windowDefaultWidth */
+  --pp-window-default-height: 700px; /* PurePointTheme.windowDefaultHeight */
+  --pp-settings-width: 680px; /* PurePointTheme.settingsWidth */
+  --pp-settings-height: 480px; /* PurePointTheme.settingsHeight */
+  --pp-settings-sidebar-width: 180px; /* PurePointTheme.settingsSidebarWidth */
+  --pp-calendar-hour-height: 60px; /* PurePointTheme.calendarHourHeight */
+  --pp-calendar-time-gutter-width: 56px; /* PurePointTheme.calendarTimeGutterWidth */
+  --pp-calendar-header-height: 40px; /* PurePointTheme.calendarHeaderHeight */
+  --pp-calendar-pill-height: 16px; /* PurePointTheme.calendarPillHeight */
+  --pp-chat-content-width: 720px; /* PurePointTheme.chatContentWidth */
+  --pp-chat-horizontal-padding: 24px; /* PurePointTheme.chatHorizontalPadding */
+  --pp-composer-corner-radius: 24px; /* PurePointTheme.composerCornerRadius */
+  --pp-turn-spacing: 24px; /* PurePointTheme.turnSpacing */
+  --pp-inline-spacing: 4px; /* PurePointTheme.inlineSpacing */
+  --pp-accent-bar-width: 2px; /* PurePointTheme.accentBarWidth */
+
+  /* PurePointTheme.swift: fonts */
+  /* PurePointTheme.navFont: Font.system(size: 12, weight: .medium) */
+  --pp-nav-font-family: var(--pp-font-ui);
+  --pp-nav-font-size: 12px;
+  --pp-nav-font-weight: 500;
+  --pp-nav-font: var(--pp-nav-font-weight) var(--pp-nav-font-size) var(--pp-nav-font-family);
+  --pp-tree-font-family: var(--pp-font-ui); /* PurePointTheme.treeFont: Font.system(size: 12) */
+  --pp-tree-font-size: 12px;
+  --pp-tree-font-weight: 400;
+  --pp-tree-font: var(--pp-tree-font-weight) var(--pp-tree-font-size) var(--pp-tree-font-family);
+  --pp-small-font-family: var(--pp-font-ui); /* PurePointTheme.smallFont: Font.system(size: 11) */
+  --pp-small-font-size: 11px;
+  --pp-small-font-weight: 400;
+  --pp-small-font: var(--pp-small-font-weight) var(--pp-small-font-size) var(--pp-small-font-family);
+  --pp-chat-font-family: var(--pp-font-ui); /* PurePointTheme.chatFont: Font.system(size: 14) */
+  --pp-chat-font-size: 14px;
+  --pp-chat-font-weight: 400;
+  --pp-chat-font: var(--pp-chat-font-weight) var(--pp-chat-font-size) var(--pp-chat-font-family);
+  /* PurePointTheme.chatLabelFont: Font.system(size: 11, weight: .semibold) */
+  --pp-chat-label-font-family: var(--pp-font-ui);
+  --pp-chat-label-font-size: 11px;
+  --pp-chat-label-font-weight: 600;
+  --pp-chat-label-font: var(--pp-chat-label-font-weight) var(--pp-chat-label-font-size)
+    var(--pp-chat-label-font-family);
+
+  /* Theme.swift: colors (light, and both appearances where the Mac does not adapt) */
+  --pp-primary-text: #1a1a1f; /* Theme.primaryText */
+  --pp-tab-bar-background: #141417; /* Theme.tabBarBackground */
+  --pp-status-bar-band: var(--pp-system-window-background); /* Theme.statusBarBand */
+  --pp-chat-background: var(--pp-system-window-background); /* Theme.chatBackground */
+  --pp-chat-rail-background: var(--pp-system-control-background); /* Theme.chatRailBackground */
+  --pp-composer-background: rgba(0, 0, 0, 0.045); /* Theme.composerBackground */
+  --pp-composer-shadow: var(--pp-system-clear); /* Theme.composerShadow */
+  --pp-user-bubble-background: rgba(0, 0, 0, 0.055); /* Theme.userBubbleBackground */
+  --pp-point-guard-accent: #bd4f00; /* Theme.pointGuardAccent */
+  --pp-sidebar-background: var(--pp-system-window-background); /* Theme.sidebarBackground */
+  --pp-card-background: #ffffff; /* Theme.cardBackground */
+  --pp-card-header-background: #edeceb; /* Theme.cardHeaderBackground */
+  --pp-addition-background: #d1edd6; /* Theme.additionBackground */
+  --pp-deletion-background: #f0d1d1; /* Theme.deletionBackground */
+  --pp-addition-text: #1a6b1a; /* Theme.additionText */
+  --pp-deletion-text: #941a1a; /* Theme.deletionText */
+  --pp-hunk-separator: #d1d1d1; /* Theme.hunkSeparator */
+  --pp-calendar-grid-line: #d9d9d9; /* Theme.calendarGridLine */
+  --pp-calendar-today-background: rgba(230, 237, 255, 0.5); /* Theme.calendarTodayBackground */
+
+  /* TerminalTheme.swift: fonts */
+  /* TerminalTheme.font: NSFont(name: "Menlo", size: 13) ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) */
+  --pp-terminal-font-family: var(--pp-font-mono);
+  --pp-terminal-font-size: 13px;
+  --pp-terminal-font-weight: 400;
+  --pp-terminal-font: var(--pp-terminal-font-weight) var(--pp-terminal-font-size)
+    var(--pp-terminal-font-family);
+
+  /* TerminalTheme.swift: colors (light, and both appearances where the Mac does not adapt) */
+  --pp-terminal-background: #1c1c1f; /* TerminalTheme.background */
+  --pp-terminal-foreground: #d9d9de; /* TerminalTheme.foreground */
+  --pp-terminal-ansi-0: #2b2b2e; /* TerminalTheme.ansiPalette.0 (black) */
+  --pp-terminal-ansi-1: #b53b3b; /* TerminalTheme.ansiPalette.1 (red) */
+  --pp-terminal-ansi-2: #2e7d33; /* TerminalTheme.ansiPalette.2 (green) */
+  --pp-terminal-ansi-3: #8c6e1f; /* TerminalTheme.ansiPalette.3 (yellow) */
+  --pp-terminal-ansi-4: #2e5eb0; /* TerminalTheme.ansiPalette.4 (blue) */
+  --pp-terminal-ansi-5: #7a40a3; /* TerminalTheme.ansiPalette.5 (magenta) */
+  --pp-terminal-ansi-6: #1f7085; /* TerminalTheme.ansiPalette.6 (cyan) */
+  --pp-terminal-ansi-7: #dedbd1; /* TerminalTheme.ansiPalette.7 (white) */
+  --pp-terminal-ansi-8: #6e6e73; /* TerminalTheme.ansiPalette.8 (bright black) */
+  --pp-terminal-ansi-9: #d14f4f; /* TerminalTheme.ansiPalette.9 (bright red) */
+  --pp-terminal-ansi-10: #40944d; /* TerminalTheme.ansiPalette.10 (bright green) */
+  --pp-terminal-ansi-11: #a3852e; /* TerminalTheme.ansiPalette.11 (bright yellow) */
+  --pp-terminal-ansi-12: #4078c7; /* TerminalTheme.ansiPalette.12 (bright blue) */
+  --pp-terminal-ansi-13: #9459bf; /* TerminalTheme.ansiPalette.13 (bright magenta) */
+  --pp-terminal-ansi-14: #338aa1; /* TerminalTheme.ansiPalette.14 (bright cyan) */
+  --pp-terminal-ansi-15: #fcfcfc; /* TerminalTheme.ansiPalette.15 (bright white) */
+
+  /* EditorTheme.swift: colors (light, and both appearances where the Mac does not adapt) */
+  --pp-editor-keyword: #7a40a3; /* EditorTheme.keyword */
+  --pp-editor-string: #2e7d33; /* EditorTheme.string */
+  --pp-editor-comment: #808085; /* EditorTheme.comment */
+  --pp-editor-number: #8c6e1f; /* EditorTheme.number */
+  --pp-editor-type: #1f7085; /* EditorTheme.type */
+  --pp-editor-function: #2e5eb0; /* EditorTheme.function */
+  --pp-editor-property: #b53b3b; /* EditorTheme.property */
+  --pp-editor-preprocessor: #a3852e; /* EditorTheme.preprocessor */
+  --pp-editor-background: var(--pp-card-background); /* EditorTheme.background */
+  --pp-editor-line-number-color: var(--pp-system-tertiary-label); /* EditorTheme.lineNumberColor */
+  --pp-editor-current-line-highlight: #f5f5f5; /* EditorTheme.currentLineHighlight */
+
+  /* Windows-only tokens */
+  /* DEC-9: the editor uses the terminal face (Menlo 13 on the Mac) */
+  --pp-editor-font-family: var(--pp-font-mono);
+  --pp-editor-font-size: var(--pp-terminal-font-size);
+  --pp-editor-font-weight: var(--pp-terminal-font-weight);
+  --pp-editor-font: var(--pp-editor-font-weight) var(--pp-editor-font-size)
+    var(--pp-editor-font-family);
+  /* window body: the flush sidebar column color */
+  --pp-app-background: var(--pp-sidebar-background);
+  --pp-app-text: var(--pp-primary-text);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* NSColor system colors */
+  --pp-system-window-background: #323232;
+  --pp-system-control-background: #1e1e1e;
+  --pp-system-tertiary-label: rgba(255, 255, 255, 0.25);
+
+  /* Theme.swift: colors */
+  --pp-primary-text: #d9d9de;
+  --pp-status-bar-band: #141417;
+  --pp-chat-background: #1c1c1f;
+  --pp-chat-rail-background: #141417;
+  --pp-composer-background: #232327;
+  --pp-composer-shadow: rgba(0, 0, 0, 0.3);
+  --pp-user-bubble-background: #26262a;
+  --pp-point-guard-accent: #ff7a1a;
+  --pp-sidebar-background: #1f1f21;
+  --pp-card-background: #242426;
+  --pp-card-header-background: #29292b;
+  --pp-addition-background: #213826;
+  --pp-deletion-background: #402121;
+  --pp-addition-text: #8cd98c;
+  --pp-deletion-text: #e68c8c;
+  --pp-hunk-separator: #383838;
+  --pp-calendar-grid-line: #383838;
+  --pp-calendar-today-background: rgba(38, 51, 89, 0.3);
+
+  /* TerminalTheme.swift: colors */
+  --pp-terminal-ansi-0: #1c1c1f;
+  --pp-terminal-ansi-1: #c75959;
+  --pp-terminal-ansi-2: #6ead78;
+  --pp-terminal-ansi-3: #c9ab66;
+  --pp-terminal-ansi-4: #6e9ce6;
+  --pp-terminal-ansi-5: #b887db;
+  --pp-terminal-ansi-6: #63b8c7;
+  --pp-terminal-ansi-7: #adadb3;
+  --pp-terminal-ansi-8: #57595e;
+  --pp-terminal-ansi-9: #e37a7a;
+  --pp-terminal-ansi-10: #8cd699;
+  --pp-terminal-ansi-11: #e6c780;
+  --pp-terminal-ansi-12: #8ab3f0;
+  --pp-terminal-ansi-13: #cca1e8;
+  --pp-terminal-ansi-14: #7dc9d6;
+  --pp-terminal-ansi-15: #f0f0f2;
+
+  /* EditorTheme.swift: colors */
+  --pp-editor-keyword: #b887db;
+  --pp-editor-string: #6ead78;
+  --pp-editor-number: #c9ab66;
+  --pp-editor-type: #63b8c7;
+  --pp-editor-function: #6e9ce6;
+  --pp-editor-property: #c75959;
+  --pp-editor-preprocessor: #e6c780;
+  --pp-editor-current-line-highlight: #29292b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    /* NSColor system colors */
+    --pp-system-window-background: #323232;
+    --pp-system-control-background: #1e1e1e;
+    --pp-system-tertiary-label: rgba(255, 255, 255, 0.25);
+
+    /* Theme.swift: colors */
+    --pp-primary-text: #d9d9de;
+    --pp-status-bar-band: #141417;
+    --pp-chat-background: #1c1c1f;
+    --pp-chat-rail-background: #141417;
+    --pp-composer-background: #232327;
+    --pp-composer-shadow: rgba(0, 0, 0, 0.3);
+    --pp-user-bubble-background: #26262a;
+    --pp-point-guard-accent: #ff7a1a;
+    --pp-sidebar-background: #1f1f21;
+    --pp-card-background: #242426;
+    --pp-card-header-background: #29292b;
+    --pp-addition-background: #213826;
+    --pp-deletion-background: #402121;
+    --pp-addition-text: #8cd98c;
+    --pp-deletion-text: #e68c8c;
+    --pp-hunk-separator: #383838;
+    --pp-calendar-grid-line: #383838;
+    --pp-calendar-today-background: rgba(38, 51, 89, 0.3);
+
+    /* TerminalTheme.swift: colors */
+    --pp-terminal-ansi-0: #1c1c1f;
+    --pp-terminal-ansi-1: #c75959;
+    --pp-terminal-ansi-2: #6ead78;
+    --pp-terminal-ansi-3: #c9ab66;
+    --pp-terminal-ansi-4: #6e9ce6;
+    --pp-terminal-ansi-5: #b887db;
+    --pp-terminal-ansi-6: #63b8c7;
+    --pp-terminal-ansi-7: #adadb3;
+    --pp-terminal-ansi-8: #57595e;
+    --pp-terminal-ansi-9: #e37a7a;
+    --pp-terminal-ansi-10: #8cd699;
+    --pp-terminal-ansi-11: #e6c780;
+    --pp-terminal-ansi-12: #8ab3f0;
+    --pp-terminal-ansi-13: #cca1e8;
+    --pp-terminal-ansi-14: #7dc9d6;
+    --pp-terminal-ansi-15: #f0f0f2;
+
+    /* EditorTheme.swift: colors */
+    --pp-editor-keyword: #b887db;
+    --pp-editor-string: #6ead78;
+    --pp-editor-number: #c9ab66;
+    --pp-editor-type: #63b8c7;
+    --pp-editor-function: #6e9ce6;
+    --pp-editor-property: #c75959;
+    --pp-editor-preprocessor: #e6c780;
+    --pp-editor-current-line-highlight: #29292b;
+  }
+}

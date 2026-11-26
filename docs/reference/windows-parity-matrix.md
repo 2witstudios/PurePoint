@@ -9,7 +9,7 @@ Maps every macOS app source file to its planned counterpart in the Windows app (
 - Keep the tables in this exact format: one row per line, cells separated by `|`, file names in backticks.
 - Shared sources outside the macOS app are not rows here. `apps/shared/ChatMarkdown/` (Point Guard chat Markdown: `ChatMarkdown.swift`, `ChatMarkdownView.swift` and the cases in `ChatMarkdownTests.swift`, run by `check-markdown.py`, plus the render-script fixtures) is ported by WIN-9.6 to `ui/src/model/chatMarkdown.ts` and `ui/src/views/chat/ChatMarkdown.tsx`, with tests in `ui/src/model/chatMarkdown.test.ts` and `ui/src/views/chat/ChatMarkdown.test.tsx`.
 
-Summary: 256 source files, 67 excluded, 186 todo, 3 ported. 69 test files (23 iOS-only). 104 SF Symbols.
+Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of this file so parallel leaves don't conflict).
 
 ## Source files
 
@@ -140,10 +140,10 @@ Summary: 256 source files, 67 excluded, 186 todo, 3 ported. 69 test files (23 iO
 | `State/TriggersState.swift` | 93 | `ui/src/state/triggersState.ts` | WIN-8.9 | todo | — |
 | `State/WorkspaceFilesState.swift` | 139 | `ui/src/state/workspaceFilesState.ts` | WIN-8.4 | todo | — |
 | `State/WorkspaceRegistry.swift` | 749 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | todo | — |
-| `Theme/EditorTheme.swift` | 49 | `ui/src/theme/editorTheme.ts` | WIN-5.8 | todo | — |
-| `Theme/PurePointTheme.swift` | 63 | `ui/src/theme/purePointTheme.css` | WIN-5.8 | todo | — |
-| `Theme/TerminalTheme.swift` | 118 | `ui/src/theme/terminalTheme.ts` | WIN-5.8 | todo | — |
-| `Theme/Theme.swift` | 114 | `ui/src/theme/theme.css` | WIN-5.8 | todo | — |
+| `Theme/EditorTheme.swift` | 49 | `ui/src/theme/tokens.css` (`--pp-editor-*`) | WIN-5.8 | ported | — |
+| `Theme/PurePointTheme.swift` | 63 | `ui/src/theme/tokens.css` (metrics, fonts) | WIN-5.8 | ported | — |
+| `Theme/TerminalTheme.swift` | 118 | `ui/src/theme/tokens.css` (`--pp-terminal-*`) | WIN-5.8 | ported | — |
+| `Theme/Theme.swift` | 114 | `ui/src/theme/tokens.css` (colors) | WIN-5.8 | ported | — |
 | `Utilities/WorktreeNameNormalizer.swift` | 24 | `ui/src/model/worktreeName.ts` | WIN-6.0 | todo | — |
 | `Views/Agents/AgentCreationSheet.swift` | 156 | `ui/src/views/agents/AgentCreationSheet.tsx` | WIN-8.7 | todo | — |
 | `Views/Agents/AgentsHubView.swift` | 877 | `ui/src/views/agents/AgentsHubView.tsx` | WIN-8.7 | todo | — |
@@ -352,7 +352,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 
 ## SF Symbols
 
-Every SF Symbol name in the Swift sources, mapped to a [Lucide](https://lucide.dev/icons/) icon (DEC-13). WIN-5.8 builds `ui/src/theme/icons.ts` from this table. `.fill` variants map to the same Lucide icon, drawn with `fill="currentColor"` where the Mac shows a filled glyph. The checker finds symbols in `systemName:`, `systemImage:` and `systemSymbolName:` arguments, `icon:`/`symbol:` labels, `icon`/`symbol` properties and the symbol helper functions (`makeSymbolIcon`, `actionIcon` and similar).
+Every SF Symbol name in the Swift sources, mapped to a [Lucide](https://lucide.dev/icons/) icon (DEC-13). WIN-5.8 builds `ui/src/theme/icons.ts` from this table. Names are lucide-react 1.x canonical names, not deprecated aliases (`circle-exclamation-point`, not `circle-alert`); `ui/src/theme/icons.test.tsx` fails on a name lucide-react does not export. `.fill` variants map to the same Lucide icon, drawn with `fill="currentColor"` where the Mac shows a filled glyph. The checker finds symbols in `systemName:`, `systemImage:` and `systemSymbolName:` arguments, `icon:`/`symbol:` labels, `icon`/`symbol` properties and the symbol helper functions (`makeSymbolIcon`, `actionIcon` and similar).
 
 | SF Symbol | Lucide icon | Used in |
 |---|---|---|
@@ -365,7 +365,7 @@ Every SF Symbol name in the Swift sources, mapped to a [Lucide](https://lucide.d
 | `arrow.turn.up.right` | `corner-up-right` | `Views/Sidebar/RemoteFolderPicker+iOS.swift` |
 | `arrow.up` | `arrow-up` | `Views/Channel/ProjectChannelView.swift`, `Views/Chat/ChatInputView.swift`, `Views/Chat/PiPointGuardChatView.swift` |
 | `arrow.up.circle` | `circle-arrow-up` | `Models/TriggerItem.swift` |
-| `arrow.up.right.square` | `square-arrow-out-up-right` | `Views/Detail/ReviewChangesView.swift` |
+| `arrow.up.right.square` | `square-arrow-up-right-exit` | `Views/Detail/ReviewChangesView.swift` |
 | `bolt` | `zap` | `Views/Triggers/TriggerDetailView.swift` |
 | `bubble.left` | `message-circle` | `Views/Channel/ChannelHoverRow.swift` |
 | `bubble.left.and.bubble.right` | `messages-square` | `Views/Channel/ProjectChannelView.swift`, `Views/Chat/PointGuardConversationLayout.swift`, `Views/Detail/DetailView.swift` (+2) |
@@ -398,9 +398,9 @@ Every SF Symbol name in the Swift sources, mapped to a [Lucide](https://lucide.d
 | `doc.fill` | `file` | `Views/Detail/RootCheckoutDetailView.swift`, `Views/Detail/WorktreeDetailView.swift`, `Views/FilePane/FilePaneView.swift` |
 | `doc.text` | `file-text` | `Models/EditorTab.swift`, `Views/Chat/PiPointGuardChatView.swift`, `Views/Detail/DiffCardView.swift` (+5) |
 | `ellipsis` | `ellipsis` | `Views/Channel/ChannelHoverRow.swift`, `Views/Channel/ProjectChannelView.swift`, `Views/Chat/PointGuardPaneControls.swift` |
-| `exclamationmark.circle` | `circle-alert` | `Views/Channel/ProjectChannelView.swift` |
-| `exclamationmark.triangle` | `triangle-alert` | `Views/Chat/PointGuardView.swift`, `Views/Detail/DiffListView.swift`, `Views/Detail/ReviewChangesView.swift` (+2) |
-| `exclamationmark.triangle.fill` | `triangle-alert` | `Views/DaemonErrorBanner.swift`, `Views/Detail/RootCheckoutDetailView.swift`, `Views/Detail/WorktreeDetailView.swift` (+5) |
+| `exclamationmark.circle` | `circle-exclamation-point` | `Views/Channel/ProjectChannelView.swift` |
+| `exclamationmark.triangle` | `triangle-exclamation-point` | `Views/Chat/PointGuardView.swift`, `Views/Detail/DiffListView.swift`, `Views/Detail/ReviewChangesView.swift` (+2) |
+| `exclamationmark.triangle.fill` | `triangle-exclamation-point` | `Views/DaemonErrorBanner.swift`, `Views/Detail/RootCheckoutDetailView.swift`, `Views/Detail/WorktreeDetailView.swift` (+5) |
 | `eye` | `eye` | `Views/Sidebar/RemoteFolderPicker+iOS.swift` |
 | `eye.slash` | `eye-off` | `Views/Sidebar/RemoteFolderPicker+iOS.swift` |
 | `folder` | `folder` | `Models/CommandPaletteItem.swift`, `Views/Chat/PiPointGuardChatView.swift`, `Views/Detail/ProjectDetailView.swift` (+4) |
