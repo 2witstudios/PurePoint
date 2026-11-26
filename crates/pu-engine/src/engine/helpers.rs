@@ -143,6 +143,16 @@ impl Engine {
     /// wait up to 3s for the whole group to exit, then SIGKILL whatever is left.
     /// Waiting on the leader alone would let a child that ignores SIGTERM keep
     /// running beside the resumed agent.
+    #[cfg(windows)]
+    fn stop_process_group(_pid: u32) {
+        // WIN-3.3: terminate the session's job object (grace, then hard kill).
+    }
+
+    /// SIGTERM the process group led by `pid` (agents are spawned with setsid),
+    /// wait up to 3s for the whole group to exit, then SIGKILL whatever is left.
+    /// Waiting on the leader alone would let a child that ignores SIGTERM keep
+    /// running beside the resumed agent.
+    #[cfg(unix)]
     fn stop_process_group(pid: u32) {
         let Ok(pgid) = i32::try_from(pid) else {
             return;
@@ -213,6 +223,7 @@ mod reconcile_tests {
     /// The PTY spawn returns right after fork, while the child is still closing
     /// descriptors; until it execs, its command line is this test binary's.
     /// A real orphan (left by a previous daemon) exec'd long ago.
+    #[cfg(unix)]
     async fn wait_for_exec(pid: u32, marker: &str) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !crate::os::process_command(pid).is_some_and(|c| c.contains(marker)) {
@@ -316,6 +327,7 @@ mod reconcile_tests {
         ));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_orphan_on_first_status_should_stop_it_and_mark_suspended() {
         let engine = Engine::new();
@@ -366,6 +378,7 @@ mod reconcile_tests {
         assert!(stopped.is_ok(), "orphan was not stopped");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_orphan_child_ignoring_sigterm_should_stop_whole_group() {
         let engine = Engine::new();

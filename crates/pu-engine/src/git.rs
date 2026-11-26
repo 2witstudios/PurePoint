@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
@@ -130,6 +131,8 @@ pub async fn install_hooks(
             ),
         )
         .await?;
+        // WIN-3.10: Git for Windows runs hooks through its bundled sh; no mode bit to set.
+        #[cfg(unix)]
         tokio::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).await?;
     }
 
@@ -592,9 +595,12 @@ mod tests {
         assert!(content.contains("gate pre-push"));
 
         // Check executable permission
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::metadata(&pre_commit).unwrap().permissions();
-        assert!(perms.mode() & 0o111 != 0, "pre-commit should be executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(&pre_commit).unwrap().permissions();
+            assert!(perms.mode() & 0o111 != 0, "pre-commit should be executable");
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

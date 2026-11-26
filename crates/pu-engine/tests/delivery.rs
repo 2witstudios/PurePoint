@@ -1,4 +1,6 @@
 //! Prompt delivery against a slow-rendering fake Claude TUI.
+// Drives a Unix PTY and signals the fake TUI with libc::kill.
+#![cfg(unix)]
 
 use std::time::Duration;
 

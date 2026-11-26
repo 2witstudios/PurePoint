@@ -4,13 +4,16 @@ use pu_core::signals::*;
 use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
+#[cfg(unix)]
 use std::io::{Read, Seek, SeekFrom};
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 pub(super) struct Observer {
+    #[cfg_attr(windows, allow(dead_code))]
     not_before_ms: i64,
     env: Vec<(String, String)>,
     initial_transcript: Box<Transcript>,
@@ -70,7 +73,11 @@ pub(super) fn prepare(
     }
     let launch = pu_core::id::session_id();
     let artifacts = install::Artifacts::new(Path::new(project), &launch).ok()?;
+    #[cfg(unix)]
     let socket = tokio::net::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
+    // WIN-3.9: the Windows signal endpoint.
+    #[cfg(windows)]
+    let socket = super::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
     Some(Prepared {
         socket,
         token: String::new(),
@@ -101,6 +108,7 @@ pub(super) fn prepare(
 // Match the native registry namespace, not merely the operating-system name.
 // The direct PTY child inherits this daemon's PID namespace. In particular the
 // Linux native format includes both the machine ID and PID-namespace link.
+#[cfg_attr(windows, allow(dead_code))]
 async fn native_pid_domain() -> Option<&'static str> {
     static DOMAIN: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
     DOMAIN
@@ -134,6 +142,13 @@ async fn native_pid_domain() -> Option<&'static str> {
 }
 
 impl Observer {
+    #[cfg(windows)]
+    async fn row(&self, _cwd: &str, _pid: u32, _session: &str) -> Option<Value> {
+        // WIN-3.8: open without following reparse points and check the owner SID / DACL.
+        None
+    }
+
+    #[cfg(unix)]
     async fn row(&self, cwd: &str, pid: u32, session: &str) -> Option<Value> {
         use tokio::io::AsyncReadExt;
         // The native interactive registry is stored per process.
@@ -394,6 +409,13 @@ impl RecordFacts {
 }
 
 impl Transcript {
+    #[cfg(windows)]
+    fn read(&mut self, _path: &Path, _identity: &SignalIdentity, _cwd: &str) -> Option<()> {
+        // WIN-3.8: open without following reparse points and check the owner SID / DACL.
+        None
+    }
+
+    #[cfg(unix)]
     fn read(&mut self, path: &Path, identity: &SignalIdentity, cwd: &str) -> Option<()> {
         self.materialized |= std::fs::symlink_metadata(path).is_ok();
         if self.poisoned {
@@ -465,7 +487,7 @@ impl Transcript {
         true
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn unchanged(&self, path: &Path) -> bool {
         self.partial.is_empty()
             && std::fs::symlink_metadata(path).is_ok_and(|m| {
@@ -473,6 +495,7 @@ impl Transcript {
             })
     }
 
+    #[cfg_attr(windows, allow(dead_code))]
     fn record(&mut self, v: &Value, identity: &SignalIdentity, cwd: &str) -> Option<()> {
         let content_record = matches!(v["type"].as_str(), Some("user" | "assistant"));
         if v["isSidechain"] == true {
@@ -724,6 +747,7 @@ impl Transcript {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[cfg(unix)]
     #[test]
     fn initial_registry_idle_does_not_require_a_transcript_or_hide_a_lost_one() {
         let temp = tempfile::tempdir().unwrap();
@@ -772,6 +796,7 @@ mod tests {
             1
         );
     }
+    #[cfg(unix)]
     #[test]
     fn backlog_beyond_read_budget_is_not_an_observation() {
         let temp = tempfile::tempdir().unwrap();
@@ -812,6 +837,7 @@ mod tests {
         };
         json!({"type":kind,"uuid":id,"parentUuid":parent,"sessionId":"native","cwd":"/owned","version":"2.1.300","isSidechain":false,"message":message})
     }
+    #[cfg(unix)]
     #[test]
     fn given_large_native_image_result_should_resolve_the_request_and_preserve_completion() {
         let root = tempfile::tempdir().unwrap();
@@ -843,6 +869,7 @@ mod tests {
         assert!(transcript.tools.is_empty());
         assert_eq!(transcript.outcome.unwrap().kind, OutcomeKind::Completed);
     }
+    #[cfg(unix)]
     #[test]
     fn existing_large_history_is_consumed_in_bounded_batches() {
         let root = tempfile::tempdir().unwrap();
@@ -1236,6 +1263,7 @@ mod tests {
             SignalActivity::Working
         );
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn native_registry_reads_only_owned_pid_without_launching_list_processes() {
         let root = tempfile::tempdir().unwrap();

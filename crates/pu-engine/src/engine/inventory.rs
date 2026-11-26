@@ -938,6 +938,7 @@ mod tests {
         assert_eq!(engine.registered_projects(), vec![c, a, b]);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_partial_or_unknown_reorder_should_keep_every_registered_project() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -992,6 +993,7 @@ mod tests {
         engine.kill_all_sessions(Duration::from_millis(10)).await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_registered_projects_should_survive_restart_and_deduplicate_aliases() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -1663,6 +1665,7 @@ mod tests {
         engine.kill_all_sessions(Duration::from_millis(10)).await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_manifest_that_cannot_be_checked_should_keep_the_project_on_prune() {
         use std::os::unix::fs::PermissionsExt;

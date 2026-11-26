@@ -5,7 +5,11 @@
 use std::path::Path;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+#[cfg(unix)]
 use tokio::net::UnixStream;
+// WIN-4.1: the named-pipe client replaces this stand-in.
+#[cfg(windows)]
+use crate::client::UnixStream;
 
 use crate::error::CliError;
 
@@ -62,7 +66,8 @@ where
     Ok(())
 }
 
-#[cfg(test)]
+// These relay through Unix-socket fake daemons.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

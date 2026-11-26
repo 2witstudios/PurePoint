@@ -1,3 +1,6 @@
+// Relays over a Unix datagram socket.
+#![cfg(unix)]
+
 use std::io::Write;
 use std::os::unix::net::UnixDatagram;
 use std::process::{Command, Stdio};

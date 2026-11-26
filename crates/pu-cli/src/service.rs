@@ -179,6 +179,13 @@ pub fn service_path_env(current: Option<&str>, home: &Path) -> String {
     dirs.join(":")
 }
 
+#[cfg(windows)]
+fn uid() -> u32 {
+    // WIN-4.3: the Windows service/scheduled-task install does not key on a uid.
+    0
+}
+
+#[cfg(unix)]
 fn uid() -> u32 {
     // SAFETY: getuid has no preconditions and cannot fail.
     unsafe { libc::getuid() }

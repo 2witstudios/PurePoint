@@ -1,7 +1,9 @@
 //! Explicit owner attestation; default denied. This reads no credentials and never
 //! contacts the proof URL. A proof record is an operator assertion, not verification.
 use serde::Deserialize;
+#[cfg(unix)]
 use std::io::Read;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::Mutex;
@@ -46,17 +48,19 @@ impl Grant {
         !state.invalidated
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn current(&self, now: i64) -> bool {
         self.current_with_clock(|| now)
     }
 }
+#[cfg_attr(windows, allow(dead_code))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
     schema_version: u32,
     qualifications: Vec<Record>,
 }
+#[cfg_attr(windows, allow(dead_code))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -104,6 +108,19 @@ pub(super) async fn load(
     .ok()?
 }
 
+#[cfg(windows)]
+fn load_sync(
+    _project: &Path,
+    _tool: &str,
+    _adapter: &str,
+    _interactive: bool,
+    _now: i64,
+) -> Option<Grant> {
+    // WIN-3.8: open without following reparse points and check the owner SID / DACL.
+    None
+}
+
+#[cfg(unix)]
 fn load_sync(
     project: &Path,
     tool: &str,
@@ -169,7 +186,8 @@ fn load_sync(
     })
 }
 
-#[cfg(test)]
+// These write owner-only (mode 0600) qualification files.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use serde_json::json;

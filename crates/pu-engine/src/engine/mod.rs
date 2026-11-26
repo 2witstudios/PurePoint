@@ -34,9 +34,9 @@ use pu_core::protocol::{AgentConfigInfo, GridCommand, PROTOCOL_VERSION, Request,
 use pu_core::types::{Manifest, format_launch_args};
 use tokio::sync::OnceCell;
 
-use crate::pty_manager::{
-    AgentHandle, NativePtyHost, descendants_from_tree, snapshot_process_tree,
-};
+use crate::pty_manager::{AgentHandle, NativePtyHost};
+#[cfg(unix)]
+use crate::pty_manager::{descendants_from_tree, snapshot_process_tree};
 
 /// Parameters for spawning an agent, extracted to avoid too many positional args.
 pub(super) struct SpawnParams {
@@ -170,6 +170,20 @@ fn agent_origin(name: &str, ac: &pu_core::types::AgentConfig) -> &'static str {
 
 /// Root-cwd executable hint using Spawn parsing and login PATH, without running it.
 /// A worktree-relative command or its arguments may still fail at launch.
+#[cfg(windows)]
+fn catalog_executable_available(
+    _ac: &pu_core::types::AgentConfig,
+    _id: &str,
+    _cwd: &Path,
+    _env: &[(String, String)],
+) -> bool {
+    // WIN-3.6: resolve the command through PATH + PATHEXT instead of mode bits.
+    false
+}
+
+/// Root-cwd executable hint using Spawn parsing and login PATH, without running it.
+/// A worktree-relative command or its arguments may still fail at launch.
+#[cfg(unix)]
 fn catalog_executable_available(
     ac: &pu_core::types::AgentConfig,
     id: &str,
@@ -330,6 +344,21 @@ impl Engine {
     /// Only processes still running when drained are recorded as killed by
     /// shutdown (and so left resumable); an agent that had already exited keeps
     /// its natural exit.
+    #[cfg(windows)]
+    pub async fn kill_all_sessions(&self, _grace: Duration) {
+        // WIN-3.3: terminate every session's job object (grace, then hard kill),
+        // recording still-running agents in `shutdown_killed` first.
+    }
+
+    /// Drain every active session and kill its process group (SIGTERM, brief wait, SIGKILL).
+    /// Used by the managed-mode parent-died path so a force-quit of the macOS app reaps
+    /// agents and their grandchildren (vitest/node workers, dev servers) before the
+    /// daemon exits — `process::exit(0)` skips `Drop`, so this must run explicitly.
+    ///
+    /// Only processes still running when drained are recorded as killed by
+    /// shutdown (and so left resumable); an agent that had already exited keeps
+    /// its natural exit.
+    #[cfg(unix)]
     pub async fn kill_all_sessions(&self, grace: Duration) {
         let handles: Vec<AgentHandle> = {
             let mut sessions = self.sessions.lock().await;
@@ -1025,6 +1054,12 @@ impl Engine {
 }
 
 impl Drop for Engine {
+    #[cfg(windows)]
+    fn drop(&mut self) {
+        // WIN-3.3: kill each session's job object so descendants do not outlive the daemon.
+    }
+
+    #[cfg(unix)]
     fn drop(&mut self) {
         // Kill the whole process group of each child (PID == PGID via setsid at spawn)
         // so descendants like vitest/node workers don't orphan to launchd.
@@ -1627,7 +1662,8 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// These probe /bin executables and Unix mode bits.
+#[cfg(all(test, unix))]
 mod workspace_catalog_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

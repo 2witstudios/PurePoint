@@ -5,6 +5,7 @@
 //! characters were dropped), press Enter only then, and confirm the box
 //! cleared and the turn was echoed. Anything else is a loud error.
 
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,6 +14,8 @@ use tokio::time::Instant;
 
 use crate::output_buffer::OutputBuffer;
 use crate::pty_manager::NativePtyHost;
+#[cfg(windows)]
+use crate::pty_manager::OwnedFd;
 use crate::screen::{ScreenTracker, squash};
 
 #[derive(Debug, Clone)]
@@ -72,6 +75,14 @@ const CTRL_U: &[u8] = b"\x15";
 const BACKSPACE: u8 = 0x7f;
 
 /// Window size of the PTY, so the emulated screen wraps like the real one.
+#[cfg(windows)]
+fn winsize(_fd: &OwnedFd) -> (u16, u16) {
+    // WIN-3.2: read the size the ConPTY was created/resized with.
+    (40, 120)
+}
+
+/// Window size of the PTY, so the emulated screen wraps like the real one.
+#[cfg(unix)]
 fn winsize(fd: &OwnedFd) -> (u16, u16) {
     let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
     let ok = unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) } == 0;

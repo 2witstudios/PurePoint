@@ -7,7 +7,9 @@ use super::{LaunchState, NativeObserver, Prepared, install, now_ms};
 use crate::output_buffer::OutputBuffer;
 use crate::read_source::Binding;
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::io::{Read, Seek, SeekFrom};
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
@@ -76,7 +78,11 @@ pub(super) fn prepare(
     }
     let launch = pu_core::id::session_id();
     let artifacts = install::Artifacts::new(Path::new(project), &launch).ok()?;
+    #[cfg(unix)]
     let socket = tokio::net::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
+    // WIN-3.9: the Windows signal endpoint.
+    #[cfg(windows)]
+    let socket = super::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
     Some(Prepared {
         socket,
         token: String::new(),
@@ -109,6 +115,7 @@ struct Cursor {
     offset: u64,
     observed_length: u64,
     inode: Option<(u64, u64)>,
+    #[cfg_attr(windows, allow(dead_code))]
     partial: Vec<u8>,
     poisoned: bool,
 }
@@ -122,6 +129,12 @@ impl Cursor {
             ..Self::default()
         })
     }
+    #[cfg(windows)]
+    fn read(&mut self, _path: &Path, _history: &mut History, _cwd: &str) -> Option<()> {
+        // WIN-3.8: open without following reparse points and check the owner SID / DACL.
+        None
+    }
+    #[cfg(unix)]
     fn read(&mut self, path: &Path, history: &mut History, cwd: &str) -> Option<()> {
         if self.poisoned {
             return None;
@@ -168,7 +181,7 @@ impl Cursor {
         self.poisoned = false;
         Some(())
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn unchanged(&self, path: &Path) -> bool {
         self.partial.is_empty()
             && std::fs::symlink_metadata(path).is_ok_and(|m| {
@@ -436,6 +449,7 @@ struct History {
     outcome: Option<SignalOutcome>,
 }
 impl History {
+    #[cfg_attr(windows, allow(dead_code))]
     fn retire(&mut self, turn: &str) -> Option<()> {
         if self.closed_turns.contains(turn) {
             return Some(());
@@ -446,6 +460,7 @@ impl History {
         self.closed_turns.insert(turn.into());
         Some(())
     }
+    #[cfg_attr(windows, allow(dead_code))]
     fn record(&mut self, v: &Value, cwd: &str) -> Option<()> {
         let p = &v["payload"];
         if v["type"] == "session_meta" {
@@ -811,6 +826,7 @@ mod tests {
     fn event(kind: &str, turn: &str) -> Value {
         json!({"type":"event_msg","payload":{"type":kind,"turn_id":turn,"root_turn_id":turn}})
     }
+    #[cfg(unix)]
     #[test]
     fn given_large_native_image_record_should_preserve_the_current_turn_and_completion() {
         let root = tempfile::tempdir().unwrap();
@@ -835,6 +851,7 @@ mod tests {
         assert!(cursor.unchanged(&path));
         assert_eq!(history.outcome.unwrap().kind, OutcomeKind::Completed);
     }
+    #[cfg(unix)]
     #[test]
     fn existing_large_history_is_consumed_in_bounded_batches() {
         let root = tempfile::tempdir().unwrap();
@@ -1208,6 +1225,7 @@ mod tests {
         assert_ne!(events[0], events[1]);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires sandbox native Codex probe context"]
     async fn native_interactive_observer_probe() {

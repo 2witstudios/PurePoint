@@ -1,6 +1,8 @@
 //! Native storage effects; normalization stays in pu-core.
 
-use std::io::{BufRead, Read};
+#[cfg(unix)]
+use std::io::BufRead;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use pu_core::read::{Runtime, Transcript, parse_jsonl};
@@ -261,6 +263,13 @@ pub fn load_binding(root: &Path, agent: &str) -> Result<Binding, SourceError> {
     serde_json::from_slice(&bytes).map_err(|e| SourceError::UnsupportedSchema(e.to_string()))
 }
 
+#[cfg(windows)]
+pub fn save_binding(_root: &Path, _agent: &str, _binding: &Binding) -> Result<(), SourceError> {
+    // WIN-3.8: write the binding owner-only (pu_core::private_fs) instead of mode 0600.
+    Err(crate::os::unsupported("read-source binding save").into())
+}
+
+#[cfg(unix)]
 pub fn save_binding(root: &Path, agent: &str, binding: &Binding) -> Result<(), SourceError> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -515,6 +524,13 @@ fn filter_codex_rollouts(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         .collect()
 }
 
+#[cfg(windows)]
+fn first_record(_path: &Path) -> Result<Value, SourceError> {
+    // WIN-3.8: open without following reparse points and check the owner SID.
+    Err(crate::os::unsupported("rollout header read").into())
+}
+
+#[cfg(unix)]
 fn first_record(path: &Path) -> Result<Value, SourceError> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     // Header candidates are untrusted paths even when an owned process holds
@@ -1038,7 +1054,8 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// These use symlinks, FIFOs and `sh` children holding descriptors.
+#[cfg(all(test, unix))]
 mod batched_discovery_tests {
     use super::*;
     #[cfg(target_os = "macos")]

@@ -3,8 +3,11 @@
 //! path. Uploads land in `~/.pu/attachments/<upload_id>/<name>`, outside every
 //! repository, and are swept once they're a week old.
 
-use std::fs::{DirBuilder, OpenOptions};
+#[cfg(unix)]
+use std::fs::DirBuilder;
+use std::fs::OpenOptions;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -106,6 +109,7 @@ fn attach_chunk(
     if offset == 0 {
         sweep_stale(dir, SystemTime::now(), ATTACHMENT_TTL);
         let _ = std::fs::remove_dir_all(&upload_dir);
+        #[cfg(unix)]
         if let Err(e) = DirBuilder::new()
             .recursive(true)
             .mode(0o700)
@@ -113,6 +117,12 @@ fn attach_chunk(
         {
             return io_error(&upload_dir, &e);
         }
+        // WIN-3.8: create the upload directory with an owner-only DACL.
+        #[cfg(windows)]
+        return io_error(
+            &upload_dir,
+            &crate::os::unsupported("private upload directory"),
+        );
     } else {
         let received = std::fs::metadata(&partial).map_or(0, |m| m.len());
         if received != offset {
@@ -380,6 +390,7 @@ mod tests {
         assert!(tmp.path().join("fresh").exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_new_upload_dir_should_be_private_to_the_user() {
         use std::os::unix::fs::PermissionsExt as _;

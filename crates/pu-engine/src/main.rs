@@ -26,6 +26,8 @@ async fn main() {
     // Survive the hangup of whatever session started us (an SSH login, a closed
     // terminal) from the very start; IpcServer::run keeps handling it. Tokio
     // never unregisters a handler, so dropping the stream here is fine.
+    // WIN-3.5: Windows has no SIGHUP; decide how console close is survived.
+    #[cfg(unix)]
     if let Err(e) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
         eprintln!("failed to install SIGHUP handler: {e}");
     }
@@ -99,6 +101,12 @@ async fn main() {
     // Without this, the daemon outlives app restarts and stale binaries persist.
     // process::exit(0) skips Drop, so explicitly kill agent process groups first
     // — otherwise vitest/node workers and other grandchildren orphan to launchd.
+    #[cfg(windows)]
+    if managed {
+        // WIN-3.5: watch the parent process handle and shut down when it exits.
+        tracing::warn!("managed-mode parent watch is not supported on Windows yet");
+    }
+    #[cfg(unix)]
     if managed {
         let parent_pid = std::os::unix::process::parent_id();
         let engine_for_cleanup = server.engine().clone();

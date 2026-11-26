@@ -68,6 +68,7 @@ async fn given_dot_dot_escape_should_refuse_path() {
     assert_error(resp, "path_not_allowed");
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_symlink_escape_should_refuse_read_and_write() {
     let (engine, _tmp, root, outside) = setup().await;
@@ -92,6 +93,7 @@ async fn given_symlink_escape_should_refuse_read_and_write() {
     assert!(!outside.join("new.txt").exists());
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_dangling_symlink_to_outside_should_refuse_write() {
     let (engine, _tmp, root, outside) = setup().await;
@@ -512,6 +514,7 @@ async fn given_directory_outside_any_repo_should_list_without_ignored_flags() {
 
 // --- Folder browsing (directories_only) ---
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_directories_only_should_list_folders_outside_registered_roots_without_files() {
     let (engine, _tmp, _root, outside) = setup().await;
@@ -624,6 +627,7 @@ fn given_ancestor_of_a_root_should_refuse_delete() {
     assert!(matches!(resp, Response::Ok), "{resp:?}");
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_fifo_should_refuse_read_without_blocking() {
     let (engine, _tmp, root, _outside) = setup().await;
@@ -643,6 +647,7 @@ async fn given_fifo_should_refuse_read_without_blocking() {
     assert_error(resp, "not_a_file");
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_rewrite_should_keep_file_mode() {
     let (engine, _tmp, root, _outside) = setup().await;
@@ -695,6 +700,7 @@ async fn given_filesystem_root_should_refuse_init() {
 
 // --- Delete ---
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_symlink_delete_should_remove_link_not_target_and_refuse_root() {
     let (engine, _tmp, root, outside) = setup().await;
@@ -762,6 +768,7 @@ fn given_git_should_run_with_hooks_and_user_config_disabled() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_repo_fsmonitor_hook_should_not_run_under_git_exec() {
     let (engine, tmp, root, _outside) = setup().await;
@@ -1112,6 +1119,7 @@ async fn given_disallowed_git_args_should_refuse_git_exec() {
     assert_error(resp, "args_not_allowed");
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_git_exec_timeout_should_kill_spawned_helpers() {
     let tmp = TempDir::new().unwrap();
@@ -1569,6 +1577,7 @@ async fn given_planted_bare_repo_listing_should_not_run_its_fsmonitor() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_symlink_operand_pointing_outside_should_be_refused() {
     let (engine, _tmp, root, outside) = setup().await;
@@ -1657,6 +1666,7 @@ async fn given_executable_pu_definitions_should_refuse_fs_writes() {
     assert!(matches!(resp, Response::FsWriteResult { .. }), "{resp:?}");
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_operand_symlink_pointing_outside_should_diff_the_link_itself() {
     let (engine, _tmp, root, outside) = setup().await;
@@ -1757,6 +1767,7 @@ async fn given_dot_pu_config_yaml_should_refuse_fs_write() {
     assert_error(resp, "path_not_allowed");
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_dash_named_symlink_operand_should_be_checked_after_separator() {
     let (engine, _tmp, root, outside) = setup().await;
@@ -1787,6 +1798,7 @@ async fn given_dash_named_symlink_operand_should_be_checked_after_separator() {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_symlink_to_outside_directory_operand_should_be_refused() {
     let (engine, _tmp, root, outside) = setup().await;
@@ -1820,6 +1832,7 @@ async fn given_symlink_to_outside_directory_operand_should_be_refused() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn given_subcommand_named_like_an_outside_symlink_should_not_be_checked_as_a_path() {
     let tmp = TempDir::new().unwrap();

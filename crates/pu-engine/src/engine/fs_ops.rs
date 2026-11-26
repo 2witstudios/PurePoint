@@ -4,6 +4,7 @@
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
@@ -292,6 +293,7 @@ fn git_ignored(
     if candidates.is_empty() {
         return ignored;
     }
+    #[cfg(unix)]
     use std::os::unix::process::CommandExt as _;
     // The same hardening as `git_exec`: a listing must not run what a planted
     // or cloned bare repository configures (fsmonitor, hooks, ...).
@@ -306,15 +308,17 @@ fn git_ignored(
     if let Some(ceiling) = git_ceiling(dir, roots) {
         command.env("GIT_CEILING_DIRECTORIES", ceiling);
     }
-    let child = command
+    command
         .current_dir(dir)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        // Own process group, so a timeout also stops anything git spawned.
-        .process_group(0)
-        .spawn();
+        .stderr(Stdio::null());
+    // Own process group, so a timeout also stops anything git spawned.
+    // WIN-3.10: put the child in a job object so a timeout stops its helpers too.
+    #[cfg(unix)]
+    command.process_group(0);
+    let child = command.spawn();
     let Ok(mut child) = child else {
         return ignored;
     };
@@ -569,11 +573,15 @@ fn fs_read(path: &str, roots: &[PathBuf], max_bytes: u64) -> Response {
         Err(e) => return io_error(&resolved, &e),
     }
     // O_NONBLOCK too, in case the path was swapped for a FIFO since.
-    let file = match std::fs::OpenOptions::new()
+    #[cfg(unix)]
+    let opened = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
-        .open(&resolved)
-    {
+        .open(&resolved);
+    // WIN-3.8: decide whether named pipes / reparse points need a guard here.
+    #[cfg(windows)]
+    let opened = std::fs::OpenOptions::new().read(true).open(&resolved);
+    let file = match opened {
         Ok(f) => f,
         Err(e) => return io_error(&resolved, &e),
     };
@@ -753,11 +761,19 @@ fn write_atomically(
         // Created with the existing file's mode (narrowed by the umask), so the
         // temp file is never more readable than the file it replaces; a new
         // file gets the usual 0666 & !umask.
+        #[cfg(unix)]
         let mode = existing.map_or(0o666, |meta| meta.permissions().mode() & 0o7777);
+        #[cfg(unix)]
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(mode)
+            .open(&tmp)?;
+        // WIN-3.8: carry the replaced file's ACL over to the temp file.
+        #[cfg(windows)]
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
             .open(&tmp)?;
         if let Some(meta) = existing {
             // Restore bits the umask dropped, before any data is written.
@@ -1158,7 +1174,13 @@ fn exec_env(program: &str) -> Vec<(&'static str, &'static str)> {
     }
 }
 
+#[cfg(windows)]
+fn kill_process_group(_pid: u32) {
+    // WIN-3.10: terminate the git/gh child's job object.
+}
+
 /// SIGKILL the process group led by `pid` (git_exec children lead their own).
+#[cfg(unix)]
 fn kill_process_group(pid: u32) {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return;
@@ -1383,10 +1405,12 @@ impl Engine {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // Own process group, so a timeout also stops helpers git or gh
-            // spawned (pagers, credential helpers, hooks).
-            .process_group(0)
             .kill_on_drop(true);
+        // Own process group, so a timeout also stops helpers git or gh
+        // spawned (pagers, credential helpers, hooks).
+        // WIN-3.10: put the child in a job object instead.
+        #[cfg(unix)]
+        command.process_group(0);
         if let Some(path) = login_path {
             command.env("PATH", path);
         }

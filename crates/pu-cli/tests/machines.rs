@@ -1,6 +1,8 @@
 //! `pu --machine` and `pu machine` against a fake ssh (`PU_SSH`). The fake
 //! treats a local directory as the remote home and "forwards" by symlinking
 //! the CLI's local socket to the daemon socket in that home.
+// Uses a /bin/sh fake ssh, symlinks and Unix sockets.
+#![cfg(unix)]
 
 use pu_core::protocol::{Request, Response};
 use std::os::unix::fs::PermissionsExt;

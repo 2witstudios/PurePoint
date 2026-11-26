@@ -6,7 +6,9 @@
 //! nothing removed; the sweeper deletes those once idle and, when the disk is
 //! low, also drops idle caches of worktrees that still exist.
 
+#[cfg(unix)]
 use std::fs::File;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -138,6 +140,13 @@ pub fn sweep_policy(free_bytes: Option<u64>) -> SweepPolicy {
     }
 }
 
+#[cfg(windows)]
+pub fn free_bytes(_path: &Path) -> Option<u64> {
+    // WIN-3.10: GetDiskFreeSpaceExW in place of statvfs.
+    None
+}
+
+#[cfg(unix)]
 pub fn free_bytes(path: &Path) -> Option<u64> {
     let stat = nix::sys::statvfs::statvfs(path).ok()?;
     #[allow(clippy::useless_conversion)]
@@ -188,6 +197,13 @@ fn scan(dir: &Path, depth: usize, visit: &mut impl FnMut(&Path, &std::fs::Metada
     }
 }
 
+#[cfg(windows)]
+fn lock_is_held(_path: &Path) -> bool {
+    // WIN-3.10: probe cargo's lock with LockFileEx; until then every cache counts as busy.
+    true
+}
+
+#[cfg(unix)]
 fn lock_is_held(path: &Path) -> bool {
     let Ok(file) = File::open(path) else {
         return false;
@@ -263,6 +279,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_tmp_root_should_list_only_agent_target_dirs() {
         // given
@@ -312,6 +329,7 @@ mod tests {
         assert!(!idle);
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_build_holding_cargo_lock_should_not_be_idle() {
         // given — cargo holds an flock on <profile>/.cargo-lock while it runs
@@ -377,6 +395,7 @@ mod tests {
         assert_eq!(found, vec![worktree_target_dir(&wt_with_cache)]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_idle_and_active_caches_should_remove_only_idle_ones() {
         // given

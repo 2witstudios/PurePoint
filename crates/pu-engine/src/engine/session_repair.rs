@@ -1,10 +1,13 @@
 use std::collections::HashSet;
 use std::io::BufRead;
+#[cfg(unix)]
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::pty_manager::NativePtyHost;
+#[cfg(windows)]
+use crate::pty_manager::OwnedFd;
 
 use super::Engine;
 
