@@ -2,7 +2,7 @@ name: Windows App
 
 on:
   push:
-    branches: [main]
+    branches: [main, pu/windows]
     paths: &windows-app-paths
       - "apps/purepoint-windows/**"
       - "apps/purepoint-mobile/bridge/**"
@@ -15,6 +15,8 @@ on:
       - ".github/workflows/windows-app.yml"
   pull_request:
     paths: *windows-app-paths
+  # The installer job (WIN-10.2) runs on pushes and on demand only.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -129,3 +131,44 @@ jobs:
         env:
           # Fail, not skip, if the engine from the step above is missing.
           PU_REQUIRE_ENGINE: "1"
+
+  # The unsigned NSIS installer with the bundled CLI and sealed Point Guard runtime (WIN-10.2).
+  # Two release builds (the root workspace, then the LTO app) take long, so pull requests skip
+  # it: it runs on pushes to main and pu/windows and on workflow_dispatch.
+  installer:
+    name: NSIS installer
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/purepoint-windows
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+          cache: npm
+          cache-dependency-path: apps/purepoint-windows/package-lock.json
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.89"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            apps/purepoint-windows/src-tauri -> target
+            . -> target
+          key: windows-installer
+      - run: npm ci --ignore-scripts
+      - name: Build the installer
+        run: npm run bundle
+      - name: Upload the installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: purepoint-windows-installer
+          path: apps/purepoint-windows/src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14

@@ -86,7 +86,11 @@ impl InstallerService {
             .and_then(pu_core::canon::canonicalize)
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf));
-        let resource_dir = app.path().resource_dir().ok();
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|dir| pu_core::canon::normalize(&dir));
         let mut sources: Vec<PathBuf> = exe_dir.into_iter().chain(resource_dir).collect();
         sources.dedup();
         let service = Self::new(pu_core::paths::home_dir().ok(), sources);

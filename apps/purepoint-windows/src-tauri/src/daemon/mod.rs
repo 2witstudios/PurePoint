@@ -35,7 +35,12 @@ impl DaemonState {
     pub fn for_app(app: &AppHandle) -> Self {
         let lifecycle = pu_core::paths::daemon_socket_path()
             .and_then(|socket| {
-                let locator = BinaryLocator::for_app(app.path().resource_dir().ok());
+                let locator = BinaryLocator::for_app(
+                    app.path()
+                        .resource_dir()
+                        .ok()
+                        .map(|dir| pu_core::canon::normalize(&dir)),
+                );
                 DaemonLifecycle::new(&socket, locator)
             })
             .map(Arc::new)

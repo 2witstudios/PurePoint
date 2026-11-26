@@ -24,7 +24,7 @@ Run from `apps/purepoint-windows`:
 | `npm run gen:protocol`                       | Regenerate the daemon protocol types in `ui/src/protocol/generated`.               |
 | `npm run e2e`                                | End-to-end tests against a real daemon (see below).                                |
 | `npm run tauri build -- --debug --no-bundle` | Build the debug app at `src-tauri/target/debug/purepoint-windows.exe`, as CI does. |
-| `npm run tauri build`                        | Build the release app and its NSIS and MSI installers.                             |
+| `npm run bundle`                             | Build the release NSIS installer with the bundled CLI and Point Guard runtime.     |
 
 Backend checks run from `apps/purepoint-windows/src-tauri`: `cargo fmt -- --check`, `cargo clippy --all-targets` and `cargo test`.
 
