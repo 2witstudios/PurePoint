@@ -3,6 +3,7 @@
 pub mod attach;
 pub mod conversations;
 pub mod daemon;
+pub mod files;
 pub mod git;
 pub mod installer;
 pub mod secrets;
@@ -27,6 +28,7 @@ pub fn protocol_version() -> u32 {
 
 pub fn run() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![files::index::file_index])
         .setup(|app| {
             #[cfg(windows)]
             {

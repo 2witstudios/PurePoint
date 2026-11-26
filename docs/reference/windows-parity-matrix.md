@@ -22,11 +22,11 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/AgentSignalRouting.swift` | 59 | `ui/src/model/agentSignalRouting.ts` | WIN-7.7 | todo | — |
 | `Models/AgentSignalSnapshot.swift` | 85 | `ui/src/model/agentSignalSnapshot.ts` | WIN-7.7 | todo | — |
 | `Models/AgentStatus.swift` | 48 | `ui/src/model/agentStatus.ts` | WIN-6.0 | todo | — |
-| `Models/AgentVariant.swift` | 73 | `ui/src/model/agentVariant.ts` | WIN-6.6 | todo | — |
+| `Models/AgentVariant.swift` | 73 | `ui/src/model/agentVariant.ts` | WIN-6.6 | ported | — |
 | `Models/AgentsHubModels.swift` | 160 | `ui/src/model/agentsHubModels.ts` | WIN-8.7 | todo | — |
 | `Models/ChannelModel.swift` | 58 | `ui/src/model/channelModel.ts` | WIN-8.10 | todo | — |
 | `Models/ChatMessage.swift` | 56 | `ui/src/model/content.ts` | WIN-8.16 | todo | — |
-| `Models/CommandPaletteItem.swift` | 180 | `ui/src/model/commandPaletteItem.ts` | WIN-6.6 | todo | — |
+| `Models/CommandPaletteItem.swift` | 180 | `ui/src/model/commandPalette.ts` | WIN-6.6 | ported | — |
 | `Models/ContentBlockSplitter.swift` | 81 | `ui/src/model/content.ts` | WIN-8.16 | todo | — |
 | `Models/Conversation.swift` | 47 | `src-tauri/src/conversations/model.rs` | WIN-8.12 | todo | — |
 | `Models/DiffModel.swift` | 180 | `ui/src/model/diff.ts` | WIN-6.0 | todo | — |
@@ -77,7 +77,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/DaemonTransport.swift` | 197 | `src-tauri/src/daemon/client.rs` (replaces the Swift transport) | WIN-6.0 | todo | — |
 | `Services/DaemonWorkspaceService.swift` | 73 | `ui/src/services/workspaceService.ts` | WIN-6.0 | todo | — |
 | `Services/FileIOService.swift` | 175 | `src-tauri/src/git/file_io.rs`, `ui/src/services/fileIO.ts` | WIN-8.5 | todo | — |
-| `Services/FileIndex.swift` | 52 | `src-tauri/src/watchers/file_index.rs` | WIN-6.6 | todo | — |
+| `Services/FileIndex.swift` | 52 | `src-tauri/src/files/index.rs`, `ui/src/services/fileIndex.ts` | WIN-6.6 | ported | — |
 | `Services/FileTreeWatcher.swift` | 96 | `src-tauri/src/watchers/file_tree.rs` | WIN-5.6 | todo | — |
 | `Services/GitService.swift` | 891 | `src-tauri/src/git/service.rs` | WIN-8.1 | todo | — |
 | `Services/HotkeyMonitor+iOS.swift` | 136 | — | — | excluded | `+iOS` file (iPad build only) |
@@ -118,7 +118,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/AppState.swift` | 952 | `ui/src/state/appState.ts` | WIN-6.0 | todo | — |
 | `State/ChannelState.swift` | 298 | `ui/src/state/channelState.ts` | WIN-8.10 | todo | — |
 | `State/ChatState.swift` | 161 | — | — | excluded | DEC-11: legacy chat (iPad DEC-9) |
-| `State/CommandPaletteOpenCoordinator.swift` | 18 | `ui/src/state/commandPaletteOpenCoordinator.ts` | WIN-6.6 | todo | — |
+| `State/CommandPaletteOpenCoordinator.swift` | 18 | `ui/src/state/commandPaletteOpenCoordinator.ts` | WIN-6.6 | ported | — |
 | `State/DiffState.swift` | 281 | `ui/src/state/diffState.ts` | WIN-6.0 | todo | — |
 | `State/EditorState.swift` | 263 | `ui/src/state/editorState.ts` | WIN-8.5 | todo | — |
 | `State/FileTabStore.swift` | 62 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | ported | — |
@@ -135,7 +135,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/SettingsState.swift` | 111 | `ui/src/state/settingsState.ts` | WIN-8.11 | todo | — |
 | `State/SidebarExpansionStore.swift` | 45 | `ui/src/model/sidebarExpansion.ts` | WIN-6.5 | todo | — |
 | `State/SidebarVisibility.swift` | 38 | `ui/src/model/sidebarVisibility.ts` | WIN-6.5 | todo | — |
-| `State/SpawnTargetResolver.swift` | 31 | `ui/src/state/spawnTargetResolver.ts` | WIN-6.6 | todo | — |
+| `State/SpawnTargetResolver.swift` | 31 | `ui/src/state/spawnTargetResolver.ts` | WIN-6.6 | ported | — |
 | `State/StreamAccumulator.swift` | 193 | `ui/src/state/sessions.ts` | WIN-8.16 | todo | — |
 | `State/TriggersState.swift` | 93 | `ui/src/state/triggersState.ts` | WIN-8.9 | todo | — |
 | `State/WorkspaceFilesState.swift` | 139 | `ui/src/state/workspaceFilesState.ts` | WIN-8.4 | todo | — |
@@ -290,9 +290,9 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `CitadelSSHLiveTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `ClaudeConversationIndexTests.swift` | all | `src-tauri/src/conversations/claude.rs` (#[cfg(test)]) | WIN-8.12 | todo | — |
 | `ClaudeProcessTests.swift` | all | `src-tauri/src/conversations/claude_process.rs` (#[cfg(test)]) | WIN-8.12 | todo | Dropped with `ClaudeProcess.swift` if WIN-8.12 confirms it is unused |
-| `CommandPaletteNamingTests.swift` | all | `ui/src/model/commandPaletteItem.test.ts` | WIN-6.6 | todo | — |
-| `CommandPaletteOpenCoordinatorTests.swift` | all | `ui/src/state/commandPaletteOpenCoordinator.test.ts` | WIN-6.6 | todo | — |
-| `CommandPaletteOrderTests.swift` | all | `ui/src/model/commandPaletteOrder.test.ts` | WIN-6.6 | todo | — |
+| `CommandPaletteNamingTests.swift` | all | `ui/src/model/commandPaletteNaming.test.ts` | WIN-6.6 | ported | — |
+| `CommandPaletteOpenCoordinatorTests.swift` | all | `ui/src/state/commandPaletteOpenCoordinator.test.ts` | WIN-6.6 | ported | — |
+| `CommandPaletteOrderTests.swift` | all | `ui/src/model/commandPaletteOrder.test.ts` | WIN-6.6 | ported | — |
 | `CommandPalettePanelIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `ContentBlockSplitterTests.swift` | all | `ui/src/model/content.test.ts` | WIN-8.16 | todo | — |
 | `DaemonClientParseTests.swift` | all | `src-tauri/src/daemon/client.rs` (#[cfg(test)]), `ui/src/services/daemon.test.ts` | WIN-6.0 | todo | — |
@@ -335,7 +335,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `SidebarOutlineViewControllerIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `SidebarOutlineViewControllerTests.swift` | all | `ui/src/views/sidebar/SidebarOutline.test.tsx` | WIN-7.2 | todo | Platform-neutral cases only |
 | `SidebarVisibilityTests.swift` | all | `ui/src/model/sidebarVisibility.test.ts` | WIN-6.5 | todo | — |
-| `SpawnTargetResolverTests.swift` | all | `ui/src/state/spawnTargetResolver.test.ts` | WIN-6.6 | todo | — |
+| `SpawnTargetResolverTests.swift` | all | `ui/src/state/spawnTargetResolver.test.ts` | WIN-6.6 | ported | — |
 | `StreamAccumulatorTests.swift` | all | `ui/src/state/streamAccumulator.test.ts` | WIN-8.16 | todo | — |
 | `StreamEventTests.swift` | all | `src-tauri/src/conversations/stream_event.rs` (#[cfg(test)]) | WIN-8.12 | todo | — |
 | `TabCloseConfirmationIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
