@@ -14,6 +14,8 @@ use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 
+use super::roots::Access;
+
 /// The most bytes read when the caller gives no limit (the layout cap, 4 MiB).
 pub const DEFAULT_MAX_BYTES: u64 = 4 * 1_048_576;
 
@@ -189,10 +191,15 @@ pub(crate) async fn blocking<T: Send + 'static>(
         .map_err(|e| FsError::Io(e.to_string()))?
 }
 
+/// `path` resolved against the open projects' roots ([`super::roots`]).
+pub(crate) fn allowed(path: &str, access: Access) -> Result<PathBuf, FsError> {
+    super::roots::global().check(Path::new(path), access)
+}
+
 /// `fs_stat_text(path)`: the modification time, or null when there is no file.
 #[tauri::command]
 pub async fn fs_stat_text(path: String) -> Result<Option<u64>, FsError> {
-    blocking(move || stat(Path::new(&path))).await
+    blocking(move || stat(&allowed(&path, Access::Read)?)).await
 }
 
 /// `fs_read_text(path, maxBytes)`: the file's text, or null when there is no file.
@@ -202,7 +209,7 @@ pub async fn fs_read_text(
     max_bytes: Option<u64>,
 ) -> Result<Option<TextFile>, FsError> {
     let max = max_bytes.unwrap_or(DEFAULT_MAX_BYTES);
-    blocking(move || read(Path::new(&path), max)).await
+    blocking(move || read(&allowed(&path, Access::Read)?, max)).await
 }
 
 /// `fs_read_document(path, maxBytes)`: the file for the editor, or null when there is no file.
@@ -212,7 +219,7 @@ pub async fn fs_read_document(
     max_bytes: Option<u64>,
 ) -> Result<Option<DocumentFile>, FsError> {
     let max = max_bytes.unwrap_or(DEFAULT_MAX_BYTES);
-    blocking(move || read_document(Path::new(&path), max)).await
+    blocking(move || read_document(&allowed(&path, Access::Read)?, max)).await
 }
 
 /// `fs_write_text_if_unmodified(path, text, expectedModifiedMs)`: the new modification time.
@@ -222,7 +229,10 @@ pub async fn fs_write_text_if_unmodified(
     text: String,
     expected_modified_ms: Option<u64>,
 ) -> Result<u64, FsError> {
-    blocking(move || write_if_unmodified(Path::new(&path), &text, expected_modified_ms)).await
+    blocking(move || {
+        write_if_unmodified(&allowed(&path, Access::Write)?, &text, expected_modified_ms)
+    })
+    .await
 }
 
 #[cfg(test)]

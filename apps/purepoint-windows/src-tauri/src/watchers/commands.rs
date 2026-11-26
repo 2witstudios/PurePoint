@@ -101,6 +101,7 @@ pub async fn watch_manifest(
     state: State<'_, WatcherState>,
     project_root: String,
 ) -> Result<WatchId, String> {
+    crate::files::roots::global().add(&project_root);
     let spec = WatchSpec::Manifest {
         project_root: PathBuf::from(project_root),
     };
@@ -113,6 +114,7 @@ pub async fn watch_worktree(
     state: State<'_, WatcherState>,
     worktree_path: String,
 ) -> Result<WatchId, String> {
+    crate::files::roots::global().add(&worktree_path);
     let spec = WatchSpec::Worktree {
         worktree_path: PathBuf::from(worktree_path),
     };
@@ -125,6 +127,7 @@ pub async fn watch_file_tree(
     state: State<'_, WatcherState>,
     root: String,
 ) -> Result<WatchId, String> {
+    crate::files::roots::global().add(&root);
     let spec = WatchSpec::FileTree {
         root: PathBuf::from(root),
     };

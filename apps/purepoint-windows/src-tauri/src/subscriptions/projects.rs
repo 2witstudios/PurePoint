@@ -60,6 +60,8 @@ async fn stream(client: &DaemonClient, emit: &Emit) -> DaemonError {
     loop {
         match next_reply(&mut reader).await {
             Ok(Ok(Response::ProjectsChanged { projects })) => {
+                // Before the front end hears of them, so its first reads are allowed.
+                crate::files::roots::global().set_daemon_projects(&projects);
                 emit(SubscriptionEvent::Projects { projects });
             }
             Ok(_) => {}

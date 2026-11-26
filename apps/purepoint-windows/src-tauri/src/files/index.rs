@@ -97,9 +97,16 @@ pub async fn file_index(
     limit: Option<usize>,
 ) -> Result<Vec<PaletteFileEntry>, String> {
     let limit = limit.unwrap_or(DEFAULT_LIMIT);
-    tauri::async_runtime::spawn_blocking(move || list(Path::new(&root), limit))
-        .await
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        super::roots::global()
+            .check(Path::new(&root), super::roots::Access::Read)
+            .map_err(|e| match e {
+                super::text::FsError::Conflict(m) | super::text::FsError::Io(m) => m,
+            })?;
+        Ok(list(Path::new(&root), limit))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

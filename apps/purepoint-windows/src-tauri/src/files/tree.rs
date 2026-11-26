@@ -15,7 +15,8 @@ use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
-use super::text::{FsError, blocking};
+use super::roots::Access;
+use super::text::{FsError, allowed, blocking};
 use crate::git::runner::{git_path, hide_console};
 
 /// One entry of a directory listing.
@@ -132,19 +133,32 @@ pub fn delete(path: &Path) -> Result<(), FsError> {
 /// `fs_list_dir(path, root)`: the entries of `path`, with `git check-ignore` run in `root`.
 #[tauri::command]
 pub async fn fs_list_dir(path: String, root: String) -> Result<Vec<DirEntry>, FsError> {
-    blocking(move || list(Path::new(&path), Path::new(&root))).await
+    blocking(move || {
+        allowed(&path, Access::Read)?;
+        allowed(&root, Access::Read)?;
+        // Listed under the caller's spelling, so a linked folder's entries keep their place in
+        // the tree; the check above resolved the link and found its target inside a project.
+        list(Path::new(&path), Path::new(&root))
+    })
+    .await
 }
 
 /// `fs_rename(from, to)`: the file tree's Rename.
 #[tauri::command]
 pub async fn fs_rename(from: String, to: String) -> Result<(), FsError> {
-    blocking(move || rename(Path::new(&from), Path::new(&to))).await
+    blocking(move || {
+        rename(
+            &allowed(&from, Access::Entry)?,
+            &allowed(&to, Access::Create)?,
+        )
+    })
+    .await
 }
 
 /// `fs_delete(path)`: the file tree's Delete.
 #[tauri::command]
 pub async fn fs_delete(path: String) -> Result<(), FsError> {
-    blocking(move || delete(Path::new(&path))).await
+    blocking(move || delete(&allowed(&path, Access::Entry)?)).await
 }
 
 #[cfg(test)]

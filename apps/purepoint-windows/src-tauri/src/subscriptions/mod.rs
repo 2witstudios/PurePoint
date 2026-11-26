@@ -490,7 +490,10 @@ pub async fn subscriptions_start_project(
             &project_root,
             Some(&machine),
         ),
-        None => subscriptions.start_project(daemon.lifecycle()?.client(), &project_root),
+        None => {
+            crate::files::roots::global().add(&project_root);
+            subscriptions.start_project(daemon.lifecycle()?.client(), &project_root)
+        }
     }
     Ok(())
 }
