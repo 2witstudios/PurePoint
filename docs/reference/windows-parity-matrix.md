@@ -23,7 +23,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/AgentSignalSnapshot.swift` | 85 | `ui/src/model/agentSignalSnapshot.ts` | WIN-7.7 | todo | — |
 | `Models/AgentStatus.swift` | 48 | `ui/src/model/agentStatus.ts` | WIN-6.0 | ported | — |
 | `Models/AgentVariant.swift` | 73 | `ui/src/model/agentVariant.ts` | WIN-6.6 | ported | — |
-| `Models/AgentsHubModels.swift` | 160 | `ui/src/model/agentsHubModels.ts` | WIN-8.7 | todo | — |
+| `Models/AgentsHubModels.swift` | 160 | `ui/src/model/agentsHubModels.ts` | WIN-8.7 | ported | — |
 | `Models/ChannelModel.swift` | 58 | `ui/src/model/channelModel.ts` | WIN-8.10 | todo | — |
 | `Models/ChatMessage.swift` | 56 | `ui/src/model/content.ts` | WIN-8.16 | ported | — |
 | `Models/CommandPaletteItem.swift` | 180 | `ui/src/model/commandPalette.ts` | WIN-6.6 | ported | — |
@@ -111,8 +111,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/WorkspaceService.swift` | 13 | `ui/src/services/workspaceService.ts` | WIN-6.0 | ported | — |
 | `Services/WorktreeWatcher.swift` | 69 | `src-tauri/src/watchers/worktree.rs` | WIN-5.6 | ported | Same metadata paths (`.git`, HEAD, index, packed-refs, refs), 500 ms debounce; `worktrees-changed {worktreePath}` |
 | `State/AddMachineFlow+iOS.swift` | 313 | — | — | excluded | `+iOS` file (iPad build only) |
-| `State/AgentConfigState.swift` | 243 | `ui/src/state/agentConfigState.ts` | WIN-8.7 | todo | — |
-| `State/AgentsHubState.swift` | 270 | `ui/src/state/agentsHubState.ts` | WIN-8.7 | todo | — |
+| `State/AgentConfigState.swift` | 243 | `ui/src/state/agentConfigState.ts` (added agents are the store's `addedAgents`, not a static) | WIN-8.7 | ported | — |
+| `State/AgentsHubState.swift` | 270 | `ui/src/state/agentsHubState.ts` | WIN-8.7 | ported | — |
 | `State/AppState+LibraryScope+iOS.swift` | 123 | — | — | excluded | `+iOS` file (iPad build only) |
 | `State/AppState+PointGuardPlays.swift` | 20 | `ui/src/state/appStatePointGuardPlays.ts` | WIN-8.13 | todo | — |
 | `State/AppState.swift` | 952 | `ui/src/state/appState.ts` | WIN-6.0 | ported | — |
@@ -145,10 +145,10 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Theme/TerminalTheme.swift` | 118 | `ui/src/theme/tokens.css` (`--pp-terminal-*`) | WIN-5.8 | ported | — |
 | `Theme/Theme.swift` | 114 | `ui/src/theme/tokens.css` (colors) | WIN-5.8 | ported | — |
 | `Utilities/WorktreeNameNormalizer.swift` | 24 | `ui/src/model/worktreeName.ts` | WIN-6.0 | ported | — |
-| `Views/Agents/AgentCreationSheet.swift` | 156 | `ui/src/views/agents/AgentCreationSheet.tsx` | WIN-8.7 | todo | — |
-| `Views/Agents/AgentsHubView.swift` | 877 | `ui/src/views/agents/AgentsHubView.tsx` | WIN-8.7 | todo | — |
-| `Views/Agents/PromptCreationSheet.swift` | 125 | `ui/src/views/agents/PromptCreationSheet.tsx` | WIN-8.7 | todo | — |
-| `Views/Agents/SwarmCreationSheet.swift` | 144 | `ui/src/views/agents/SwarmCreationSheet.tsx` | WIN-8.7 | todo | — |
+| `Views/Agents/AgentCreationSheet.swift` | 156 | `ui/src/views/agents/AgentCreationSheet.tsx` | WIN-8.7 | ported | — |
+| `Views/Agents/AgentsHubView.swift` | 877 | `ui/src/views/agents/AgentsHubView.tsx`, `ui/src/views/agents/hubComponents.tsx` (rows, cards, sheet), `ui/src/views/agents/agents.css` | WIN-8.7 | ported | — |
+| `Views/Agents/PromptCreationSheet.swift` | 125 | `ui/src/views/agents/PromptCreationSheet.tsx` | WIN-8.7 | ported | — |
+| `Views/Agents/SwarmCreationSheet.swift` | 144 | `ui/src/views/agents/SwarmCreationSheet.tsx` | WIN-8.7 | ported | — |
 | `Views/Channel/ChannelComposer+iOS.swift` | 330 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Channel/ChannelComposer.swift` | 93 | `ui/src/views/channel/ChannelComposer.tsx` | WIN-8.10 | todo | — |
 | `Views/Channel/ChannelHoverRow.swift` | 40 | `ui/src/views/channel/ChannelHoverRow.tsx` | WIN-8.10 | todo | — |
@@ -281,8 +281,8 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `ActiveProjectRoutingTests.swift` | all | `ui/src/model/sidebarOutline.test.ts` | WIN-6.5 | ported | — |
 | `AddMachineFlowTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `AgentSignalBadgeTests.swift` | all | — | — | ios-only | Badge-count rules re-expressed as new vitest cases in WIN-7.7 |
-| `AgentsHubModelsTests.swift` | all | `ui/src/model/agentsHubModels.test.ts` | WIN-8.7 | todo | — |
-| `AgentsHubStateTests.swift` | all | `ui/src/state/agentsHubState.test.ts` | WIN-8.7 | todo | — |
+| `AgentsHubModelsTests.swift` | all | `ui/src/model/agentsHubModels.test.ts` | WIN-8.7 | ported | — |
+| `AgentsHubStateTests.swift` | all | `ui/src/state/agentsHubState.test.ts` | WIN-8.7 | ported | — |
 | `AppLifecycleTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` (`AppActivityTests`), though WIN-6.0 lists it; nothing to port |
 | `AttachmentUploadTests.swift` | all | `ui/src/services/attachmentUpload.test.ts` | WIN-9.7 | todo | Platform-neutral cases only |
 | `ChannelComposerIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
@@ -347,7 +347,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `WorkspaceModelTests.swift` | all | `ui/src/model/workspaceModel.test.ts` | WIN-6.1 | ported | — |
 | `WorkspaceReconcilerTests.swift` | all | `ui/src/model/workspace.test.ts`, `ui/src/model/workspace.property.test.ts` | WIN-6.1 | ported | The `WorkspacePersistence` cases run against the WIN-6.3 port over an in-memory file |
 | `WorkspaceRegistryTests.swift` | all | `ui/src/state/workspaceRegistry.test.ts` | WIN-6.2 | ported | — |
-| `purepoint_macosTests.swift` | `GlobalAgentSettingsTests` | `ui/src/state/agentConfigState.test.ts` | WIN-8.7 | todo | — |
+| `purepoint_macosTests.swift` | `GlobalAgentSettingsTests` | `ui/src/state/agentConfigState.test.ts` | WIN-8.7 | ported | — |
 | `purepoint_macosTests.swift` | `PaneSplitNodeTests` | `ui/src/model/paneSplit.test.ts` | WIN-6.2 | ported | — |
 | `purepoint_macosTests.swift` | `GridLayoutPersistenceTests` | `ui/src/model/workspacePersistence.test.ts` | WIN-6.3 | todo | — |
 
