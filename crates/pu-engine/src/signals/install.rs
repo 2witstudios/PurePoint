@@ -1,7 +1,4 @@
-#[cfg(unix)]
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
@@ -23,26 +20,16 @@ pub(super) struct Artifacts {
 }
 
 impl Artifacts {
-    #[cfg(windows)]
-    pub fn new(_project: &Path, _launch: &str) -> std::io::Result<Self> {
-        // WIN-3.9: owner-only artifact directory plus the Windows signal endpoint.
-        Err(crate::os::unsupported("agent signal artifacts"))
-    }
-    #[cfg(unix)]
     pub fn new(project: &Path, launch: &str) -> std::io::Result<Self> {
-        let base = project.join(".pu/agent-signals");
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&base)?;
+        let base = project.join(".pu").join("agent-signals");
+        pu_core::private_fs::create_private_dir(&base)?;
         let directory = base.join(launch);
-        std::fs::DirBuilder::new().mode(0o700).create(&directory)?;
-        // Short absolute path: Unix socket paths cannot hold a worktree path on macOS.
+        pu_core::private_fs::create_new_private_dir(&directory)?;
+        // Short absolute path: Unix socket paths cannot hold a worktree path on
+        // macOS. Windows signals use a named pipe; this directory still holds
+        // the launch's scratch HOME.
         let socket_directory = std::env::temp_dir().join(format!("pu-signal-{launch}"));
-        if let Err(e) = std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&socket_directory)
-        {
+        if let Err(e) = pu_core::private_fs::create_new_private_dir(&socket_directory) {
             let _ = std::fs::remove_dir(&directory);
             return Err(e);
         }
@@ -52,19 +39,9 @@ impl Artifacts {
             files: Vec::new(),
         })
     }
-    #[cfg(windows)]
-    pub fn write(&mut self, _name: &str, _data: Vec<u8>) -> std::io::Result<PathBuf> {
-        // WIN-3.9: create the artifact file owner-only.
-        Err(crate::os::unsupported("agent signal artifact write"))
-    }
-    #[cfg(unix)]
     pub fn write(&mut self, name: &str, data: Vec<u8>) -> std::io::Result<PathBuf> {
         let path = self.directory.join(name);
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)?;
+        let mut file = pu_core::private_fs::create_new_private_file(&path)?;
         file.write_all(&data)?;
         self.files.push((path.clone(), data));
         Ok(path)

@@ -3,12 +3,8 @@
 //! path. Uploads land in `~/.pu/attachments/<upload_id>/<name>`, outside every
 //! repository, and are swept once they're a week old.
 
-#[cfg(unix)]
-use std::fs::DirBuilder;
 use std::fs::OpenOptions;
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::DirBuilderExt as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -109,20 +105,10 @@ fn attach_chunk(
     if offset == 0 {
         sweep_stale(dir, SystemTime::now(), ATTACHMENT_TTL);
         let _ = std::fs::remove_dir_all(&upload_dir);
-        #[cfg(unix)]
-        if let Err(e) = DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&upload_dir)
-        {
+        // Owner-only (0700 / private DACL); the chunk file inherits it.
+        if let Err(e) = pu_core::private_fs::create_private_dir(&upload_dir) {
             return io_error(&upload_dir, &e);
         }
-        // WIN-3.8: create the upload directory with an owner-only DACL.
-        #[cfg(windows)]
-        return io_error(
-            &upload_dir,
-            &crate::os::unsupported("private upload directory"),
-        );
     } else {
         let received = std::fs::metadata(&partial).map_or(0, |m| m.len());
         if received != offset {
@@ -388,6 +374,15 @@ mod tests {
         // then
         assert!(!tmp.path().join("old").exists());
         assert!(tmp.path().join("fresh").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_new_upload_dir_should_be_private_to_the_user_on_windows() {
+        let tmp = TempDir::new().unwrap();
+        attach_chunk(tmp.path(), "u1", "a.png", 0, &b64(b"x"), true);
+        pu_core::private_fs::check_private(&tmp.path().join("u1")).unwrap();
+        pu_core::private_fs::check_private(&tmp.path().join("u1").join("a.png")).unwrap();
     }
 
     #[cfg(unix)]

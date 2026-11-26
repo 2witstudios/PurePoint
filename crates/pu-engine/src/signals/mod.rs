@@ -138,7 +138,6 @@ async fn refresh_codex(
 
 // Native image/PDF tool results can exceed 1MiB in one JSONL record. Keep the
 // per-poll I/O budget separate from this finite record-assembly limit.
-#[cfg_attr(windows, allow(dead_code))]
 const MAX_NATIVE_RECORD_BYTES: usize = 32 * 1024 * 1024;
 
 // A JSONL append may be incomplete while its already parsed prefix remains
@@ -146,13 +145,22 @@ const MAX_NATIVE_RECORD_BYTES: usize = 32 * 1024 * 1024;
 // invalidates that prefix; never follow replacement links or another inode.
 #[cfg(windows)]
 fn native_prefix_length(
-    _path: &Path,
-    _inode: Option<(u64, u64)>,
-    _offset: u64,
-    _observed_length: u64,
+    path: &Path,
+    inode: Option<(u64, u64)>,
+    offset: u64,
+    observed_length: u64,
 ) -> Option<u64> {
-    // WIN-3.8: open without following reparse points and check the owner SID / DACL.
-    None
+    use pu_core::private_fs as pfs;
+    // Windows has no path-based file index: open the path itself, never a
+    // reparse point's target, and compare the handle's identity.
+    let file = pfs::open_no_follow(path).ok()?;
+    let m = file.metadata().ok()?;
+    (m.is_file()
+        && pfs::owned_by_current_user(&file).ok()?
+        && pfs::file_identity(&file).ok() == inode
+        && m.len() >= offset
+        && m.len() >= observed_length)
+        .then_some(m.len())
 }
 
 #[cfg(unix)]
@@ -177,23 +185,12 @@ struct NativeFileBoundary {
     inode: (u64, u64),
 }
 
-#[cfg(windows)]
-fn native_file_boundary(_path: &Path) -> Option<NativeFileBoundary> {
-    // WIN-3.8: open without following reparse points and check the owner SID / DACL.
-    None
-}
-
-#[cfg(unix)]
 fn native_file_boundary(path: &Path) -> Option<NativeFileBoundary> {
+    use pu_core::private_fs as pfs;
     use std::io::{Read, Seek, SeekFrom};
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
+    let mut file = pfs::open_no_follow(path).ok()?;
     let before = file.metadata().ok()?;
-    if !before.is_file() || before.uid() != unsafe { libc::geteuid() } || before.len() == 0 {
+    if !before.is_file() || !pfs::owned_by_current_user(&file).ok()? || before.len() == 0 {
         return None;
     }
     file.seek(SeekFrom::End(-1)).ok()?;
@@ -204,8 +201,25 @@ fn native_file_boundary(path: &Path) -> Option<NativeFileBoundary> {
     }
     Some(NativeFileBoundary {
         offset: before.len(),
-        inode: (before.dev(), before.ino()),
+        inode: pfs::file_identity(&file).ok()?,
     })
+}
+
+/// Unix: owner-only mode exactly 0600 and owned by the euid. Windows: owned
+/// by the user with a private DACL (`pu_core::private_fs::check_private`).
+fn exact_private_file(file: &std::fs::File, label: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = label;
+        file.metadata().is_ok_and(|meta| {
+            meta.mode() & 0o7777 == 0o600 && meta.uid() == unsafe { libc::geteuid() }
+        })
+    }
+    #[cfg(windows)]
+    {
+        pu_core::private_fs::check_private_file(file, label).is_ok()
+    }
 }
 
 pub(crate) struct LaunchState {

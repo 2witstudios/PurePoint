@@ -572,13 +572,15 @@ fn fs_read(path: &str, roots: &[PathBuf], max_bytes: u64) -> Response {
         }
         Err(e) => return io_error(&resolved, &e),
     }
-    // O_NONBLOCK too, in case the path was swapped for a FIFO since.
+    // O_NONBLOCK too, in case the path was swapped for a FIFO since. Windows
+    // has no FIFOs in the file system (pipes live under `\\.\pipe\`, which
+    // confinement never resolves to), and `resolved` is already canonical, so
+    // a plain open is enough; the regular-file check below still applies.
     #[cfg(unix)]
     let opened = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
         .open(&resolved);
-    // WIN-3.8: decide whether named pipes / reparse points need a guard here.
     #[cfg(windows)]
     let opened = std::fs::OpenOptions::new().read(true).open(&resolved);
     let file = match opened {
@@ -769,19 +771,25 @@ fn write_atomically(
             .create_new(true)
             .mode(mode)
             .open(&tmp)?;
-        // WIN-3.8: carry the replaced file's ACL over to the temp file.
+        // Windows: the temp file inherits the directory's ACL while it is
+        // written; `replace_file` (ReplaceFileW) then keeps the replaced
+        // file's ACL and attributes, so nothing is widened or lost.
         #[cfg(windows)]
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&tmp)?;
+        #[cfg(unix)]
         if let Some(meta) = existing {
             // Restore bits the umask dropped, before any data is written.
             file.set_permissions(meta.permissions())?;
         }
+        #[cfg(windows)]
+        let _ = existing;
         file.write_all(data)?;
         file.sync_all()?;
-        std::fs::rename(&tmp, target)
+        drop(file);
+        pu_core::private_fs::replace_file(&tmp, target)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);

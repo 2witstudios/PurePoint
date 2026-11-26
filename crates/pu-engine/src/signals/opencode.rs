@@ -4,10 +4,7 @@ use pu_core::signals::*;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-#[cfg(unix)]
 use std::io::Read;
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -233,25 +230,10 @@ struct Registration {
     password: Option<String>,
 }
 
-#[cfg(windows)]
-fn registration(_path: &Path) -> Option<Registration> {
-    // WIN-3.8: open without following reparse points and check the owner SID / DACL.
-    None
-}
-
-#[cfg(unix)]
 fn registration(path: &Path) -> Option<Registration> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
+    let file = pu_core::private_fs::open_no_follow(path).ok()?;
     let meta = file.metadata().ok()?;
-    if !meta.is_file()
-        || meta.len() > 16 * 1024
-        || meta.mode() & 0o7777 != 0o600
-        || meta.uid() != unsafe { libc::geteuid() }
-    {
+    if !meta.is_file() || meta.len() > 16 * 1024 || !super::exact_private_file(&file, path) {
         return None;
     }
     let mut bytes = Vec::new();

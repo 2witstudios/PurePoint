@@ -7,10 +7,9 @@ use super::{LaunchState, NativeObserver, Prepared, install, now_ms};
 use crate::output_buffer::OutputBuffer;
 use crate::read_source::Binding;
 use std::collections::HashMap;
-#[cfg(unix)]
 use std::io::{Read, Seek, SeekFrom};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(all(test, unix))]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -115,7 +114,6 @@ struct Cursor {
     offset: u64,
     observed_length: u64,
     inode: Option<(u64, u64)>,
-    #[cfg_attr(windows, allow(dead_code))]
     partial: Vec<u8>,
     poisoned: bool,
 }
@@ -129,26 +127,17 @@ impl Cursor {
             ..Self::default()
         })
     }
-    #[cfg(windows)]
-    fn read(&mut self, _path: &Path, _history: &mut History, _cwd: &str) -> Option<()> {
-        // WIN-3.8: open without following reparse points and check the owner SID / DACL.
-        None
-    }
-    #[cfg(unix)]
     fn read(&mut self, path: &Path, history: &mut History, cwd: &str) -> Option<()> {
+        use pu_core::private_fs as pfs;
         if self.poisoned {
             return None;
         }
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .ok()?;
+        let mut file = pfs::open_no_follow(path).ok()?;
         self.poisoned = true;
         let meta = file.metadata().ok()?;
-        let inode = (meta.dev(), meta.ino());
+        let inode = pfs::file_identity(&file).ok()?;
         if !meta.is_file()
-            || meta.uid() != unsafe { libc::geteuid() }
+            || !pfs::owned_by_current_user(&file).ok()?
             || meta.len() < self.offset
             || meta.len() < self.observed_length
             || self.inode.is_some_and(|old| old != inode)
@@ -449,7 +438,6 @@ struct History {
     outcome: Option<SignalOutcome>,
 }
 impl History {
-    #[cfg_attr(windows, allow(dead_code))]
     fn retire(&mut self, turn: &str) -> Option<()> {
         if self.closed_turns.contains(turn) {
             return Some(());
@@ -460,7 +448,6 @@ impl History {
         self.closed_turns.insert(turn.into());
         Some(())
     }
-    #[cfg_attr(windows, allow(dead_code))]
     fn record(&mut self, v: &Value, cwd: &str) -> Option<()> {
         let p = &v["payload"];
         if v["type"] == "session_meta" {
