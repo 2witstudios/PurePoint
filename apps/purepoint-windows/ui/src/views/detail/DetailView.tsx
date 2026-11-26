@@ -14,6 +14,7 @@ import { useAgentSelection } from '../terminal/agentSelection.ts';
 import { AgentTerminalsView } from '../terminal/AgentTerminals.tsx';
 import { ScheduleView } from '../schedule/ScheduleView.tsx';
 import { ScreenPlaceholder } from './placeholders.tsx';
+import { ProjectChannelView } from '../channel/ProjectChannelView.tsx';
 import { ProjectDetailView } from './ProjectDetailView.tsx';
 import { WorkspaceFilesLayout } from './WorkspaceFilesLayout.tsx';
 import { WorktreeDetailView } from './WorktreeDetailView.tsx';
@@ -102,14 +103,14 @@ function SelectedContent({ selection }: { selection: SidebarSelection }) {
         <WorktreeRoute key={selection.id} project={project} worktreeId={selection.id} />
       );
     }
-    case 'channel':
-      return (
-        <ScreenPlaceholder
-          icon="bubble.left.and.bubble.right"
-          title="Project channel"
-          {...(app.projectState(selection.id) === null ? {} : { view: 'ProjectChannelView' })}
-        />
+    case 'channel': {
+      const project = app.projectState(selection.id);
+      return project === null ? (
+        <ScreenPlaceholder icon="bubble.left.and.bubble.right" title="Project channel" />
+      ) : (
+        <ProjectChannelView key={project.projectId} project={project} />
       );
+    }
     case 'project': {
       const project = app.projectState(selection.id);
       return project === null ? (

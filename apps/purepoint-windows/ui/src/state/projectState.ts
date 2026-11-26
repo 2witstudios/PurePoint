@@ -16,7 +16,8 @@
 // Differences from Swift:
 // - The layout watcher (`.pu/workspaces.json`) is folded into `refresh`, which runs on every manifest
 //   change: it re-stats the document through the cached persistence adapter and adopts a change.
-// - `channel` (ChannelState) is WIN-8.10; the sidebar's unread count is 0 until it lands.
+// - `channel` (ChannelState, WIN-8.10) polls through the project's daemon client; its unread count
+//   feeds `snapshot().channelUnread`, and AppState follows `channel.store` for it.
 // - A remote project is followed through its machine's daemon client (WIN-8.14); its layout loads
 //   and saves through that daemon's `fs_*` requests.
 
@@ -56,6 +57,7 @@ import {
   type WorkspaceSnapshot,
 } from '../services/workspaceService';
 import type { CachedWorkspacePersistence } from './cachedWorkspacePersistence';
+import { ChannelState } from './channelState';
 import { RemoteLayoutSaver } from './remoteLayoutSaver';
 import { resolveSpawnTarget } from './spawnTargetResolver';
 import type { WorkspaceRegistry } from './workspaceRegistry';
@@ -131,6 +133,8 @@ export interface ProjectStateOptions {
   /** Remote projects: where the layout document is read and written. */
   readonly layoutHost?: LayoutHostIO;
   readonly environment?: Partial<ProjectEnvironment>;
+  /** The project's channel; defaults to one over `client`, scoped by the project's key. */
+  readonly channel?: ChannelState;
 }
 
 /** How long to keep retrying daemon start + init before surfacing an error. */
@@ -163,6 +167,7 @@ export class ProjectState {
   readonly client: DaemonRequester;
   /** Remote projects write their layout through their machine; quit and disconnect flush it. */
   readonly remoteLayoutSaver: RemoteLayoutSaver | null;
+  readonly channel: ChannelState;
 
   registry: WorkspaceRegistry | null;
   owner: ProjectStateOwner | null = null;
@@ -206,6 +211,15 @@ export class ProjectState {
         ? null
         : RemoteLayoutSaver.forHost(this.projectRoot, this.layoutHost);
     this.env = { ...DEFAULT_PROJECT_ENVIRONMENT, ...options.environment };
+    const client = this.client;
+    this.channel =
+      options.channel ??
+      new ChannelState({
+        projectRoot: this.projectRoot,
+        // Swift: local projects scope their drafts and read marks by root, remote ones by key.
+        ...(this.machineId === null ? {} : { defaultsScope: this.projectId }),
+        sendRequest: (request) => client.send(request),
+      });
     this.store = createStore<ProjectStateFields>()(() => ({
       rootAgents: [],
       worktrees: [],
@@ -263,7 +277,7 @@ export class ProjectState {
       worktrees: s.worktrees,
       hasLoadedWorktrees: s.hasLoadedWorktrees,
       isUnavailable: s.isUnavailable,
-      channelUnread: 0,
+      channelUnread: this.channel.unreadCount,
       layoutError: this.registry?.layoutErrorsByProject[this.projectId] ?? null,
     };
   }
@@ -328,6 +342,7 @@ export class ProjectState {
         (id) => id,
         () => null,
       );
+      this.channel.startBackground();
       this.startSubscriptions();
       // Resume from the snapshot taken after init, not after a fixed delay: a slow first load
       // would otherwise resume against the agents from before init and leave new ones paused.
@@ -357,6 +372,7 @@ export class ProjectState {
     this.resubscribeTask = null;
     this.store.setState({ hasLoadedWorktrees: false });
     this.startRemoteLayoutRestore();
+    this.channel.startBackground();
     void (async () => {
       try {
         const snapshot = await this.service.loadWorkspace(this.projectRoot);
@@ -441,6 +457,7 @@ export class ProjectState {
 
   stopWatching(): void {
     this.invalidateSignals();
+    this.channel.shutdown();
     this.openTask = null;
     this.remoteLayoutTask = null;
     this.resubscribeTask = null;

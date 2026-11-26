@@ -5,8 +5,7 @@
 // the project channel. Choosing a worktree selects it in the sidebar; choosing the root checkout
 // opens RootCheckoutDetailView in place.
 //
-// Differences from Swift: the Channel tab is ProjectChannelView (WIN-8.10), a placeholder until
-// it lands. A remote project's summaries go through its machine (`machineId`), as Swift's
+// Differences from Swift: a remote project's summaries go through its machine (`machineId`), as Swift's
 // `project.git` does.
 import { useEffect, useState } from 'react';
 import { useStore } from 'zustand';
@@ -19,7 +18,7 @@ import {
 } from '../../services/git.ts';
 import type { ProjectState } from '../../state/projectState.ts';
 import { Icon } from '../../theme/Icon.tsx';
-import { ScreenPlaceholder } from './placeholders.tsx';
+import { ProjectChannelView } from '../channel/ProjectChannelView.tsx';
 import { RootCheckoutDetailView } from './RootCheckoutDetailView.tsx';
 import './detail.css';
 
@@ -206,11 +205,7 @@ export function ProjectDetailView({
         </div>
       </div>
       {selectedTab === 'channel' ? (
-        <ScreenPlaceholder
-          icon="bubble.left.and.bubble.right"
-          title="Project channel"
-          view="ProjectChannelView"
-        />
+        <ProjectChannelView key={project.projectId} project={project} />
       ) : showRootFiles ? (
         <>
           <div className="back-bar">
