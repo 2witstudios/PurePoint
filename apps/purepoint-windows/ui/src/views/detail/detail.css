@@ -1,0 +1,474 @@
+/*
+ * The project, worktree and root checkout detail screens and the workspace files sidebar
+ * (WIN-8.2). Colors and metrics come from theme/tokens.css; the rest mirrors the SwiftUI
+ * paddings and font sizes of Views/Detail/*.swift.
+ */
+:root {
+  --detail-divider: rgba(0, 0, 0, 0.1);
+  --detail-tertiary-text: rgba(0, 0, 0, 0.3);
+  --detail-chip-background: rgba(0, 0, 0, 0.06);
+  --detail-row-hover: rgba(0, 0, 0, 0.04);
+  --detail-selected: rgba(0, 95, 184, 0.12);
+  --detail-warning: #c05a00;
+}
+
+:root[data-theme='dark'] {
+  --detail-divider: rgba(255, 255, 255, 0.1);
+  --detail-tertiary-text: rgba(255, 255, 255, 0.3);
+  --detail-chip-background: rgba(255, 255, 255, 0.08);
+  --detail-row-hover: rgba(255, 255, 255, 0.05);
+  --detail-selected: rgba(96, 205, 255, 0.16);
+  --detail-warning: #ffaa44;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --detail-divider: rgba(255, 255, 255, 0.1);
+    --detail-tertiary-text: rgba(255, 255, 255, 0.3);
+    --detail-chip-background: rgba(255, 255, 255, 0.08);
+    --detail-row-hover: rgba(255, 255, 255, 0.05);
+    --detail-selected: rgba(96, 205, 255, 0.16);
+    --detail-warning: #ffaa44;
+  }
+}
+
+.detail-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--detail-divider);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.detail-header.project-header {
+  gap: 10px;
+  padding: 14px 20px;
+}
+
+.detail-header-icon {
+  color: var(--secondary-text);
+  flex: none;
+}
+
+.detail-title {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-header .detail-title {
+  font-size: 15px;
+}
+
+.detail-subtitle {
+  font-size: 12px;
+  color: var(--secondary-text);
+}
+
+.project-header .detail-subtitle {
+  font-size: 11px;
+}
+
+.detail-branch-chip {
+  font: 12px var(--pp-font-mono);
+  color: var(--secondary-text);
+  padding: 2px 6px;
+  background: var(--detail-chip-background);
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detail-spacer {
+  flex: 1;
+}
+
+.detail-button,
+.detail-icon-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: 12px var(--pp-font-ui);
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: default;
+}
+
+.detail-icon-button {
+  color: var(--secondary-text);
+}
+
+.detail-icon-button[aria-pressed='true'] {
+  color: var(--pp-app-text);
+}
+
+.detail-button:hover,
+.detail-icon-button:hover {
+  background: var(--control-hover);
+}
+
+.detail-button:active,
+.detail-icon-button:active {
+  background: var(--control-pressed);
+}
+
+.detail-button:disabled {
+  opacity: 0.4;
+}
+
+.detail-bordered-button {
+  border: 1px solid var(--detail-divider);
+  background: var(--pp-card-background);
+}
+
+/* SwiftUI's segmented picker. */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 6px;
+  background: var(--detail-chip-background);
+}
+
+.segmented button {
+  border: none;
+  background: none;
+  color: var(--secondary-text);
+  font: 12px var(--pp-font-ui);
+  padding: 3px 12px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.segmented button[aria-selected='true'] {
+  background: var(--pp-card-background);
+  color: var(--pp-app-text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+/* Project overview */
+.project-overview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--secondary-text);
+  padding: 18px;
+}
+
+.project-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.project-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: calc(100% - 36px);
+  margin: 0 18px;
+  padding: 18px 0;
+  border: none;
+  border-bottom: 1px solid var(--detail-divider);
+  background: none;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+
+.project-row:hover {
+  background: var(--detail-row-hover);
+}
+
+.project-row-icon {
+  color: var(--secondary-text);
+  margin-top: 2px;
+  flex: none;
+}
+
+.project-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.project-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-row-branch {
+  font: 10px var(--pp-font-mono);
+  color: var(--secondary-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-row-summary,
+.project-row-agents {
+  font-size: 11px;
+  color: var(--secondary-text);
+}
+
+.project-row-summary.pending {
+  color: var(--detail-tertiary-text);
+}
+
+.project-row-summary.error {
+  font-size: 10px;
+  color: var(--detail-warning);
+}
+
+.project-row-chevron {
+  color: var(--detail-tertiary-text);
+  flex: none;
+}
+
+.back-bar {
+  display: flex;
+  padding: 10px 20px;
+}
+
+/* Worktree / root checkout body: file tree | content | channel. */
+.detail-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.detail-file-tree {
+  flex: none;
+  width: 22%;
+  min-width: 160px;
+  border-right: 1px solid var(--detail-divider);
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-file-tree-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.detail-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-channel {
+  flex: none;
+  width: 340px;
+  min-width: 280px;
+  max-width: 400px;
+  border-left: 1px solid var(--detail-divider);
+  display: flex;
+}
+
+.detail-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--secondary-text);
+  font-size: 13px;
+}
+
+.detail-empty-icon {
+  color: var(--detail-tertiary-text);
+}
+
+/* Workspace files layout and sidebar */
+.workspace-files-layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.workspace-files-content {
+  flex: 1;
+  min-width: 160px;
+  position: relative;
+  display: flex;
+}
+
+.workspace-files-reopen {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+}
+
+.workspace-files-resizer {
+  flex: none;
+  width: 1px;
+  background: var(--detail-divider);
+  cursor: col-resize;
+  position: relative;
+}
+
+.workspace-files-resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 -3px;
+}
+
+.workspace-files-sidebar {
+  flex: none;
+  min-width: 240px;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  background: var(--pp-card-background);
+}
+
+.workspace-files-modes {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 32px;
+  padding: 0 4px 0 10px;
+  border-bottom: 1px solid var(--detail-divider);
+}
+
+.workspace-files-modes > button:not(.detail-icon-button) {
+  border: none;
+  background: none;
+  font: 11px var(--pp-font-ui);
+  color: var(--secondary-text);
+  padding: 0;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.workspace-files-modes > button[aria-selected='true'] {
+  color: var(--pp-app-text);
+}
+
+.workspace-files-count {
+  color: var(--detail-tertiary-text);
+}
+
+.workspace-files-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.workspace-files-message {
+  font-size: 11px;
+  color: var(--secondary-text);
+  padding: 12px;
+  overflow-wrap: anywhere;
+}
+
+.workspace-file-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  background: var(--pp-card-background);
+  color: inherit;
+  font: 11px var(--pp-font-ui);
+  text-align: left;
+}
+
+.workspace-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-file-section {
+  border-bottom: 1px solid var(--detail-divider);
+}
+
+.diff-stats {
+  display: inline-flex;
+  gap: 5px;
+  font: 10px var(--pp-font-mono);
+}
+
+.diff-stat-added {
+  color: var(--pp-addition-text);
+}
+
+.diff-stat-removed {
+  color: var(--pp-deletion-text);
+}
+
+.diff-stat-status {
+  color: var(--secondary-text);
+}
+
+.workspace-files-sidebar-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.inline-diff-body {
+  margin: 0;
+  padding: 4px 8px;
+  font: 11px var(--pp-font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inline-diff-line.addition {
+  background: var(--pp-addition-background);
+}
+
+.inline-diff-line.deletion {
+  background: var(--pp-deletion-background);
+}
+
+.detail-changes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}

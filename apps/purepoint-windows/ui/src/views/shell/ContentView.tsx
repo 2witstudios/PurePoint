@@ -23,6 +23,7 @@ import {
   selectionsEqual,
 } from '../../model/sidebarItem.ts';
 import type { AppState } from '../../state/appState.ts';
+import type { ProjectState } from '../../state/projectState.ts';
 import { useKeyBindingStore } from '../../state/keyBindingStore.ts';
 import { SIDEBAR_KEY, useSidebarVisibilityStore } from '../../state/sidebarVisibilityStore.ts';
 import { Icon } from '../../theme/Icon.tsx';
@@ -160,24 +161,79 @@ function SidebarPlaceholder({
           </button>
         );
       })}
-      <ProjectListPlaceholder />
+      <ProjectListPlaceholder selection={selection} onSelect={onSelect} />
       <span className="sidebar-placeholder-view">SidebarView</span>
     </nav>
   );
 }
 
-/** Interim project list (the end-to-end smoke test reads it); WIN-7.2's outline replaces it. */
-function ProjectListPlaceholder() {
+/**
+ * Interim project list (the end-to-end tests read and click it); WIN-7.2's outline replaces it.
+ * A project row selects the project; the rows after it select its worktrees.
+ */
+function ProjectListPlaceholder({
+  selection,
+  onSelect,
+}: {
+  selection: SidebarSelection | null;
+  onSelect: (selection: SidebarSelection) => void;
+}) {
   const app = useAppState();
   const projects = useStore(app.store, (state) => state.projects);
   return (
     <ul data-testid="project-list" className="sidebar-project-list">
       {projects.map((project) => (
-        <li key={project.projectRoot} title={project.projectRoot}>
-          {project.projectRoot.split(/[\\/]/).filter(Boolean).pop() ?? project.projectRoot}
-        </li>
+        <ProjectListRows
+          key={project.projectId}
+          project={project}
+          selection={selection}
+          onSelect={onSelect}
+        />
       ))}
     </ul>
+  );
+}
+
+function ProjectListRows({
+  project,
+  selection,
+  onSelect,
+}: {
+  project: ProjectState;
+  selection: SidebarSelection | null;
+  onSelect: (selection: SidebarSelection) => void;
+}) {
+  const worktrees = useStore(project.store, (state) => state.worktrees);
+  const row = sidebarSelection.project(project.projectId);
+  return (
+    <>
+      <li
+        title={project.projectRoot}
+        aria-current={selectionsEqual(selection, row) ? 'page' : undefined}
+        onClick={() => {
+          onSelect(row);
+        }}
+      >
+        {project.projectRoot.split(/[\\/]/).filter(Boolean).pop() ?? project.projectRoot}
+      </li>
+      {worktrees.map((worktree) => {
+        const worktreeRow = sidebarSelection.worktree(worktree.id);
+        return (
+          <li
+            key={worktree.id}
+            data-testid="worktree-row"
+            className="sidebar-worktree-row"
+            title={worktree.path}
+            aria-current={selectionsEqual(selection, worktreeRow) ? 'page' : undefined}
+            onClick={() => {
+              onSelect(worktreeRow);
+            }}
+          >
+            {worktree.name}
+          </li>
+        );
+      })}
+    </>
   );
 }
 

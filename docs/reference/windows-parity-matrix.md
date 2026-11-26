@@ -188,13 +188,13 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Detail/InlineCodeView+iOS.swift` | 80 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Detail/InlineCodeView.swift` | 121 | `ui/src/views/detail/InlineCodeView.tsx` | WIN-8.3 | todo | — |
 | `Views/Detail/PRRowView.swift` | 132 | `ui/src/views/detail/PRRowView.tsx` | WIN-8.3 | todo | — |
-| `Views/Detail/ProjectDetailView.swift` | 105 | `ui/src/views/detail/ProjectDetailView.tsx` | WIN-8.2 | todo | — |
+| `Views/Detail/ProjectDetailView.swift` | 105 | `ui/src/views/detail/ProjectDetailView.tsx` | WIN-8.2 | ported | — |
 | `Views/Detail/ReviewChangesView.swift` | 95 | `ui/src/views/detail/ReviewChangesView.tsx` | WIN-8.3 | todo | — |
-| `Views/Detail/RootCheckoutDetailView.swift` | 246 | `ui/src/views/detail/RootCheckoutDetailView.tsx` | WIN-8.2 | todo | — |
-| `Views/Detail/WorkspaceFilesLayout.swift` | 80 | `ui/src/views/detail/WorkspaceFilesLayout.tsx` | WIN-8.2 | todo | — |
-| `Views/Detail/WorkspaceFilesSidebar.swift` | 268 | `ui/src/views/detail/WorkspaceFilesSidebar.tsx` | WIN-8.2 | todo | — |
+| `Views/Detail/RootCheckoutDetailView.swift` | 246 | `ui/src/views/detail/RootCheckoutDetailView.tsx` | WIN-8.2 | ported | — |
+| `Views/Detail/WorkspaceFilesLayout.swift` | 80 | `ui/src/views/detail/WorkspaceFilesLayout.tsx` | WIN-8.2 | ported | — |
+| `Views/Detail/WorkspaceFilesSidebar.swift` | 268 | `ui/src/views/detail/WorkspaceFilesSidebar.tsx` | WIN-8.2 | ported | — |
 | `Views/Detail/WorkspaceFilesSplit+iOS.swift` | 125 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Detail/WorktreeDetailView.swift` | 285 | `ui/src/views/detail/WorktreeDetailView.tsx` | WIN-8.2 | todo | — |
+| `Views/Detail/WorktreeDetailView.swift` | 285 | `ui/src/views/detail/WorktreeDetailView.tsx` | WIN-8.2 | ported | — |
 | `Views/Editor/EditorNSView+iOS.swift` | 138 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Editor/EditorNSView.swift` | 134 | `ui/src/views/editor/EditorNSView.tsx` | WIN-8.5 | todo | — |
 | `Views/Editor/EditorNoticeBanners.swift` | 54 | `ui/src/views/editor/EditorNoticeBanners.tsx` | WIN-8.5 | todo | — |
