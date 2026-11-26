@@ -46,17 +46,24 @@ pub fn run() {
             git::commands::git_pr_list,
             git::commands::git_pr_diff,
             git::commands::git_gh_available,
+            watchers::commands::watch_manifest,
+            watchers::commands::watch_worktree,
+            watchers::commands::watch_file_tree,
+            watchers::commands::watch_machines,
+            watchers::commands::unwatch,
+            watchers::commands::watchers_release,
+            watchers::commands::watchers_restore,
+            watchers::commands::watchers_discard,
         ])
         .setup(|app| {
+            use tauri::Manager;
+            app.manage(watchers::commands::WatcherState::new(app.handle().clone()));
             #[cfg(windows)]
             {
-                use tauri::Manager;
                 if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
                     webview::configure(&window, LOCK_DOWN_WEBVIEW)?;
                 }
             }
-            #[cfg(not(windows))]
-            let _ = app;
             Ok(())
         })
         .run(tauri::generate_context!())

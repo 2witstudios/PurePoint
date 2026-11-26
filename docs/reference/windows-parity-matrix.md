@@ -78,14 +78,14 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/DaemonWorkspaceService.swift` | 73 | `ui/src/services/workspaceService.ts` | WIN-6.0 | todo | — |
 | `Services/FileIOService.swift` | 175 | `src-tauri/src/git/file_io.rs`, `ui/src/services/fileIO.ts` | WIN-8.5 | todo | — |
 | `Services/FileIndex.swift` | 52 | `src-tauri/src/files/index.rs`, `ui/src/services/fileIndex.ts` | WIN-6.6 | ported | — |
-| `Services/FileTreeWatcher.swift` | 96 | `src-tauri/src/watchers/file_tree.rs` | WIN-5.6 | todo | — |
+| `Services/FileTreeWatcher.swift` | 96 | `src-tauri/src/watchers/file_tree.rs` | WIN-5.6 | ported | One recursive `notify` watch per root (not one source per expanded dir), skipping `FileTreeState` hidden names; `file-tree-changed {root, paths}` via `ui/src/services/watchers.ts` |
 | `Services/GitService.swift` | 891 | `src-tauri/src/git/{service,review,pr,patch,runner,model,commands}.rs`, `ui/src/services/git.ts` | WIN-8.1 | ported | — |
 | `Services/HotkeyMonitor+iOS.swift` | 136 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/HotkeyMonitor.swift` | 49 | `ui/src/services/hotkeys.ts` (DOM key handling) | WIN-7.6 | todo | — |
 | `Services/MachineConnection+iOS.swift` | 380 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/MachineConnection.swift` | 650 | `src-tauri/src/daemon/machine.rs` | WIN-8.14 | todo | — |
-| `Services/MachineRegistryWatcher.swift` | 146 | `src-tauri/src/watchers/machine_registry.rs` | WIN-5.6 | todo | — |
-| `Services/ManifestWatcher.swift` | 116 | `src-tauri/src/watchers/manifest.rs` | WIN-5.6 | todo | — |
+| `Services/MachineRegistryWatcher.swift` | 146 | `src-tauri/src/watchers/machine_registry.rs` | WIN-5.6 | ported | Watches the parent dir by name (no re-open after rename), 1 s retry while absent; `machines-changed` |
+| `Services/ManifestWatcher.swift` | 116 | `src-tauri/src/watchers/manifest.rs` | WIN-5.6 | ported | Watches `.pu` by name, 50 ms debounce, one event per rename burst; `manifest-changed {projectRoot}`; WIN-3.13 release in `watchers/mod.rs` |
 | `Services/MarkdownHTMLRenderer.swift` | 245 | `ui/src/services/markdownHtml.ts` | WIN-8.6 | todo | — |
 | `Services/NSView+Constraints+iOS.swift` | 18 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/NSView+Constraints.swift` | 18 | `ui/src/views/shell/layout.css` (CSS layout replaces Auto Layout pinning) | WIN-7.1 | todo | — |
@@ -109,7 +109,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/TranscriptParser.swift` | 222 | `src-tauri/src/conversations/transcript.rs` | WIN-8.12 | ported | — |
 | `Services/UnixSocketTransport.swift` | 204 | `src-tauri/src/daemon/client.rs` (pu-transport named pipe) | WIN-6.0 | todo | — |
 | `Services/WorkspaceService.swift` | 13 | `ui/src/services/workspaceService.ts` | WIN-6.0 | todo | — |
-| `Services/WorktreeWatcher.swift` | 69 | `src-tauri/src/watchers/worktree.rs` | WIN-5.6 | todo | — |
+| `Services/WorktreeWatcher.swift` | 69 | `src-tauri/src/watchers/worktree.rs` | WIN-5.6 | ported | Same metadata paths (`.git`, HEAD, index, packed-refs, refs), 500 ms debounce; `worktrees-changed {worktreePath}` |
 | `State/AddMachineFlow+iOS.swift` | 313 | — | — | excluded | `+iOS` file (iPad build only) |
 | `State/AgentConfigState.swift` | 243 | `ui/src/state/agentConfigState.ts` | WIN-8.7 | todo | — |
 | `State/AgentsHubState.swift` | 270 | `ui/src/state/agentsHubState.ts` | WIN-8.7 | todo | — |
