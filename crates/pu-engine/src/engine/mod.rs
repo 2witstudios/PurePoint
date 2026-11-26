@@ -213,7 +213,7 @@ impl Engine {
             native_sources: Arc::default(),
             project_registry_path: None,
             project_registry_updates: Arc::new(Mutex::new(())),
-            home: std::env::var_os("HOME").map(std::path::PathBuf::from),
+            home: pu_core::paths::home_dir().ok(),
             start_time: Instant::now(),
             pty_host: NativePtyHost::new(),
             sessions: Arc::new(Mutex::new(HashMap::new())),

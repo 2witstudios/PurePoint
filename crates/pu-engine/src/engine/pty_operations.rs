@@ -438,7 +438,9 @@ impl Engine {
             .unwrap_or_default();
 
         // Append common fallback dirs (guards against missing-binary issues)
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = pu_core::paths::home_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
         let fallbacks = [
             format!("{home}/.local/bin"),
             format!("{home}/.cargo/bin"),

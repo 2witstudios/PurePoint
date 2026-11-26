@@ -55,9 +55,7 @@ impl Manager {
 }
 
 fn home() -> Result<PathBuf, CliError> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| CliError::Other("HOME is not set".into()))
+    pu_core::paths::home_dir().map_err(|_| CliError::Other("HOME is not set".into()))
 }
 
 /// The supervisor whose service file is installed, if any.

@@ -18,7 +18,7 @@ const ENGINE_PATH_ENV: &str = "PU_ENGINE_PATH";
 pub fn find_daemon_binary() -> Result<PathBuf, String> {
     // Resolve symlinks so a linked `pu` still finds its real neighbors.
     let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok();
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = pu_core::paths::home_dir().ok();
     let explicit = std::env::var_os(ENGINE_PATH_ENV).filter(|value| !value.is_empty());
     find_daemon_binary_in(exe.as_deref(), home.as_deref(), explicit.as_deref())
 }

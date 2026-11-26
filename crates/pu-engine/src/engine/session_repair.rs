@@ -13,7 +13,7 @@ impl Engine {
     /// Claude Code stores sessions at `~/.claude/projects/{escaped-cwd}/{uuid}.jsonl`.
     /// Resolve the sessions directory for a given working directory.
     pub(super) fn sessions_dir_for(cwd: &str) -> Option<PathBuf> {
-        let home = std::env::var("HOME").ok()?;
+        let home = pu_core::paths::home_dir().ok()?;
         let escaped: String = cwd
             .chars()
             .map(|c| {

@@ -138,7 +138,7 @@ fn is_trusted_worktree_path(project_root: &str, path: &Path) -> bool {
     ) else {
         return false;
     };
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = pu_core::paths::home_dir().ok();
     trusted_worktree(path, &dir, &project, home.as_deref()).is_some()
 }
 
@@ -1196,7 +1196,7 @@ impl Engine {
     async fn fs_roots(&self) -> FsRoots {
         let projects = self.registered_projects();
         tokio::task::spawn_blocking(move || {
-            let home = std::env::var_os("HOME").map(PathBuf::from);
+            let home = pu_core::paths::home_dir().ok();
             allowed_roots(&projects, home.as_deref())
         })
         .await
@@ -1266,7 +1266,7 @@ impl Engine {
                 &path,
                 include_hidden,
                 max_entries.min(FS_LIST_MAX_ENTRIES),
-                std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+                pu_core::paths::home_dir().ok().as_deref(),
             ),
             Request::FsList {
                 path,

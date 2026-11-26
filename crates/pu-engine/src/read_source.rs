@@ -98,7 +98,8 @@ pub fn native_root(runtime: Runtime, env: &[(String, String)]) -> Result<PathBuf
             .find(|(k, _)| k == key)
             .map(|(_, v)| PathBuf::from(v))
     };
-    let home = get("HOME").ok_or(SourceError::IdentityUnavailable)?;
+    let home = pu_core::paths::home_from(|key| get(key).map(PathBuf::into_os_string))
+        .ok_or(SourceError::IdentityUnavailable)?;
     Ok(match runtime {
         Runtime::Claude => get("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
         Runtime::Codex => get("CODEX_HOME").unwrap_or_else(|| home.join(".codex")),

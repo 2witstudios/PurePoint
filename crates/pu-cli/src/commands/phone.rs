@@ -195,8 +195,8 @@ fn admin() -> Result<Admin, CliError> {
 }
 
 fn home() -> Result<PathBuf, CliError> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
+    pu_core::paths::home_dir()
+        .ok()
         .filter(|p| p.is_absolute())
         .ok_or_else(|| CliError::Other("HOME is not set to an absolute path".into()))
 }

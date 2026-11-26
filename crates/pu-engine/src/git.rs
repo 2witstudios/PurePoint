@@ -19,7 +19,10 @@ async fn git_output(args: &[&str], cwd: &Path) -> Result<std::process::Output, s
             "PATH",
             git_path(
                 std::env::var("PATH").ok().as_deref(),
-                std::env::var("HOME").ok().as_deref(),
+                pu_core::paths::home_dir()
+                    .ok()
+                    .map(|p| p.display().to_string())
+                    .as_deref(),
             ),
         )
         .stdin(std::process::Stdio::null())

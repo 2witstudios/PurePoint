@@ -21,7 +21,7 @@ fn plugin_hash() -> String {
 }
 
 fn plugin_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    let home = pu_core::paths::home_dir().ok()?;
     Some(
         PathBuf::from(home)
             .join(".claude")
@@ -31,7 +31,7 @@ fn plugin_dir() -> Option<PathBuf> {
 }
 
 fn old_skill_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    let home = pu_core::paths::home_dir().ok()?;
     Some(
         PathBuf::from(home)
             .join(".claude")
