@@ -225,7 +225,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Schedule/EventBlockView.swift` | 67 | `ui/src/views/schedule/EventBlockView.tsx` | WIN-8.8 | ported | — |
 | `Views/Schedule/EventPillView.swift` | 32 | `ui/src/views/schedule/EventPillView.tsx` | WIN-8.8 | ported | — |
 | `Views/Schedule/MonthCalendarView.swift` | 103 | `ui/src/views/schedule/MonthCalendarView.tsx` | WIN-8.8 | ported | — |
-| `Views/Schedule/ScheduleEventSheet.swift` | 331 | `ui/src/views/schedule/ScheduleEventSheet.tsx` | WIN-8.17 | todo | — |
+| `Views/Schedule/ScheduleEventSheet.swift` | 331 | `ui/src/views/schedule/ScheduleEventSheet.tsx`, `ui/src/views/schedule/ScheduleEventSheet.css` | WIN-8.17 | ported | — |
 | `Views/Schedule/ScheduleHeaderView.swift` | 86 | `ui/src/views/schedule/ScheduleHeaderView.tsx` | WIN-8.8 | ported | — |
 | `Views/Schedule/ScheduleListView.swift` | 162 | `ui/src/views/schedule/ScheduleListView.tsx` | WIN-8.8 | ported | — |
 | `Views/Schedule/ScheduleView.swift` | 63 | `ui/src/views/schedule/ScheduleView.tsx`, `ui/src/views/schedule/schedule.css` | WIN-8.8 | ported | — |

@@ -2,6 +2,8 @@
 //
 // The next 30 days of occurrences from the current date, grouped by day ("Today", "Tomorrow",
 // then "EEEE, MMMM d"), one row each: time, color bar, type icon, name, badge, project · target.
+// Windows addition (WIN-8.17): disabled schedules, which every calendar view hides, follow in a
+// "Disabled" section so their sheet can enable them again.
 import type { CSSProperties } from 'react';
 import { dayKey, formatDayLong, formatTime, startOfDay } from '../../model/scheduleCalendar.ts';
 import {
@@ -50,6 +52,7 @@ function EventRow({
   onClick,
 }: {
   event: ScheduleEvent;
+  /** The occurrence; null for a disabled schedule's row. */
   date: Date | null;
   onClick: () => void;
 }) {
@@ -57,7 +60,7 @@ function EventRow({
   return (
     <button
       type="button"
-      className="schedule-list-row"
+      className={`schedule-list-row${event.enabled ? '' : ' schedule-list-disabled'}`}
       data-testid="schedule-event"
       data-name={event.name}
       {...(date === null ? {} : { 'data-date': dayKey(date) })}
@@ -79,8 +82,9 @@ function EventRow({
 }
 
 export function ScheduleListView({ state }: { state: ScheduleState }) {
-  useScheduleFields(state);
+  const { events } = useScheduleFields(state);
   const groups = groupedOccurrences(state);
+  const disabled = events.filter((event) => !event.enabled);
   return (
     <div className="schedule-list" data-view="ScheduleListView">
       {groups.map((group) => (
@@ -98,6 +102,21 @@ export function ScheduleListView({ state }: { state: ScheduleState }) {
           ))}
         </section>
       ))}
+      {disabled.length > 0 && (
+        <section className="schedule-list-section">
+          <div className="schedule-list-header">Disabled</div>
+          {disabled.map((event) => (
+            <EventRow
+              key={event.id}
+              event={event}
+              date={null}
+              onClick={() => {
+                state.handleEventClick(event);
+              }}
+            />
+          ))}
+        </section>
+      )}
     </div>
   );
 }
