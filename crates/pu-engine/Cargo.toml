@@ -23,9 +23,17 @@ base64 = { workspace = true }
 notify = "8"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tempfile = "3"
+fs4 = "1.1"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["term", "signal", "process", "fs", "resource", "user"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+] }
 
 [[bin]]
 name = "pu-engine"
