@@ -173,9 +173,9 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Chat/ToolCallCardView.swift` | 54 | `ui/src/views/chat/ToolCallCardView.tsx` | WIN-9.5 | todo | — |
 | `Views/CommandPalette/CommandPalettePanel+iOS.swift` | 195 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/CommandPalette/CommandPalettePanel+iOSContent.swift` | 809 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/CommandPalette/CommandPalettePanel.swift` | 887 | `ui/src/views/palette/CommandPalettePanel.tsx` | WIN-7.5 | todo | — |
+| `Views/CommandPalette/CommandPalettePanel.swift` | 887 | `ui/src/views/palette/CommandPalettePanel.tsx`, `ui/src/views/palette/paletteStore.ts`, `ui/src/views/palette/paletteFilter.ts`, `ui/src/views/palette/openPalette.ts` (in-window overlay; entry points from AppCommands, SidebarFooter, sidebar callbacks and EmptyTabView) | WIN-7.5 | ported | — |
 | `Views/CommandPalette/CommandPaletteRowView+iOS.swift` | 92 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/CommandPalette/CommandPaletteRowView.swift` | 88 | `ui/src/views/palette/CommandPaletteRowView.tsx` | WIN-7.5 | todo | — |
+| `Views/CommandPalette/CommandPaletteRowView.swift` | 88 | `ui/src/views/palette/CommandPaletteRowView.tsx` | WIN-7.5 | ported | — |
 | `Views/DaemonErrorBanner.swift` | 83 | `ui/src/views/shell/DaemonErrorBanner.tsx`, `ui/src/views/shell/ShellBanners.tsx` | WIN-7.1 | ported | — |
 | `Views/Detail/CoreTextBodyView+iOS.swift` | 290 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Detail/CoreTextLayout+iOS.swift` | 252 | — | — | excluded | `+iOS` file (iPad build only) |

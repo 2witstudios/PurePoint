@@ -20,6 +20,7 @@ function deps(): AppActionDeps {
     focusSidebar: vi.fn(),
     focusContent: vi.fn(),
     closeWindow: vi.fn(),
+    newAgent: vi.fn(),
     checkForUpdates: vi.fn(),
   };
 }
@@ -67,6 +68,8 @@ describe('app actions', () => {
     actions.focusSidebar();
     actions.exit();
     actions.checkForUpdates();
+    actions.newAgent();
+    expect(d.newAgent).toHaveBeenCalledOnce();
     expect(d.checkForUpdates).toHaveBeenCalledOnce();
     actions.openProject();
     expect(d.openProject).toHaveBeenCalledOnce();
@@ -85,6 +88,6 @@ describe('app actions', () => {
       expect(actions[command as keyof typeof PENDING_ACTIONS]).toBe(stub);
       stub();
     }
-    expect(PENDING_ACTIONS.newAgent.name).toBe('newAgent');
+    expect(PENDING_ACTIONS.toggleChatSidebar.name).toBe('toggleChatSidebar');
   });
 });

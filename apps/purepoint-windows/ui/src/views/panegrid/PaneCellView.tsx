@@ -8,8 +8,8 @@
 // Differences from Swift:
 // - The file navigator (`FilePaneView`) is WIN-8.4/8.5 and Point Guard's chat surface is WIN-9.x;
 //   their tabs show placeholders naming those views.
-// - The empty tab's New Agent button and the palette a split or New Tab opens are the command
-//   palette's (WIN-7.5): `openEmptyTabPalette` is its named stub.
+// - The empty tab's New Agent button, and the tab a split or New Tab creates, open the command
+//   palette (views/palette/openPalette.ts `openEmptyTabPalette`).
 // - While a tab is dragged, the content is covered by a drop overlay: the centre appends the tab
 //   to this pane, an edge splits it off on that side (tabDrag.ts).
 import { type DragEvent, useEffect, useState } from 'react';
@@ -18,6 +18,7 @@ import { paneActiveTab } from '../../model/workspace.ts';
 import type { WorkspaceRegistry } from '../../state/workspaceRegistry.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { ScreenPlaceholder } from '../detail/placeholders.tsx';
+import { openEmptyTabPalette } from '../palette/openPalette.ts';
 import { useAppState } from '../shell/appContext.ts';
 import { TerminalPane } from '../terminal/TerminalPane.tsx';
 import { PaneTabBar } from './PaneTabBar.tsx';
@@ -28,14 +29,6 @@ import {
   isTabDrag,
   useTabDrag,
 } from './tabDrag.ts';
-
-/**
- * WIN-7.5: open the command palette to fill an empty tab (Swift `EmptyTabView.openCommandPalette`:
- * spawn an agent into the tab or open a file in it). A named no-op until the palette lands.
- */
-export const openEmptyTabPalette: (workspaceId: string, surfaceId: number) => void = () => {
-  // Pending WIN-7.5.
-};
 
 export interface PaneCellViewProps {
   workspaceId: string;
@@ -142,13 +135,14 @@ function EmptyTabView({
   surfaceId: number;
   registry: WorkspaceRegistry;
 }) {
+  const app = useAppState();
   const pending = useStore(registry.store, (state) => state.pendingPaletteSurfaceId);
   // A split or New Tab marks the tab it created; that tab opens the palette once it is on screen.
   useEffect(() => {
     if (pending !== surfaceId) return;
     registry.markPendingPalette(null);
-    openEmptyTabPalette(workspaceId, surfaceId);
-  }, [pending, registry, surfaceId, workspaceId]);
+    openEmptyTabPalette(app, workspaceId, surfaceId);
+  }, [app, pending, registry, surfaceId, workspaceId]);
 
   return (
     <div className="pane-empty-tab" data-testid="pane-empty-tab">
@@ -159,7 +153,7 @@ function EmptyTabView({
         type="button"
         className="pane-empty-tab-button"
         onClick={() => {
-          openEmptyTabPalette(workspaceId, surfaceId);
+          openEmptyTabPalette(app, workspaceId, surfaceId);
         }}
       >
         New Agent{'…'}

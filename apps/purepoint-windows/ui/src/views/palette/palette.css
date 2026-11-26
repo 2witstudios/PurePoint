@@ -1,0 +1,217 @@
+/*
+ * The command palette (WIN-7.5): CommandPalettePanel.swift's 500px panel with a 12px radius and a
+ * shadow, a 16px search field over a hairline, 44px rows highlighted with the accent at 15%, and
+ * the naming and prompt steps. The panel material is the menu background (views/shell/layout.css).
+ */
+:root {
+  --palette-accent-highlight: rgba(0, 103, 192, 0.15); /* controlAccentColor at 0.15 */
+  --palette-field-background: #ffffff; /* NSColor.textBackgroundColor */
+  --palette-field-border: rgba(0, 0, 0, 0.16);
+  --palette-focus-ring: #0067c0;
+  --palette-tertiary-text: rgba(0, 0, 0, 0.26); /* tertiaryLabelColor */
+  --palette-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+
+:root[data-theme='dark'] {
+  --palette-accent-highlight: rgba(76, 194, 255, 0.15);
+  --palette-field-background: #1e1e1e;
+  --palette-field-border: rgba(255, 255, 255, 0.14);
+  --palette-focus-ring: #4cc2ff;
+  --palette-tertiary-text: rgba(255, 255, 255, 0.25);
+  --palette-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --palette-accent-highlight: rgba(76, 194, 255, 0.15);
+    --palette-field-background: #1e1e1e;
+    --palette-field-border: rgba(255, 255, 255, 0.14);
+    --palette-focus-ring: #4cc2ff;
+    --palette-tertiary-text: rgba(255, 255, 255, 0.25);
+    --palette-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* Transparent: it only catches the mouse-down that dismisses the panel. */
+.palette-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+}
+
+/* Centred, its top where a full-height (380px) panel 60px above the middle would start. */
+.palette-panel {
+  position: absolute;
+  left: 50%;
+  top: max(8px, calc(50% - 250px));
+  width: min(500px, calc(100% - 32px));
+  max-height: 380px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  border: 1px solid var(--menu-border);
+  background: var(--menu-background);
+  box-shadow: var(--palette-shadow);
+  color: var(--pp-app-text);
+  font-family: var(--pp-font-ui);
+  overflow: hidden;
+}
+
+.palette-search {
+  flex: none;
+  height: 24px;
+  margin: 16px 16px 12px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: 16px var(--pp-font-ui);
+}
+
+.palette-search::placeholder,
+.palette-name-field::placeholder,
+.palette-prompt::placeholder {
+  color: var(--palette-tertiary-text);
+}
+
+.palette-separator {
+  flex: none;
+  height: 1px;
+  background: var(--menu-border);
+}
+
+.palette-list {
+  flex: 1;
+  min-height: 44px;
+  margin: 4px 0 8px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 6px;
+  cursor: default;
+  user-select: none;
+}
+
+.palette-row[data-highlighted='true'] {
+  background: var(--palette-accent-highlight);
+}
+
+.palette-row-icon {
+  flex: none;
+}
+
+.palette-row-text {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.palette-row-name {
+  flex: none;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.palette-row-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--secondary-text);
+}
+
+.palette-row-badge {
+  flex: none;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--palette-tertiary-text);
+}
+
+.palette-item-phase {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.palette-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+}
+
+.palette-item-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.palette-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.palette-name-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--secondary-text);
+}
+
+.palette-name-field,
+.palette-prompt {
+  box-sizing: border-box;
+  border: 1px solid var(--palette-field-border);
+  border-radius: 6px;
+  outline: none;
+  background: var(--palette-field-background);
+  color: inherit;
+}
+
+.palette-name-field {
+  height: 24px;
+  padding: 0 8px;
+  font: 14px var(--pp-font-ui);
+}
+
+.palette-name-field:focus,
+.palette-prompt:focus {
+  border-color: var(--palette-focus-ring);
+  box-shadow: 0 0 0 1px var(--palette-focus-ring);
+}
+
+.palette-name-note {
+  font: 11px var(--pp-font-mono);
+  color: var(--palette-tertiary-text);
+}
+
+.palette-prompt {
+  height: 60px;
+  max-height: 120px;
+  margin-top: 16px;
+  padding: 6px 8px;
+  resize: none;
+  font: 16px var(--pp-font-ui);
+}
+
+.palette-name + .palette-prompt {
+  margin-top: 12px;
+}
+
+.palette-prompt-hint {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--secondary-text);
+}

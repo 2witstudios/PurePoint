@@ -9,7 +9,7 @@
 // app menu, which Windows has no counterpart for), View (the sidebar toggles), Navigation, Panes,
 // Tabs, and Help (Check for Updates, WIN-10.3). Every command dispatches to a named app action; the
 // actions whose screens are later leaves exist as named no-ops (`PENDING_ACTIONS`) until those
-// leaves land.
+// leaves land. New Agent opens the command palette (views/palette/openPalette.ts, WIN-7.5).
 
 import {
   type HotkeyAction,
@@ -19,7 +19,7 @@ import {
   displayString,
   isHotkeyAction,
 } from '../../model/keyBinding.ts';
-import type { SidebarNavItem, SidebarSelection } from '../../model/sidebarItem.ts';
+import type { SidebarNavItem } from '../../model/sidebarItem.ts';
 
 /** Every menu command: the hotkey actions plus the menu-only ones. */
 export type AppCommand = HotkeyAction | 'exit' | 'checkForUpdates';
@@ -148,6 +148,8 @@ export interface AppActionDeps {
   focusSidebar: () => void;
   focusContent: () => void;
   closeWindow: () => void;
+  /** New Agent…: the command palette (Swift `showNewAgentPalette`, WIN-7.5). */
+  newAgent: () => void;
   /** Check for Updates… (Swift `CheckForUpdatesViewModel.checkForUpdates`, WIN-10.3). */
   checkForUpdates: () => void;
   /** The pane grid's split, focus and tab commands (views/panegrid/paneCommands.ts). */
@@ -187,28 +189,6 @@ const noPaneActions = Object.fromEntries(
 
 // Commands whose screens are later leaves. Each is a named no-op until its leaf replaces it.
 
-/**
- * What the command palette opens for (Swift `onShowCommandPalette`'s project, selection and
- * whether worktree variants are offered). Null: the palette's own default (Swift `activeProject`).
- */
-export interface CommandPaletteRequest {
-  readonly projectId: string;
-  readonly selection: SidebarSelection | null;
-  readonly includeWorktree: boolean;
-}
-
-/**
- * WIN-7.5: open the command palette (Swift `CommandPalettePanel.requestOpen` + `show`). The
- * sidebar's footer New button and its rows' add buttons call it.
- */
-export const openCommandPalette: (request: CommandPaletteRequest | null) => void = () => {
-  // Pending WIN-7.5.
-};
-
-/** WIN-7.5: the command palette (Swift `showNewAgentPalette`). */
-function newAgent(): void {
-  // Pending WIN-7.5.
-}
 /** WIN-9.x: the Point Guard chat sidebar (Swift `.toggleChatSidebar` notification). */
 function toggleChatSidebar(): void {
   // Pending the chat sidebar leaf.
@@ -216,7 +196,6 @@ function toggleChatSidebar(): void {
 
 /** The named no-ops, by command; exported so tests can tell stubs from real actions. */
 export const PENDING_ACTIONS = {
-  newAgent,
   toggleChatSidebar,
 } as const satisfies Partial<AppActions>;
 
@@ -224,6 +203,9 @@ export function createAppActions(deps: AppActionDeps): AppActions {
   return {
     ...PENDING_ACTIONS,
     ...(deps.pane ?? noPaneActions),
+    newAgent: () => {
+      deps.newAgent();
+    },
     settings: () => {
       deps.showSettings();
     },
