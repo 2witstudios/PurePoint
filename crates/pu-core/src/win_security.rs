@@ -184,7 +184,9 @@ pub fn private_descriptor(is_dir: bool) -> io::Result<SecurityDescriptor> {
 
 /// Replace an open file's or directory's DACL with the owner-only DACL. The
 /// handle needs WRITE_DAC; no path is resolved, so no link is followed.
-pub fn set_private_dacl_handle(handle: HANDLE, is_dir: bool) -> io::Result<()> {
+pub fn set_private_dacl_handle(file: &std::fs::File, is_dir: bool) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    let handle = file.as_raw_handle() as HANDLE;
     let sd = private_descriptor(is_dir)?;
     let dacl = sd_dacl(&sd.0)?;
     // SAFETY: handle is live; dacl points into sd which outlives the call.

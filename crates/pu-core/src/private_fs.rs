@@ -308,7 +308,7 @@ mod imp {
                 format!("{} exists and is not a directory", dir.display()),
             ));
         }
-        sec::set_private_dacl_handle(raw(&handle), true)
+        sec::set_private_dacl_handle(&handle, true)
     }
 
     /// A new file is created with the private DACL; an existing one (open
@@ -327,7 +327,7 @@ mod imp {
             if by_handle(&file)?.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
                 return Err(reparse_refused(path));
             }
-            sec::set_private_dacl_handle(raw(&file), false)?;
+            sec::set_private_dacl_handle(&file, false)?;
         }
         Ok(file)
     }
