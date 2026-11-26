@@ -12,6 +12,8 @@ on:
       - "clippy.toml"
       - "deny.toml"
       - ".github/workflows/rust.yml"
+      - "scripts/windows-smoke.ps1"
+      - "docs/reference/cli-commands-map.csv"
   pull_request:
     paths: *rust-paths
 
@@ -85,6 +87,14 @@ jobs:
           key: windows
       - run: cargo clippy --all-targets $WINDOWS_CRATES
       - run: cargo test --all-targets $WINDOWS_CRATES
+      - run: cargo build -p pu-cli -p pu-engine
+      # End-to-end CLI run against a real daemon under a temp HOME (WIN-4.6).
+      - name: CLI smoke run
+        shell: pwsh
+        run: >-
+          ./scripts/windows-smoke.ps1 -Agent terminal
+          -PuPath "$env:CARGO_TARGET_DIR/debug/pu.exe"
+          -EnginePath "$env:CARGO_TARGET_DIR/debug/pu-engine.exe"
 
   linux-musl:
     name: Static Linux build
