@@ -107,7 +107,13 @@ pub enum PhoneAction {
     },
 }
 
+/// Shown for every `pu phone` subcommand on Windows until WIN-9.2.
+pub const WINDOWS_UNAVAILABLE: &str = "pu phone is not available on Windows yet";
+
 pub async fn run(action: PhoneAction) -> Result<(), CliError> {
+    if cfg!(windows) {
+        return Err(CliError::Other(WINDOWS_UNAVAILABLE.into()));
+    }
     if !cfg!(target_os = "linux") {
         return Err(CliError::Other(
             "`pu phone` runs Point Guard on headless Linux hosts. On a Mac, use the PurePoint app: Point Guard → Connect phone."
@@ -243,7 +249,7 @@ fn current_payload() -> Result<(PathBuf, PathBuf), CliError> {
                 path.display()
             ))
         })?;
-        // WIN-4.5: check the payload file's owner SID and DACL instead.
+        // WIN-9.2: check the payload file's owner SID and DACL instead.
         #[cfg(windows)]
         {
             let _ = meta;
@@ -337,7 +343,7 @@ fn linger_enabled() -> bool {
     // SAFETY: getuid has no preconditions.
     #[cfg(unix)]
     let uid = unsafe { libc::getuid() };
-    // WIN-4.5: loginctl linger has no Windows counterpart.
+    // WIN-9.2: loginctl linger has no Windows counterpart.
     #[cfg(windows)]
     let uid: u32 = 0;
     Command::new("loginctl")
@@ -533,7 +539,7 @@ fn run_foreground(port: u16) -> Result<(), CliError> {
         }
     }
     // SAFETY: umask has no preconditions; the bridge also sets modes explicitly.
-    // WIN-4.5: Windows has no umask; the bridge must set owner-only ACLs itself.
+    // WIN-9.2: Windows has no umask; the bridge must set owner-only ACLs itself.
     #[cfg(unix)]
     unsafe {
         libc::umask(0o077);
@@ -720,7 +726,7 @@ async fn pair(ttl: u32, text: bool) -> Result<(), CliError> {
 }
 
 /// Stand-in so the pairing wait compiles.
-// WIN-4.5: end the wait on Ctrl-C / console close.
+// WIN-9.2: end the wait on Ctrl-C / console close.
 #[cfg(windows)]
 struct Signals;
 
@@ -827,7 +833,7 @@ impl Drop for RevokeGuard<'_> {
 
 #[cfg(windows)]
 fn terminal_columns() -> Option<usize> {
-    // WIN-4.5: GetConsoleScreenBufferInfo for the console width.
+    // WIN-9.2: GetConsoleScreenBufferInfo for the console width.
     None
 }
 
@@ -844,7 +850,7 @@ fn terminal_columns() -> Option<usize> {
 /// Read one line without echo when stdin is a terminal.
 #[cfg(windows)]
 fn read_secret(prompt: &str) -> Result<String, CliError> {
-    // WIN-4.5: turn console echo off (SetConsoleMode) while reading.
+    // WIN-9.2: turn console echo off (SetConsoleMode) while reading.
     read_line(prompt)
 }
 

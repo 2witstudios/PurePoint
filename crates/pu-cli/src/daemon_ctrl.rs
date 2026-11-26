@@ -218,7 +218,16 @@ pub enum HealthProbe {
 
 pub async fn probe_daemon_health(socket: &Path) -> HealthProbe {
     let probe = crate::client::send_request(socket, &Request::Health);
-    match tokio::time::timeout(HEALTH_PROBE_TIMEOUT, probe).await {
+    // A relayed probe pays for an ssh handshake first.
+    #[cfg(windows)]
+    let limit = if crate::machine_target::relay_for(socket).is_some() {
+        crate::machine_target::RELAY_HEALTH_TIMEOUT
+    } else {
+        HEALTH_PROBE_TIMEOUT
+    };
+    #[cfg(unix)]
+    let limit = HEALTH_PROBE_TIMEOUT;
+    match tokio::time::timeout(limit, probe).await {
         Ok(Ok(Response::HealthReport {
             protocol_version, ..
         })) if protocol_version == PROTOCOL_VERSION => HealthProbe::Healthy,
