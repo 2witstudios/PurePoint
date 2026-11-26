@@ -965,16 +965,24 @@ mod tests {
         assert_eq!(order, vec![c, b, a]);
     }
 
+    /// `unix` as an absolute path on this platform: as written on Unix, on
+    /// drive `C:` on Windows (where `/a` has no drive and is not absolute).
+    fn absolute(unix: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{}", unix.replace('/', "\\"))
+        } else {
+            unix.to_owned()
+        }
+    }
+
     #[tokio::test]
     async fn given_an_existing_registry_file_should_load_in_its_stored_order() {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("registry.json");
-        std::fs::write(&path, br#"["/b/project", "/a/project", "/b/project"]"#).unwrap();
+        let (a, b) = (absolute("/a/project"), absolute("/b/project"));
+        std::fs::write(&path, serde_json::to_vec(&[&b, &a, &b]).unwrap()).unwrap();
         let engine = Engine::with_project_registry(path).unwrap();
-        assert_eq!(
-            engine.registered_projects(),
-            vec!["/b/project", "/a/project"]
-        );
+        assert_eq!(engine.registered_projects(), vec![b, a]);
     }
 
     #[tokio::test]
@@ -1157,7 +1165,12 @@ mod tests {
         let project = tmp.path().canonical().unwrap().join("project");
         let project = project.to_string_lossy().into_owned();
         let path = tmp.path().join("registry.json");
-        std::fs::write(&path, serde_json::to_vec(&["/", project.as_str()]).unwrap()).unwrap();
+        let filesystem_root = absolute("/");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&[filesystem_root.as_str(), project.as_str()]).unwrap(),
+        )
+        .unwrap();
 
         let engine = Engine::with_project_registry(path.clone()).unwrap();
         assert_eq!(engine.registered_projects(), vec![project.clone()]);
@@ -1358,7 +1371,9 @@ mod tests {
             .await
             .unwrap();
         drop(handle);
-        tokio::time::timeout(Duration::from_secs(5), async {
+        // The shell reads the typed-ahead `exit` once started; pwsh can take
+        // several seconds to start when the suite loads the machine.
+        tokio::time::timeout(Duration::from_secs(30), async {
             while exit.borrow_and_update().is_none() {
                 exit.changed().await.unwrap();
             }

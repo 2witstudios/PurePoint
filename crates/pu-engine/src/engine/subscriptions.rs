@@ -318,7 +318,10 @@ mod natural_exit_tests {
             .spawn(SpawnConfig {
                 command: command.into(),
                 args: args.iter().map(|a| a.to_string()).collect(),
+                #[cfg(unix)]
                 cwd: "/tmp".into(),
+                #[cfg(windows)]
+                cwd: std::env::temp_dir().display().to_string(),
                 env: vec![],
                 env_remove: vec![],
                 cols: 80,
@@ -403,7 +406,10 @@ mod natural_exit_tests {
     #[tokio::test]
     async fn given_agent_exited_before_shutdown_with_watcher_pending_should_record_broken() {
         let engine = Engine::new();
+        #[cfg(unix)]
         let handle = spawn_process(&engine, "/usr/bin/true", &[]).await;
+        #[cfg(windows)]
+        let handle = spawn_process(&engine, "cmd", &["/d", "/c", "exit 0"]).await;
         let pid = handle.pid;
         let exit_rx = handle.exit_rx.clone();
         let tmp = project_with(agent("ag-1", Some(pid), false));

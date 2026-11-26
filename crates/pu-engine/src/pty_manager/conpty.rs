@@ -696,6 +696,21 @@ fn command_line(program: &Path, args: &[String], env: &[(String, String)]) -> io
         }
         return Ok(format!("\"{}\" /d /s /c \"{inner}\"", comspec.display()));
     }
+    // A script for cmd.exe itself (`shell_command_args`): cmd parses its own
+    // command line, so the script goes inside one pair of quotes as written
+    // (`/s` strips them). CRT `\"` escaping would reach cmd literally.
+    if ext == "exe"
+        && program
+            .file_stem()
+            .is_some_and(|s| s.eq_ignore_ascii_case("cmd"))
+        && let [d, s, c, script] = args
+        && [d, s, c].map(String::as_str) == ["/d", "/s", "/c"]
+    {
+        if script.contains(['\r', '\n', '\0']) {
+            return Err(invalid_arg("a cmd.exe script contains a newline or NUL"));
+        }
+        return Ok(format!("\"{}\" /d /s /c \"{script}\"", program.display()));
+    }
     msvc_command_line(program, args)
 }
 
@@ -898,6 +913,60 @@ mod tests {
             )
         );
         assert!(command_line(&shim, &["two\nlines".into()], &e).is_err());
+    }
+
+    #[test]
+    fn given_cmd_script_should_pass_it_verbatim_inside_d_s_c_quotes() {
+        let cmd = Path::new(r"C:\Windows\System32\cmd.exe");
+        let script = r#"type "a b.txt" | findstr x"#;
+        let args: Vec<String> = ["/d", "/s", "/c", script].map(String::from).into();
+        assert_eq!(
+            command_line(cmd, &args, &[]).unwrap(),
+            format!("\"{}\" /d /s /c \"{script}\"", cmd.display())
+        );
+        let two = ["/d", "/s", "/c", "a\r\nb"].map(String::from);
+        assert!(command_line(cmd, &two, &[]).is_err());
+        // Any other cmd.exe argument list keeps CRT quoting.
+        let other = ["/d", "/c", "echo a b"].map(String::from);
+        assert_eq!(
+            command_line(cmd, &other, &[]).unwrap(),
+            format!("\"{}\" /d /c \"echo a b\"", cmd.display())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn given_cmd_script_with_quotes_and_pipe_should_run_under_conpty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a b.txt"), "pu-cmd-script-marker\r\n").unwrap();
+        let comspec =
+            std::env::var("COMSPEC").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
+        let args = crate::os::shell_command_args(&comspec, r#"type "a b.txt" | findstr marker"#);
+        let host = NativePtyHost::new();
+        let handle = host
+            .spawn(SpawnConfig {
+                command: comspec,
+                args,
+                cwd: dir.path().display().to_string(),
+                env: vec![],
+                env_remove: vec![],
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap();
+        let mut exit = handle.exit_rx.clone();
+        let code = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Some(code) = *exit.borrow_and_update() {
+                    break code;
+                }
+                exit.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("cmd script never exited");
+        assert_eq!(code, 0, "{}", screen_text(&handle));
+        assert!(screen_text(&handle).contains("pu-cmd-script-marker"));
     }
 
     #[test]
@@ -1200,6 +1269,7 @@ mod tests {
         // A stand-in that, like Claude, exits only on the second ^C.
         let dir = tempfile::tempdir().unwrap();
         let script = "[Console]::TreatControlCAsInput = $true; $n = 0; \
+            Write-Output ('pu-ctrl-c-' + 'ready'); \
             while ($true) { $k = [Console]::ReadKey($true); \
             if ($k.Key -eq 'C' -and $k.Modifiers -band 4) { $n++; Write-Output \"ctrl-c $n\"; if ($n -ge 2) { exit 0 } } }";
         let host = NativePtyHost::new();
@@ -1212,7 +1282,10 @@ mod tests {
             .await
             .unwrap();
         handle.agent_type = "claude".into();
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // A ^C before pwsh has taken it as input would end pwsh with
+        // STATUS_CONTROL_C_EXIT; pwsh can take seconds to start under load.
+        let ready = wait_for_screen(&handle, "pu-ctrl-c-ready", Duration::from_secs(30)).await;
+        assert!(ready.contains("pu-ctrl-c-ready"), "{ready}");
         let state = host.kill(&handle, Duration::from_secs(5)).await.unwrap();
         assert_eq!(state.exit_code, Some(0), "{}", screen_text(&handle));
         assert!(screen_text(&handle).contains("ctrl-c 2"));

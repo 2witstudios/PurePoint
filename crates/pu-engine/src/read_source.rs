@@ -306,11 +306,15 @@ fn codex_lsof_command(pids: &str, fields: &str) -> tokio::process::Command {
     command
 }
 
-/// Windows: the newest rollout this launch owns by creation time (see
-/// [`discover_codex_roots`]).
+/// Windows: the newest rollout this launch owns by creation time under the
+/// Codex home its environment names (see [`discover_codex_roots`]).
 #[cfg(windows)]
-pub async fn discover_codex(pid: u32, cwd: &str) -> Result<Binding, SourceError> {
-    discover_codex_roots(vec![(String::new(), pid, cwd.to_owned())])
+pub async fn discover_codex(
+    pid: u32,
+    cwd: &str,
+    home: Option<PathBuf>,
+) -> Result<Binding, SourceError> {
+    discover_codex_roots(vec![(String::new(), pid, cwd.to_owned(), home)])
         .await
         .remove("")
         .flatten()
@@ -503,37 +507,50 @@ pub(crate) async fn discover_codex_roots(
     .unwrap_or_default()
 }
 
+/// The Codex home (`CODEX_HOME`, else `~/.codex`) an agent launched with
+/// `env` writes its rollouts under. Windows discovery scans it, since there is
+/// no descriptor to follow there.
+#[cfg(windows)]
+pub fn codex_home(env: &[(String, String)]) -> Option<PathBuf> {
+    native_root(Runtime::Codex, env).ok()
+}
+
 /// Windows has no cheap open-file query (WINAPP-051), so ownership comes
 /// from time: each rollout goes to the latest launch in the same cwd that
 /// started at or before the rollout was created, and each launch takes its
-/// newest. Process start times come from `GetProcessTimes`.
+/// newest. Process start times come from `GetProcessTimes`. Each launch names
+/// the Codex home its own environment points at ([`codex_home`]); launches
+/// without one find nothing.
 #[cfg(windows)]
 pub(crate) async fn discover_codex_roots(
-    roots: Vec<(String, u32, String)>,
+    roots: Vec<(String, u32, String, Option<PathBuf>)>,
 ) -> std::collections::HashMap<String, Option<CodexCandidate>> {
     use std::collections::HashMap;
     if roots.is_empty() || roots.len() > 256 {
         return HashMap::new();
     }
     tokio::task::spawn_blocking(move || {
-        let launches: Vec<_> = roots
-            .into_iter()
-            .filter_map(|(id, pid, cwd)| Some((id, crate::win_proc::process_start_time(pid)?, cwd)))
-            .collect();
-        let Some(earliest) = launches.iter().map(|(_, since, _)| *since).min() else {
-            return HashMap::new();
-        };
-        let Ok(root) = native_root(Runtime::Codex, &crate::win_env::daemon_env()) else {
-            return HashMap::new();
-        };
-        let rollouts: Vec<_> = recent_codex_rollouts(&root.join("sessions"), earliest)
-            .into_iter()
-            .filter_map(|(path, created)| {
-                let header = first_record(&path).ok()?;
-                Some((path, created, header))
-            })
-            .collect();
-        assign_codex_rollouts(&launches, &rollouts)
+        let mut by_home: HashMap<PathBuf, Vec<_>> = HashMap::new();
+        for (id, pid, cwd, home) in roots {
+            if let (Some(home), Some(since)) = (home, crate::win_proc::process_start_time(pid)) {
+                by_home.entry(home).or_default().push((id, since, cwd));
+            }
+        }
+        let mut result = HashMap::new();
+        for (home, launches) in by_home {
+            let Some(earliest) = launches.iter().map(|(_, since, _)| *since).min() else {
+                continue;
+            };
+            let rollouts: Vec<_> = recent_codex_rollouts(&home.join("sessions"), earliest)
+                .into_iter()
+                .filter_map(|(path, created)| {
+                    let header = first_record(&path).ok()?;
+                    Some((path, created, header))
+                })
+                .collect();
+            result.extend(assign_codex_rollouts(&launches, &rollouts));
+        }
+        result
     })
     .await
     .unwrap_or_default()

@@ -65,9 +65,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     env:
-      # Crates that build natively on Windows so far; WIN leaves widen this
-      # until it covers the whole workspace (WIN-3.12, WIN-4.5).
-      WINDOWS_CRATES: -p pu-core -p pu-transport
+      # Crates whose suites pass natively on Windows so far; WIN-4.5 adds
+      # pu-cli to cover the whole workspace.
+      WINDOWS_CRATES: -p pu-core -p pu-transport -p pu-engine
     defaults:
       run:
         shell: bash

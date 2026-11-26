@@ -46,6 +46,70 @@ fn windows_shell(
         .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
 }
 
+/// Arguments that make `shell` run `script` and exit: `-c` for a POSIX shell.
+#[cfg(unix)]
+pub fn shell_command_args(_shell: &str, script: &str) -> Vec<String> {
+    vec!["-c".into(), script.into()]
+}
+
+/// Arguments for an interactive session of `shell`: a login shell (`-l`).
+#[cfg(unix)]
+pub fn interactive_shell_args(_shell: &str) -> Vec<String> {
+    vec!["-l".into()]
+}
+
+/// The command-line dialect of a Windows shell, from its file name.
+#[cfg(windows)]
+#[derive(Debug, PartialEq, Eq)]
+enum ShellKind {
+    PowerShell,
+    Cmd,
+    /// Anything else (Git Bash's `bash.exe`, `sh.exe`, ...): POSIX flags.
+    Posix,
+}
+
+#[cfg(windows)]
+fn shell_kind(shell: &str) -> ShellKind {
+    let stem = std::path::Path::new(shell)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    match stem.as_str() {
+        "pwsh" | "powershell" => ShellKind::PowerShell,
+        "cmd" => ShellKind::Cmd,
+        _ => ShellKind::Posix,
+    }
+}
+
+/// Arguments that make `shell` run `script` and exit: `-NoLogo -Command` for
+/// pwsh and Windows PowerShell, `/d /s /c` for cmd.exe (which takes no `-c`),
+/// `-c` for a POSIX shell.
+#[cfg(windows)]
+pub fn shell_command_args(shell: &str, script: &str) -> Vec<String> {
+    let flags: &[&str] = match shell_kind(shell) {
+        ShellKind::PowerShell => &["-NoLogo", "-Command"],
+        ShellKind::Cmd => &["/d", "/s", "/c"],
+        ShellKind::Posix => &["-c"],
+    };
+    flags
+        .iter()
+        .map(|f| f.to_string())
+        .chain([script.to_owned()])
+        .collect()
+}
+
+/// Arguments for an interactive session of `shell`. Windows has no login
+/// shell (WINAPP-007): pwsh and PowerShell get `-NoLogo`, cmd.exe nothing, and
+/// a POSIX shell `-l`.
+#[cfg(windows)]
+pub fn interactive_shell_args(shell: &str) -> Vec<String> {
+    match shell_kind(shell) {
+        ShellKind::PowerShell => vec!["-NoLogo".into()],
+        ShellKind::Cmd => vec![],
+        ShellKind::Posix => vec!["-l".into()],
+    }
+}
+
 /// Account name for `uid` from the passwd database.
 #[cfg(unix)]
 pub fn user_name(uid: u32) -> Option<String> {
@@ -256,6 +320,37 @@ mod tests {
             r"C:\Windows\System32\cmd.exe"
         );
         assert!(std::path::Path::new(&login_shell()).is_absolute());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn given_posix_shell_should_run_scripts_with_c_and_sessions_as_login() {
+        assert_eq!(shell_command_args("/bin/zsh", "a | b"), ["-c", "a | b"]);
+        assert_eq!(interactive_shell_args("/bin/zsh"), ["-l"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_windows_shells_should_get_their_own_script_and_session_flags() {
+        for shell in [
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\PowerShell.EXE",
+        ] {
+            assert_eq!(
+                shell_command_args(shell, "a | b"),
+                ["-NoLogo", "-Command", "a | b"]
+            );
+            assert_eq!(interactive_shell_args(shell), ["-NoLogo"]);
+        }
+        let cmd = r"C:\WINDOWS\system32\cmd.exe";
+        assert_eq!(
+            shell_command_args(cmd, "a | b"),
+            ["/d", "/s", "/c", "a | b"]
+        );
+        assert!(interactive_shell_args(cmd).is_empty());
+        let bash = r"C:\Program Files\Git\bin\bash.exe";
+        assert_eq!(shell_command_args(bash, "a | b"), ["-c", "a | b"]);
+        assert_eq!(interactive_shell_args(bash), ["-l"]);
     }
 
     #[cfg(windows)]
