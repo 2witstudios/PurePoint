@@ -63,6 +63,22 @@ async fn given_no_daemon_should_fail_to_connect() {
     assert!(connect(&endpoint(&dir)).await.is_err());
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn given_missing_home_connect_should_not_create_it_but_bind_should() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("absent").join(".pu");
+    let ep = Endpoint::for_socket(&home.join("daemon.sock")).unwrap();
+    assert!(connect(&ep).await.is_err());
+    assert!(!dir.path().join("absent").exists(), "client created a dir");
+    let _peers = spawn_echo(Listener::bind(&ep).unwrap());
+    assert!(home.is_dir());
+    // The name computed before the directory existed is the bound one.
+    let again = Endpoint::for_socket(&home.join("daemon.sock")).unwrap();
+    assert_eq!(again, ep);
+    connect(&again).await.unwrap();
+}
+
 #[tokio::test]
 async fn given_peer_hangs_up_should_report_closed_without_consuming() {
     let dir = tempfile::tempdir().unwrap();

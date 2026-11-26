@@ -47,8 +47,8 @@ pub struct Endpoint {
 impl Endpoint {
     /// The endpoint for a daemon whose socket path is `socket_path`.
     ///
-    /// On Windows this creates the socket's parent directory if needed, since
-    /// the pipe name hashes its canonical path.
+    /// On Windows the pipe name hashes the socket's canonical path; this
+    /// never creates anything (see `naming`); only [`Listener::bind`] does.
     pub fn for_socket(socket_path: &Path) -> io::Result<Self> {
         Ok(Self {
             socket_path: socket_path.to_path_buf(),

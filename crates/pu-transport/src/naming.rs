@@ -5,11 +5,14 @@
 //! per-machine socket gets its own pipe. Normalization (WIN-1.2,
 //! `docs/research/windows-ipc.md`):
 //!
-//! 1. Create the socket's parent directory if needed (canonicalization needs
-//!    an existing path, and either side may run first).
-//! 2. `dunce::canonicalize` the parent: resolves junctions, `.`/`..`, 8.3
-//!    names and returns on-disk casing, without a `\\?\` prefix.
-//! 3. Append the file name; `/` becomes `\`; uppercase a drive letter; strip
+//! 1. `dunce::canonicalize` the parent: resolves junctions, `.`/`..`, 8.3
+//!    names and returns on-disk casing, without a `\\?\` prefix. Naming never
+//!    creates anything (a client must not make directories in a home it only
+//!    connects to): when the parent does not exist yet, its nearest existing
+//!    ancestor is canonicalized and the missing components are appended as
+//!    written, which is what canonicalizing gives once `Listener::bind` has
+//!    created them.
+//! 2. Append the file name; `/` becomes `\`; uppercase a drive letter; strip
 //!    a trailing `\`. No lowercasing: canonical casing is already stable, and
 //!    lowercasing would merge distinct folders in case-sensitive directories.
 //!
@@ -28,12 +31,41 @@ pub fn normalize_socket_path(socket_path: &Path) -> io::Result<String> {
     let file = socket_path.file_name().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "socket path has no file name")
     })?;
-    std::fs::create_dir_all(parent)?;
-    let canonical = dunce::canonicalize(parent)?.join(file);
+    let canonical = canonicalize_lenient(parent)?.join(file);
     let text = canonical
         .to_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "path is not unicode"))?;
     Ok(normalize_text(text))
+}
+
+/// `dunce::canonicalize`, or for a path that does not exist yet, its nearest
+/// existing ancestor canonicalized with the rest appended textually.
+fn canonicalize_lenient(path: &Path) -> io::Result<std::path::PathBuf> {
+    match dunce::canonicalize(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        result => return result,
+    }
+    // `absolute` resolves `.`/`..` and separators textually.
+    let abs = std::path::absolute(path)?;
+    let mut missing = Vec::new();
+    let mut base = abs.as_path();
+    loop {
+        match dunce::canonicalize(base) {
+            Ok(mut canonical) => {
+                canonical.extend(missing.iter().rev());
+                return Ok(canonical);
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name.to_os_string());
+                base = parent;
+            }
+            _ => return Ok(abs),
+        }
+    }
 }
 
 fn normalize_text(text: &str) -> String {
@@ -95,6 +127,26 @@ mod tests {
         for v in variants {
             assert_eq!(pipe_name_for_socket(Path::new(&v)).unwrap(), plain, "{v}");
         }
+    }
+
+    #[test]
+    fn given_missing_parent_should_name_without_creating_and_match_after_creation() {
+        let home = tempfile::tempdir().unwrap();
+        let pu = home.path().join("new home").join(".pu");
+        let sock = pu.join("daemon.sock");
+        let before = pipe_name_for_socket(&sock).unwrap();
+        assert!(
+            !home.path().join("new home").exists(),
+            "naming created a dir"
+        );
+        let dotted = home
+            .path()
+            .join("x")
+            .join("..")
+            .join("new home/.pu/daemon.sock");
+        assert_eq!(pipe_name_for_socket(&dotted).unwrap(), before);
+        std::fs::create_dir_all(&pu).unwrap();
+        assert_eq!(pipe_name_for_socket(&sock).unwrap(), before);
     }
 
     #[test]

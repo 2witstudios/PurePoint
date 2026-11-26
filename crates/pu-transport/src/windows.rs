@@ -266,6 +266,15 @@ pub struct Listener {
 
 impl Listener {
     pub fn bind(endpoint: &Endpoint) -> io::Result<Self> {
+        // Only the server creates the socket's directory (it holds the pid
+        // file); naming it never does. The name is the same either way.
+        if let Some(parent) = endpoint
+            .socket_path()
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)?;
+        }
         let security = PipeSecurity::current_user()?;
         let next = security.create(endpoint.pipe_name(), true).map_err(|e| {
             if e.raw_os_error() == Some(ERROR_ACCESS_DENIED) {
