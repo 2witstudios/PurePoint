@@ -25,7 +25,7 @@ tauri = { version = "~2.11", features = [] }
 pu-core = { path = "../../../crates/pu-core" }
 # Daemon endpoints: the private named pipe and its server check (WIN-5.3).
 pu-transport = { path = "../../../crates/pu-transport" }
-tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `git_exec` and `fs_read` replies carry bytes as base64 (WIN-8.1).
@@ -40,6 +40,10 @@ uuid = { version = "1", features = ["v4"] }
 tauri-plugin-opener = "~2.5"
 # Point Guard runtime seal: SHA-256 of every bundled file (WIN-9.3); the version pu-core uses.
 sha2 = "0.11"
+# Point Guard chat (WIN-9.4): the bridge authenticates the v1 WebSocket by request headers a
+# page cannot set, so the backend holds the socket. Plain `ws://` to loopback only: no TLS.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 # Same versions Tauri 2.11's WebView2 runtime links, so the COM types match.
 [target.'cfg(windows)'.dependencies]

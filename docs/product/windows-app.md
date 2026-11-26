@@ -407,6 +407,14 @@ Launch environment, added to the scrubbed copy of the app's:
 
 Admin requests go over the owner pipe as `POST /admin/v1` with the bearer token from the private `admin-token`, sent only after the pipe's server is confirmed to be the owned child's pid running as this user. Tauri: commands `pointguard_status`, `pointguard_start`, `pointguard_stop`, `pointguard_restart`, `pointguard_request`, `pointguard_chat_connection`, `pointguard_validate_folder`; event `pointguard-state`.
 
+### Point Guard chat (WIN-9.4)
+
+`ui/src/state/piChat.ts` ports `PiChatModel` (macOS side) over the bridge's WebSocket v1 contract: `sync`/`send` (Send, Steer, After reply)/`stop`/`sessions`/`history`/`new`/`resume`/`answer` requests with `receipt`s, authoritative `snapshot`s ordered by epoch and revision, `editor` offers, Stop-cancelled queue items offered back for restore, and the private per-endpoint, per-session draft. Every send is saved as a submission (confirmed write) before it leaves; a lost connection, a missing receipt (35 s) or a rejected send keeps it recoverable, and a saved `Sending` receipt becomes `Delivery uncertain` after a restart.
+
+- The bridge authenticates the chat socket only by the upgrade's `Authorization: Bearer <desktop-chat-token>` and `X-PointGuard-Client-ID: <desktopClientId>` headers and refuses any `Origin`; it has no query or subprotocol credential. A page can set neither, so the backend holds the socket (`src-tauri/src/pointguard/chat.rs`, `tokio-tungstenite`, 4 MiB messages) and relays text records over a Tauri `Channel`. It connects only to `ws://127.0.0.1:<port>/v1`, the descriptor's `nativeChatURL`, which `pointGuardChatBinding` binds from WIN-9.3's `onConnection` and drops on `onDisconnect`.
+- Preferences (client ID, endpoint, drafts, cancelled IDs) are in `localStorage` as the Mac keeps them in UserDefaults; attachment drafts and submissions are owner-only files in `<app data>\PurePoint.PointGuard\{attachment-drafts,submissions}.json` (40 MiB bound).
+- Tauri: commands `pointguard_chat_open(endpoint, secret, clientId, onEvent)` → socket id, `pointguard_chat_send(socketId, text)`, `pointguard_chat_close(socketId)` (1001), `pointguard_recovery_load(name)`, `pointguard_recovery_save(name, json)`. Channel events: `{type: "message", text}`, `{type: "closed", code, reason}`.
+
 ### Remote relay (Windows client)
 
 ```

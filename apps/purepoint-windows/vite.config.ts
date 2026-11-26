@@ -7,6 +7,9 @@ const uiRoot = fileURLToPath(new URL('./ui', import.meta.url));
 // Tests read the macOS theme sources and docs/reference from outside the app (WIN-5.8).
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const outDir = fileURLToPath(new URL('./dist', import.meta.url));
+// The Point Guard chat tests run the real bridge (apps/purepoint-mobile/bridge) in-process
+// (WIN-9.4); its one package import, `ws`, resolves to this app's copy.
+const wsPackage = fileURLToPath(new URL('./node_modules/ws/wrapper.mjs', import.meta.url));
 
 // Tauri loads the dev server from a fixed port and the production bundle from
 // ../dist (see src-tauri/tauri.conf.json); keep the two in step.
@@ -35,5 +38,6 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     // Keep tokens.css real so tokens.test.ts can read it with ?raw (Vitest empties CSS by default).
     css: { include: [/tokens.css/] },
+    alias: [{ find: /^ws$/, replacement: wsPackage }],
   },
 });

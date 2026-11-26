@@ -7,18 +7,24 @@
 //! - `admin`: owner admin requests over the bridge's owner pipe.
 //! - `tailnet`: this PC's tailnet address for `PI_MOBILE_HOST` (`PointGuardTailnet.swift`).
 //! - `lifecycle`: Quit waits for Point Guard (`PointGuardApplicationDelegate.swift`).
+//! - `chat`: the chat WebSocket to the local bridge, relayed over a Tauri `Channel` (WIN-9.4).
+//! - `recovery`: the chat's private draft and submission recovery files (WIN-9.4).
 //!
 //! Tauri surface (front end: `ui/src/services/pointguard.ts`): commands `pointguard_status`,
 //! `pointguard_start`, `pointguard_stop`, `pointguard_restart`, `pointguard_request`,
 //! `pointguard_chat_connection` and `pointguard_validate_folder`, and the `pointguard-state`
-//! event carrying a [`service::Snapshot`] on every change.
+//! event carrying a [`service::Snapshot`] on every change. The chat (front end
+//! `ui/src/services/pointGuardChat.ts`) adds `pointguard_chat_open`, `pointguard_chat_send`,
+//! `pointguard_chat_close`, `pointguard_recovery_load` and `pointguard_recovery_save`.
 //!
 //! The app starts Point Guard at launch, as the Mac does. A debug build starts it only with
 //! `PUREPOINT_POINTGUARD_DEV=1` (then from the repo, see `runtime`), so development runs
 //! and the e2e suite never start a bridge against the real profile.
 
 pub mod admin;
+pub mod chat;
 pub mod lifecycle;
+pub mod recovery;
 pub mod runtime;
 pub mod seal;
 pub mod service;

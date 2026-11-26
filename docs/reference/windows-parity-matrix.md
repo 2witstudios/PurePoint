@@ -37,7 +37,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/Machine.swift` | 278 | `ui/src/model/machine.ts` | WIN-8.14 | todo | — |
 | `Models/ManifestModel.swift` | 100 | `ui/src/protocol/generated/` (replaced by generated types; Swift's lenient decoding in `ui/src/services/daemonConnection.ts`) | WIN-6.0 | ported | — |
 | `Models/PRModel.swift` | 33 | `ui/src/model/pr.ts` (`PullRequestInfo` from `ui/src/services/git.ts`) | WIN-6.0 | ported | — |
-| `Models/PiChatDomain.swift` | 368 | `ui/src/model/piChatDomain.ts` | WIN-9.4 | todo | — |
+| `Models/PiChatDomain.swift` | 368 | `ui/src/model/piChatDomain.ts`, `ui/src/services/pointGuardChat.ts` (recovery store, coalesced writer) | WIN-9.4 | ported | — |
 | `Models/PointGuardPlays.swift` | 219 | `ui/src/model/pointGuardPlays.ts` | WIN-8.13 | todo | — |
 | `Models/PointGuardRuntime.swift` | 96 | `ui/src/model/pointGuardRuntime.ts` | WIN-8.13 | todo | — |
 | `Models/ProjectKey.swift` | 159 | `ui/src/model/projectKey.ts` | WIN-6.5 | ported | — |
@@ -126,7 +126,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/KeyBindingState.swift` | 138 | `ui/src/state/keyBindingStore.ts` | WIN-6.7 | ported | — |
 | `State/MachineState+OpenProject.swift` | 67 | `ui/src/state/machineStateOpenProject.ts` | WIN-8.14 | todo | — |
 | `State/MachineState.swift` | 515 | `ui/src/state/machineState.ts` | WIN-8.14 | todo | — |
-| `State/PiChatModel.swift` | 827 | `ui/src/state/piChat.ts` | WIN-9.4 | todo | — |
+| `State/PiChatModel.swift` | 827 | `ui/src/state/piChat.ts`, `src-tauri/src/pointguard/chat.rs` (WebSocket held by the backend), `src-tauri/src/pointguard/recovery.rs` | WIN-9.4 | ported | — |
 | `State/PointGuardServiceModel.swift` | 516 | `src-tauri/src/pointguard/service.rs`, `src-tauri/src/pointguard/runtime.rs`, `src-tauri/src/pointguard/admin.rs`, `ui/src/services/pointguard.ts`, `ui/src/state/pointGuardService.ts` | WIN-9.3 | ported | — |
 | `State/ProjectState.swift` | 748 | `ui/src/state/projectState.ts`, `ui/src/state/remoteLayoutSaver.ts`, `ui/src/state/cachedWorkspacePersistence.ts`, `ui/src/services/fs.ts`, `src-tauri/src/files/text.rs` | WIN-6.0 | ported | — |
 | `State/RemoteFolderBrowser+iOS.swift` | 242 | — | — | excluded | `+iOS` file (iPad build only) |
