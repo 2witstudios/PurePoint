@@ -105,6 +105,13 @@ impl PeerIdentity {
     }
 }
 
+/// The Unix peer rule: a peer is the daemon's own user only when its uid is
+/// known and equals the daemon's effective uid. Root peers are not exempt.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) fn same_user(peer_uid: Option<u32>, euid: u32) -> bool {
+    peer_uid == Some(euid)
+}
+
 /// Who serves the client end `pipe` of a named pipe: its process id and
 /// whether it runs as this user. Pipe names are global, so a client checks
 /// this before sending a credential to a pipe it did not create.

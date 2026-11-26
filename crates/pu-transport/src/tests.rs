@@ -150,6 +150,14 @@ async fn given_pid_file_naming_this_process_should_connect() {
     connect(&ep).await.unwrap();
 }
 
+#[test]
+fn given_peer_uid_should_allow_only_the_daemon_user() {
+    assert!(same_user(Some(501), 501));
+    assert!(!same_user(Some(502), 501));
+    assert!(!same_user(Some(0), 501), "root is not the daemon user");
+    assert!(!same_user(None, 501), "unknown peer");
+}
+
 #[cfg(windows)]
 #[test]
 fn given_server_token_trust_should_refuse_lower_integrity_and_sandboxed_servers() {
