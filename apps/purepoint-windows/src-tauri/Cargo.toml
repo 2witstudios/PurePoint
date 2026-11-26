@@ -44,6 +44,11 @@ sha2 = "0.11"
 # page cannot set, so the backend holds the socket. Plain `ws://` to loopback only: no TLS.
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# Pairing secret in Credential Manager (WIN-9.7, REQ-WINAPP-075). MIT OR Apache-2.0; 3.x keeps
+# the plain `Entry` API on the Rust 1.89 toolchain (4.x moved to keyring-core stores).
+keyring = { version = "3.6", features = ["windows-native"] }
+# Pairing addresses (WIN-9.7); the version Tauri already locks.
+url = "2.5"
 
 # Same versions Tauri 2.11's WebView2 runtime links, so the COM types match.
 [target.'cfg(windows)'.dependencies]

@@ -127,6 +127,7 @@ describe('PiChatModel connection', () => {
     const chat = new PiChatModel({
       transport: bridge.transport,
       recovery: memoryRecoveryStore(),
+      secrets: memorySecretStore(),
       preferences: memoryPreferences(),
     });
     const hooks = pointGuardChatBinding(chat);
@@ -146,6 +147,7 @@ describe('PiChatModel connection', () => {
     const chat = new PiChatModel({
       transport: bridge.transport,
       recovery: memoryRecoveryStore(),
+      secrets: memorySecretStore(),
       preferences: memoryPreferences(),
     });
     await chat.bindManagedConnection(ENDPOINT, SECRET, 'not-a-uuid');
@@ -163,6 +165,7 @@ describe('PiChatModel connection', () => {
     const chat = new PiChatModel({
       transport: bridge.transport,
       recovery: memoryRecoveryStore(),
+      secrets: memorySecretStore(),
       preferences: memoryPreferences(),
       retryUnitMs: 5,
     });

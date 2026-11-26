@@ -70,6 +70,28 @@ export const tauriChatTransport: PiChatTransport = {
   },
 };
 
+// MARK: - Pairing secrets (the Swift PiPairingSecret)
+
+/** Where the pairing secret for an endpoint lives (`services/pairingSecret.ts`). */
+export interface PiSecretStore {
+  /** The saved secret, or '' when there is none. */
+  read(endpoint: string): Promise<string>;
+  save(secret: string, endpoint: string): Promise<void>;
+}
+
+/** Secrets kept for this run only, for previews and tests. */
+export function memorySecretStore(): PiSecretStore & { secrets: Map<string, string> } {
+  const secrets = new Map<string, string>();
+  return {
+    secrets,
+    read: (endpoint) => Promise.resolve(secrets.get(endpoint) ?? ''),
+    save: (secret, endpoint) => {
+      secrets.set(endpoint, secret);
+      return Promise.resolve();
+    },
+  };
+}
+
 // MARK: - Recovery files (the Swift PiLocalRecoveryStore)
 
 export type PiRecoveryName = 'attachment-drafts' | 'submissions';

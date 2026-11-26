@@ -59,7 +59,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Platform/PlatformTypes.swift` | 28 | `ui/src/model/platformTypes.ts` | WIN-6.0 | ported | — |
 | `PurePointiPadApp.swift` | 67 | — | — | excluded | Whole-file `#if os(iOS)` (iPad app entry point) |
 | `Services/AgentSignalNotifications.swift` | 173 | `ui/src/services/notifications.ts` | WIN-7.7 | todo | — |
-| `Services/AttachmentUpload.swift` | 102 | `ui/src/services/attachmentUpload.ts` | WIN-9.7 | todo | — |
+| `Services/AttachmentUpload.swift` | 102 | `ui/src/services/attachmentUpload.ts` (Command-only paste is Ctrl-only) | WIN-9.7 | ported | — |
 | `Services/BundleSeal.swift` | 52 | `src-tauri/src/pointguard/seal.rs` (SHA-256 manifest seal; Authenticode not provisioned) | WIN-9.3 | ported | — |
 | `Services/CLIInstaller.swift` | 215 | `src-tauri/src/installer/cli.rs`, `src-tauri/src/installer/user_path.rs`, `src-tauri/src/installer/mod.rs`, `ui/src/services/installer.ts` | WIN-10.1 | ported | — |
 | `Services/CheckForUpdatesViewModel.swift` | 25 | `ui/src/services/updater.ts` (tauri-plugin-updater) | WIN-10.3 | todo | — |
@@ -90,9 +90,9 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/NSView+Constraints+iOS.swift` | 18 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/NSView+Constraints.swift` | 18 | `ui/src/views/shell/layout.css` (CSS layout replaces Auto Layout pinning) | WIN-7.1 | ported | — |
 | `Services/OpenCodeConversationIndex.swift` | 116 | `src-tauri/src/conversations/opencode.rs` | WIN-8.12 | ported | — |
-| `Services/PiAttachmentImport.swift` | 72 | `ui/src/services/attachmentImport.ts` | WIN-9.7 | todo | — |
+| `Services/PiAttachmentImport.swift` | 72 | `ui/src/services/attachmentImport.ts` (canvas JPEG pipeline; PDFs refused, no PDFKit text extraction) | WIN-9.7 | ported | — |
 | `Services/PiPairedMac+iOS.swift` | 225 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Services/PiPairingSecret.swift` | 41 | `src-tauri/src/secrets/pairing.rs` (Credential Manager) | WIN-9.7 | todo | — |
+| `Services/PiPairingSecret.swift` | 41 | `src-tauri/src/secrets/pairing.rs` (Credential Manager via `keyring`), `ui/src/services/pairingSecret.ts` | WIN-9.7 | ported | — |
 | `Services/PointGuardApplicationDelegate.swift` | 51 | `src-tauri/src/pointguard/lifecycle.rs` (main window `CloseRequested`) | WIN-9.3 | ported | — |
 | `Services/PointGuardTailnet.swift` | 81 | `src-tauri/src/pointguard/tailnet.rs` | WIN-9.3 | ported | — |
 | `Services/ProjectHost.swift` | 719 | `src-tauri/src/git/host.rs` (`GitExec` daemon client wired by WIN-5.3; directory watchers live with `watchers/` and `subscriptions/`) | WIN-8.1 | ported | — |
@@ -284,7 +284,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `AgentsHubModelsTests.swift` | all | `ui/src/model/agentsHubModels.test.ts` | WIN-8.7 | ported | — |
 | `AgentsHubStateTests.swift` | all | `ui/src/state/agentsHubState.test.ts` | WIN-8.7 | ported | — |
 | `AppLifecycleTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` (`AppActivityTests`), though WIN-6.0 lists it; nothing to port |
-| `AttachmentUploadTests.swift` | all | `ui/src/services/attachmentUpload.test.ts` | WIN-9.7 | todo | Platform-neutral cases only |
+| `AttachmentUploadTests.swift` | all | `ui/src/services/attachmentUpload.test.ts` | WIN-9.7 | ported | Platform-neutral cases only; the attach-session input case is WIN-5.4's |
 | `ChannelComposerIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `ChatStateTests.swift` | all | — | — | excluded | Tests `ChatState` (DEC-11 legacy chat) |
 | `CitadelSSHLiveTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |

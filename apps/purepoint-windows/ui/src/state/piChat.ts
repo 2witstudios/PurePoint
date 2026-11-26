@@ -13,7 +13,8 @@
 // Shape (DEC-14): published values live in a Zustand store (`chat.store`). The socket is held by
 // the backend (`services/pointGuardChat.ts`, see there for why); the managed runtime binds it
 // with `bindManagedConnection`, wired by `pointGuardChatBinding` to WIN-9.3's
-// `onConnection`/`onDisconnect` hooks. The iPad pairing paths (`#if os(iOS)`) are not ported.
+// `onConnection`/`onDisconnect` hooks. Pairing secrets are in Credential Manager (WIN-9.7,
+// `services/pairingSecret.ts`). The iPad pairing paths (`#if os(iOS)`) are not ported.
 // Windows wording: "this PC" where the Mac says "your Mac".
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
@@ -42,12 +43,14 @@ import {
   type PiSubmission,
   type PiTranscriptRow,
 } from '../model/piChatDomain';
+import { credentialManagerSecrets } from '../services/pairingSecret';
 import {
   PiCoalescedWriter,
   tauriChatTransport,
   tauriRecoveryStore,
   type PiChatTransport,
   type PiRecoveryStore,
+  type PiSecretStore,
   type PiSocket,
 } from '../services/pointGuardChat';
 import type { PointGuardChatConnection } from '../services/pointguard';
@@ -57,25 +60,7 @@ export const LOCAL_DEVICE = 'PC';
 const RECOVERY_LIMIT = 50;
 const PENDING_LIMIT = 16;
 
-/** Where the pairing secret for an endpoint lives (the Swift `PiPairingSecret`). */
-export interface PiSecretStore {
-  /** The saved secret, or '' when there is none. */
-  read(endpoint: string): Promise<string>;
-  save(secret: string, endpoint: string): Promise<void>;
-}
-
-/** Secrets kept for this run only. */
-export function memorySecretStore(): PiSecretStore & { secrets: Map<string, string> } {
-  const secrets = new Map<string, string>();
-  return {
-    secrets,
-    read: (endpoint) => Promise.resolve(secrets.get(endpoint) ?? ''),
-    save: (secret, endpoint) => {
-      secrets.set(endpoint, secret);
-      return Promise.resolve();
-    },
-  };
-}
+export { memorySecretStore, type PiSecretStore } from '../services/pointGuardChat';
 
 /** The preferences the Swift keeps in UserDefaults. */
 export interface PiPreferences {
@@ -277,7 +262,7 @@ export class PiChatModel {
   constructor(options: PiChatOptions = {}) {
     this.transport = options.transport ?? tauriChatTransport;
     this.recoveryStore = options.recovery ?? tauriRecoveryStore;
-    this.secrets = options.secrets ?? memorySecretStore();
+    this.secrets = options.secrets ?? credentialManagerSecrets;
     this.preferences = options.preferences === undefined ? browserStorage() : options.preferences;
     this.writer = new PiCoalescedWriter(options.writerDelayMs ?? 250);
     this.retryUnitMs = options.retryUnitMs ?? 1000;
@@ -552,6 +537,19 @@ export class PiChatModel {
       await this.secrets.save(secret, address);
     } catch (error) {
       this.error = describe(error);
+      return;
+    }
+    this.connectSaved(address);
+  }
+
+  /**
+   * Connect to `endpoint` with its saved secret: after Settings imports a pairing secret
+   * (`services/pairingSecret.ts` `importPairing`), or from `pair`.
+   */
+  connectSaved(endpoint: string): void {
+    const address = piEndpoint(endpoint);
+    if (address === null) {
+      this.error = 'Enter a Tailscale address ending in /v1, such as ws://100.100.1.2:8787/v1.';
       return;
     }
     this.saveDraft();
