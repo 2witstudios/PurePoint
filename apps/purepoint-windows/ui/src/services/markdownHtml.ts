@@ -70,6 +70,21 @@ export function safeUrl(url: string): string {
   return url;
 }
 
+/**
+ * An image source the preview may load: only an absolute `https:` URL. `file:` and UNC sources
+ * would make Windows authenticate to whatever host the document names (an NTLM hash leak), and
+ * relative ones would resolve against the app itself, so those images show their alt text.
+ */
+export function safeImageUrl(url: string): string | null {
+  if (!url.toLowerCase().startsWith('https://')) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && parsed.hostname !== '' ? url : null;
+  } catch {
+    return null;
+  }
+}
+
 function replace(text: string, pattern: RegExp, build: (groups: string[]) => string): string {
   return text.replace(pattern, (...args: unknown[]) => {
     // The groups sit between the match and its offset.
@@ -91,11 +106,10 @@ export function renderInline(raw: string): string {
     codeSpans.push(`<code>${g[1] ?? ''}</code>`);
     return `\u0000${String(codeSpans.length - 1)}\u0000`;
   });
-  text = replace(
-    text,
-    /!\[([^\]]*)\]\(([^)\s]+)\)/g,
-    (g) => `<img alt="${g[1] ?? ''}" src="${safeUrl(g[2] ?? '')}">`,
-  );
+  text = replace(text, /!\[([^\]]*)\]\(([^)\s]+)\)/g, (g) => {
+    const src = safeImageUrl(g[2] ?? '');
+    return src === null ? (g[1] ?? '') : `<img alt="${g[1] ?? ''}" src="${src}">`;
+  });
   text = replace(
     text,
     /\[([^\]]+)\]\(([^)\s]+)\)/g,
@@ -239,11 +253,11 @@ export function renderMarkdown(markdown: string): string {
 /**
  * Swift `MarkdownHTMLRenderer.page`: a full page around the rendered body, themed for light and
  * dark. `colorScheme` follows the app's theme (Settings can override the system's). The CSP allows
- * no script, no frame, no form target and no connection; images load only over https or as data.
+ * no script, no frame, no form target and no connection; images load only over https.
  */
 export function markdownPage(body: string, colorScheme: 'light' | 'dark' = 'light'): string {
   return `<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https:; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'; object-src 'none'">
 <meta name="color-scheme" content="${colorScheme}">
 <style>
 :root { color-scheme: ${colorScheme}; }

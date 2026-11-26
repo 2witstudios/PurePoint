@@ -71,6 +71,27 @@ describe('ChatMarkdownTests', () => {
     ]);
   });
 
+  it('given an image that is not https, should never offer to load it', () => {
+    expect(parse('![Shot](HTTPS://example.com/a.png)')).toEqual([
+      image('Shot', 'HTTPS://example.com/a.png'),
+    ]);
+    for (const url of [
+      'http://example.com/a.png',
+      'file://server/share/a.png',
+      'file:///C:/Users/me/a.png',
+      '\\\\server\\share\\a.png',
+      '//server/share/a.png',
+      'data:image/png;base64,AAAA',
+      'https:\\\\server\\a.png',
+    ]) {
+      const blocks = parse(`![x](${url})`);
+      expect(
+        blocks.some((b) => b.kind === 'image'),
+        url,
+      ).toBe(false);
+    }
+  });
+
   it('testGivenListWithCodeShouldRenderItsNestedPanelAndKeepCodeWhitespace', () => {
     expect(
       parse('1. Run this:\n   ```swift\n   if ready {\n       run()\n   }\n   ```\n2. Continue'),

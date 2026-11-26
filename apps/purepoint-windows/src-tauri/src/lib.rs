@@ -194,4 +194,32 @@ mod tests {
     fn links_the_pu_core_protocol() {
         assert!(protocol_version() > 0);
     }
+
+    /// The webview's CSP: images from the app, data URIs and https only (chat images load on a
+    /// click; `file:`/UNC never, so Windows never authenticates to a host a reply names), no
+    /// `asset:` protocol, no plugins, no `<base>` and no form posts.
+    #[test]
+    fn csp_allows_https_images_and_locks_down_the_rest() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let csp = config["app"]["security"]["csp"].as_str().unwrap();
+        let directives: Vec<Vec<&str>> = csp
+            .split(';')
+            .map(|d| d.split_whitespace().collect())
+            .filter(|d: &Vec<&str>| !d.is_empty())
+            .collect();
+        let find = |name: &str| {
+            directives
+                .iter()
+                .find(|d| d[0] == name)
+                .map(|d| d[1..].to_vec())
+                .unwrap_or_else(|| panic!("no {name} in {csp}"))
+        };
+        assert_eq!(find("img-src"), ["'self'", "data:", "https:"]);
+        assert_eq!(find("object-src"), ["'none'"]);
+        assert_eq!(find("base-uri"), ["'none'"]);
+        assert_eq!(find("form-action"), ["'none'"]);
+        assert_eq!(find("default-src"), ["'self'"]);
+        assert!(!csp.contains("asset:") && !csp.contains("file:"), "{csp}");
+    }
 }
