@@ -15,6 +15,7 @@
     "lint": "eslint . --max-warnings 0 && prettier --check .",
     "format": "prettier --write .",
     "test": "vitest run",
+    "gen:protocol": "node scripts/gen-protocol.mjs",
     "e2e": "node -e \"console.log('WIN-5.7: end-to-end tests are not wired up yet')\"",
     "tauri": "tauri"
   },

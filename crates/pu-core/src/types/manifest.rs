@@ -6,6 +6,7 @@ use super::agent::AgentEntry;
 use super::worktree::WorktreeEntry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
     pub version: u32,

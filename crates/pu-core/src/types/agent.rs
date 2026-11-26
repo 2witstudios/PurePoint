@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename_all = "lowercase"))]
 pub enum AgentStatus {
     Running,
     Broken,
@@ -41,6 +43,7 @@ impl<'de> Deserialize<'de> for AgentStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum TriggerState {
     Active,
@@ -53,12 +56,14 @@ pub enum TriggerState {
 /// project places the agent in that tab instead of giving it a workspace of its own, so a
 /// split made on one Mac stays a split on every other Mac showing the same project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SpawnPlacement {
     pub workspace: String,
     pub surface: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEntry {
     pub id: String,
@@ -68,16 +73,22 @@ pub struct AgentEntry {
     pub prompt: Option<String>,
     pub started_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub completed_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub suspended_at: Option<DateTime<Utc>>,
     /// Whether this agent is currently suspended. Only meaningful when `status.is_alive()`.
     /// Invariant: custom Deserialize infers `true` when `suspended_at` is present (backward
@@ -86,6 +97,7 @@ pub struct AgentEntry {
     #[serde(default)]
     pub suspended: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plan_mode: bool,

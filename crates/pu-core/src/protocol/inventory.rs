@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum InventoryKind {
     Summary,
@@ -13,6 +14,7 @@ pub enum InventoryKind {
 
 /// Observed process state, distinct from the persisted resumable agent status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum AgentQueryState {
     Running,
@@ -22,6 +24,7 @@ pub enum AgentQueryState {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct InventoryCounts {
     pub projects: usize,
     pub worktrees: usize,
@@ -35,6 +38,7 @@ pub struct InventoryCounts {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ProjectInventoryEntry {
     pub project_root: String,
     pub name: String,
@@ -44,6 +48,7 @@ pub struct ProjectInventoryEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AgentInventoryEntry {
     /// Optional passive observation; absence means unknown, never idle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -66,6 +71,7 @@ pub struct AgentInventoryEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct WorktreeInventoryEntry {
     pub project_root: String,
     pub id: String,
@@ -77,6 +83,7 @@ pub struct WorktreeInventoryEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct InventoryReport {
     pub observed_at: DateTime<Utc>,
     /// None denotes the entire selected daemon's registered project inventory.
