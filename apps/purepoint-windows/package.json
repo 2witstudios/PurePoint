@@ -14,7 +14,7 @@
     "typecheck": "tsc -b",
     "lint": "eslint . --max-warnings 0 && prettier --check .",
     "format": "prettier --write .",
-    "test": "vitest run && node --test scripts/updater-feed.test.mjs",
+    "test": "vitest run && node --test scripts/updater-feed.test.mjs scripts/installer-hooks.test.mjs",
     "gen:protocol": "node scripts/gen-protocol.mjs",
     "e2e": "node ui/e2e/run.mjs",
     "tauri": "tauri",
