@@ -4,7 +4,9 @@ members = [
     "crates/pu-core",
     "crates/pu-engine",
     "crates/pu-cli",
+    "crates/pu-transport",
 ]
+exclude = ["spikes"]
 
 [workspace.package]
 version = "0.1.0"
