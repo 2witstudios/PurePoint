@@ -22,9 +22,9 @@ mod webview;
 /// Label of the single main window declared in `tauri.conf.json`.
 pub const MAIN_WINDOW: &str = "main";
 
-/// Whether this build hides the WebView2 browser affordances (accelerator
-/// keys such as F5, Ctrl+R and Ctrl+P, the default context menu, and DevTools).
-/// Debug builds keep them for development.
+/// Whether this build hides WebView2's default context menu and DevTools.
+/// Debug builds keep them for development. The browser accelerator keys (F5,
+/// Ctrl+R, Ctrl+P, F12, zoom, ...) are off in every build (`webview.rs`).
 pub const LOCK_DOWN_WEBVIEW: bool = !cfg!(debug_assertions);
 
 /// The daemon protocol version this app speaks, from `pu-core`.

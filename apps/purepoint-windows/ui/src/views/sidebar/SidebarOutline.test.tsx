@@ -114,6 +114,15 @@ function renderOutline(props: SidebarOutlineViewControllerProps) {
   };
 }
 
+/** A menu's items as drawn, `---` for a separator, `(off)` after a disabled item. */
+function menuTitles(menu: HTMLElement): string[] {
+  return Array.from(menu.querySelectorAll('[role="menuitem"], [role="separator"]'), (node) =>
+    node.getAttribute('role') === 'separator'
+      ? '---'
+      : `${node.textContent}${(node as HTMLButtonElement).disabled ? ' (off)' : ''}`,
+  );
+}
+
 function memoryStore(storage = new MemoryStorage()) {
   return { storage, store: createSidebarExpansionStore(storage) };
 }
@@ -732,22 +741,38 @@ describe('SidebarOutlineViewController', () => {
     expect(onKillWorkspace).toHaveBeenCalledWith(project.projectId, split.id);
   });
 
-  it('opens the command palette from the add buttons', () => {
+  it("opens the command palette from a project's add button, and the add menu from a worktree's", () => {
     const { store } = memoryStore();
     const { project } = fixture();
     const onShowCommandPalette = vi.fn();
-    renderOutline({ projects: [project], expansionStore: store, onShowCommandPalette });
+    const onAddTerminal = vi.fn();
+    renderOutline({
+      projects: [project],
+      expansionStore: store,
+      onShowCommandPalette,
+      onAddTerminal,
+    });
 
     fireEvent.click(within(requireRow(projectKey(project))).getByRole('button', { name: 'Add' }));
     expect(onShowCommandPalette).toHaveBeenLastCalledWith(project.projectId, null, true);
-    fireEvent.click(
-      within(requireRow(worktreeKey(project, 'wt-0'))).getByRole('button', { name: 'Add' }),
-    );
+
+    const addWorktree = () => {
+      fireEvent.click(
+        within(requireRow(worktreeKey(project, 'wt-0'))).getByRole('button', { name: 'Add' }),
+      );
+      return screen.getByRole('menu', { name: 'Add' });
+    };
+    expect(menuTitles(addWorktree())).toEqual(['New Agent', 'New Terminal']);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'New Agent' }));
+    expect(screen.queryByRole('menu')).toBeNull();
     expect(onShowCommandPalette).toHaveBeenLastCalledWith(
       project.projectId,
       sidebarSelection.worktree('wt-0'),
       false,
     );
+    addWorktree();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'New Terminal' }));
+    expect(onAddTerminal).toHaveBeenCalledWith(project.projectId, 'wt-0');
   });
 
   it('draws only the rows in view, and follows the scroll', () => {
