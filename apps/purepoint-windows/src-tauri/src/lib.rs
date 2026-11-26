@@ -35,6 +35,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(git::commands::GitState::default())
         .manage(attach::AttachState::default())
+        .manage(pointguard::chat::ChatSockets::default())
+        .manage(secrets::pairing::PairingSecrets::default())
         .invoke_handler(tauri::generate_handler![
             files::index::file_index,
             files::text::fs_stat_text,
@@ -87,6 +89,14 @@ pub fn run() {
             pointguard::pointguard_request,
             pointguard::pointguard_chat_connection,
             pointguard::pointguard_validate_folder,
+            pointguard::chat::pointguard_chat_open,
+            pointguard::chat::pointguard_chat_send,
+            pointguard::chat::pointguard_chat_close,
+            pointguard::recovery::pointguard_recovery_load,
+            pointguard::recovery::pointguard_recovery_save,
+            secrets::pairing::pointguard_pairing_read,
+            secrets::pairing::pointguard_pairing_save,
+            secrets::pairing::pointguard_pairing_import,
         ])
         .on_window_event(|window, event| {
             if window.label() == MAIN_WINDOW

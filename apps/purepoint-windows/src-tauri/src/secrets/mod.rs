@@ -1,3 +1,6 @@
-//! Credential storage backed by the Windows Credential Manager.
+//! Credential storage backed by the Windows Credential Manager (REQ-WINAPP-075).
 //!
-//! Empty until WIN-9.7 fills it in.
+//! - `pairing`: the Point Guard pairing secret (`Services/PiPairingSecret.swift`), service
+//!   `PurePoint.PointGuard.Pairing` with the endpoint as account (WIN-9.7).
+
+pub mod pairing;
