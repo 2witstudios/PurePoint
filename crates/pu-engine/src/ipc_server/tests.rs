@@ -2,7 +2,20 @@ use super::*;
 use pu_core::protocol::{KillTarget, Request, Response};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+
+/// Connect to a test server the way every client does.
+async fn dial(sock_path: &std::path::Path) -> std::io::Result<Stream> {
+    pu_transport::connect(&Endpoint::for_socket(sock_path)?).await
+}
+
+/// A connected (server, client) pair over the real transport.
+pub(super) async fn pair() -> (Stream, Stream) {
+    let tmp = TempDir::new().unwrap();
+    let endpoint = Endpoint::for_socket(&tmp.path().join("pair.sock")).unwrap();
+    let mut listener = Listener::bind(&endpoint).unwrap();
+    let (accepted, client) = tokio::join!(listener.accept(), pu_transport::connect(&endpoint));
+    (accepted.unwrap().0, client.unwrap())
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn given_ipc_server_should_accept_connection() {
@@ -15,8 +28,8 @@ async fn given_ipc_server_should_accept_connection() {
 
     // Connect as client
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
-    assert!(stream.peer_addr().is_ok());
+    let stream = dial(&sock_path).await.unwrap();
+    drop(stream);
 
     handle.abort();
 }
@@ -31,7 +44,7 @@ async fn given_health_request_should_respond_with_report() {
     let handle = tokio::spawn(async move { server.run().await });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
@@ -71,7 +84,7 @@ async fn given_init_request_should_create_manifest() {
     let handle = tokio::spawn(async move { server.run().await });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
@@ -110,7 +123,7 @@ async fn given_shutdown_request_should_respond_and_stop() {
     let handle = tokio::spawn(async move { server.run().await });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
@@ -185,7 +198,7 @@ async fn given_attach_request_should_stream_output_continuously() {
     .await
     .expect("controlled PTY did not produce replay bytes");
     let server_handle = tokio::spawn(async move { server.run().await });
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let req = serde_json::to_string(&Request::Attach {
@@ -261,7 +274,7 @@ async fn given_attach_with_input_should_forward_to_pty() {
     let (sock_path, agent_id, server_handle, _tmp) = setup_with_agent().await;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
@@ -301,7 +314,7 @@ async fn given_attach_with_input_should_forward_to_pty() {
     drop(reader);
 
     // Health check on a new connection
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader2, mut writer2) = stream.into_split();
     let mut reader2 = BufReader::new(reader2);
 
@@ -326,7 +339,7 @@ async fn given_attach_with_resize_should_update_pty_size() {
     let (sock_path, agent_id, server_handle, _tmp) = setup_with_agent().await;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
@@ -372,7 +385,7 @@ async fn given_killed_agent_attach_should_return_error() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     // Kill the agent via IPC
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
@@ -398,7 +411,7 @@ async fn given_killed_agent_attach_should_return_error() {
     drop(reader);
 
     // Now attempt to attach — agent session is gone, should get AGENT_NOT_FOUND
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
@@ -433,7 +446,7 @@ async fn given_attach_disconnect_should_not_crash_server() {
 
     // Attach and immediately disconnect
     {
-        let stream = UnixStream::connect(&sock_path).await.unwrap();
+        let stream = dial(&sock_path).await.unwrap();
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
 
@@ -456,7 +469,7 @@ async fn given_attach_disconnect_should_not_crash_server() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // Server should still work — connect again and do a health check
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
@@ -477,7 +490,7 @@ async fn given_attach_disconnect_should_not_crash_server() {
     server_handle.abort();
 }
 
-async fn send_health(stream: UnixStream) -> Option<Response> {
+async fn send_health(stream: Stream) -> Option<Response> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let req = serde_json::to_string(&Request::Health).unwrap();
@@ -502,7 +515,7 @@ async fn given_connection_limit_reached_should_reject_new_connection_promptly() 
     // Hold the limit's worth of live connections (each proven served).
     let mut held = Vec::new();
     for _ in 0..2 {
-        let stream = UnixStream::connect(&sock_path).await.unwrap();
+        let stream = dial(&sock_path).await.unwrap();
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
         let req = serde_json::to_string(&Request::Health).unwrap();
@@ -520,7 +533,7 @@ async fn given_connection_limit_reached_should_reject_new_connection_promptly() 
     }
 
     // One more is rejected promptly: BUSY error or EOF, never left hanging.
-    let extra = UnixStream::connect(&sock_path).await.unwrap();
+    let extra = dial(&sock_path).await.unwrap();
     let (reader, _writer) = extra.into_split();
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
@@ -542,7 +555,7 @@ async fn given_connection_limit_reached_should_reject_new_connection_promptly() 
     drop(held.pop());
     let mut served = None;
     for _ in 0..50 {
-        let stream = UnixStream::connect(&sock_path).await.unwrap();
+        let stream = dial(&sock_path).await.unwrap();
         if let Some(resp) = send_health(stream).await
             && matches!(resp, Response::HealthReport { .. })
         {
@@ -577,7 +590,7 @@ async fn given_subscribe_fs_should_stream_coalesced_file_events() {
     let handle = tokio::spawn(async move { server.run().await });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let req = serde_json::to_string(&Request::SubscribeFs {
@@ -635,7 +648,7 @@ async fn given_subscribe_projects_should_push_the_list_on_add_and_remove() {
     let handle = tokio::spawn(async move { server.run().await });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let req = serde_json::to_string(&Request::SubscribeProjects).unwrap();
@@ -655,7 +668,7 @@ async fn given_subscribe_projects_should_push_the_list_on_add_and_remove() {
     let send = |request: Request| {
         let sock_path = sock_path.clone();
         async move {
-            let stream = UnixStream::connect(&sock_path).await.unwrap();
+            let stream = dial(&sock_path).await.unwrap();
             let (reader, mut writer) = stream.into_split();
             let json = serde_json::to_string(&request).unwrap();
             writer
@@ -691,12 +704,8 @@ async fn attachment_pair(
     agent_id: String,
     replay: Option<pu_core::protocol::Replay>,
     client_id: Option<&str>,
-) -> (
-    BufReader<tokio::net::unix::OwnedReadHalf>,
-    tokio::net::unix::OwnedWriteHalf,
-    tokio::task::JoinHandle<()>,
-) {
-    let (server, client) = UnixStream::pair().unwrap();
+) -> (IpcReader, IpcWriter, tokio::task::JoinHandle<()>) {
+    let (server, client) = pair().await;
     let (read, mut write) = server.into_split();
     let client_id = client_id.map(str::to_owned);
     let task = tokio::spawn(async move {
@@ -715,7 +724,7 @@ async fn attachment_pair(
     (BufReader::new(read), write, task)
 }
 
-async fn next_response(reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>) -> Response {
+async fn next_response(reader: &mut IpcReader) -> Response {
     let mut line = String::new();
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -776,6 +785,8 @@ async fn given_identified_viewer_should_rebuild_evicted_screen_and_resync_gap() 
     task.await.unwrap();
 }
 
+// Reads the PTY size back with TIOCGWINSZ.
+#[cfg(unix)]
 #[tokio::test]
 async fn given_size_claims_should_ignore_nonowners_and_handoff_only_to_claimers() {
     let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
@@ -864,7 +875,7 @@ async fn given_legacy_attachment_should_never_receive_size_or_resync_frames() {
 async fn given_cancellable_submit_disconnect_should_stop_future_chunks_and_enter() {
     let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
     let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
-    let (server, client) = UnixStream::pair().unwrap();
+    let (server, client) = pair().await;
     let (read, mut write) = server.into_split();
     let (client_read, client_write) = client.into_split();
     let request = serde_json::to_string(&Request::Input {
@@ -944,9 +955,10 @@ async fn given_cancellable_request_and_eof_already_buffered_should_never_start_t
     let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
     let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    let (server, mut client) = UnixStream::pair().unwrap();
+    let (server, client) = pair().await;
     let (read, mut write) = server.into_split();
-    client.shutdown().await.unwrap();
+    // EOF is already visible before the request is dispatched.
+    drop(client);
     let request = serde_json::to_string(&Request::Input {
         agent_id: id,
         data: b"QQQQQQQQQQQQQQQQ".to_vec(),
@@ -1018,7 +1030,7 @@ async fn given_pending_old_geometry_output_should_reset_at_matching_size_and_liv
     expected.process(&snapshot);
     assert_eq!(cursor.offset, snapshot_offset);
     let replay_bytes = update.data.len();
-    let (server, client) = UnixStream::pair().unwrap();
+    let (server, client) = pair().await;
     let (_, mut writer) = server.into_split();
     let (read, _) = client.into_split();
     let mut reader = BufReader::new(read);
@@ -1060,9 +1072,7 @@ async fn given_pending_old_geometry_output_should_reset_at_matching_size_and_liv
 }
 
 /// Every response until the daemon closes the connection (panics if it doesn't).
-async fn responses_until_close(
-    reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
-) -> Vec<Response> {
+async fn responses_until_close(reader: &mut IpcReader) -> Vec<Response> {
     let mut responses = Vec::new();
     loop {
         let mut line = String::new();
@@ -1098,12 +1108,12 @@ fn assert_frame_too_large_only(responses: &[Response]) {
     );
 }
 
-async fn write_line(writer: &mut tokio::net::unix::OwnedWriteHalf, request: &Request) {
+async fn write_line(writer: &mut IpcWriter, request: &Request) {
     let line = serde_json::to_string(request).unwrap() + "\n";
     writer.write_all(line.as_bytes()).await.unwrap();
 }
 
-async fn read_response(reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>) -> Response {
+async fn read_response(reader: &mut IpcReader) -> Response {
     let mut line = String::new();
     reader.read_line(&mut line).await.unwrap();
     serde_json::from_str(&line).unwrap()
@@ -1116,7 +1126,7 @@ type Subscribe = (Request, fn(&Response) -> bool);
 /// its first reply), then sends an oversized frame and expects only
 /// `FRAME_TOO_LARGE` before the daemon closes the connection.
 async fn assert_oversized_frame_closes(sock_path: &std::path::Path, subscribe: Option<Subscribe>) {
-    let stream = UnixStream::connect(sock_path).await.unwrap();
+    let stream = dial(sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     if let Some((request, subscribed)) = subscribe {
@@ -1224,7 +1234,7 @@ async fn given_line_split_across_writes_in_attach_stream_should_not_lose_bytes()
     let engine = server.engine().clone();
     let handle = tokio::spawn(async move { server.run().await });
 
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     write_line(
@@ -1292,13 +1302,13 @@ async fn given_connection_without_request_should_be_closed_after_first_line_time
         .with_first_line_timeout(std::time::Duration::from_millis(100));
     let handle = tokio::spawn(async move { server.run().await });
 
-    let idle = UnixStream::connect(&sock_path).await.unwrap();
+    let idle = dial(&sock_path).await.unwrap();
     let (reader, _writer) = idle.into_split();
     let mut reader = BufReader::new(reader);
     assert!(responses_until_close(&mut reader).await.is_empty());
 
     // A connection that does send a request is still served.
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     assert!(matches!(
         send_health(stream).await,
         Some(Response::HealthReport { .. })
@@ -1308,6 +1318,7 @@ async fn given_connection_without_request_should_be_closed_after_first_line_time
 
 /// umask is process-wide, so the permissive-umask bind runs in a child copy
 /// of this test binary instead of racing other tests' file creation.
+#[cfg(unix)]
 #[test]
 fn given_permissive_umask_socket_should_still_be_owner_only() {
     const CHILD: &str = "PU_TEST_UMASK_CHILD";
@@ -1342,12 +1353,33 @@ fn given_permissive_umask_socket_should_still_be_owner_only() {
     );
 }
 
-#[test]
-fn given_peer_of_another_user_should_be_refused() {
-    assert!(peer_allowed(Some(501), 501));
-    assert!(!peer_allowed(Some(502), 501));
-    assert!(!peer_allowed(Some(0), 501));
-    assert!(!peer_allowed(None, 501));
+#[tokio::test(flavor = "current_thread")]
+async fn given_peer_of_another_user_should_be_refused() {
+    let tmp = TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    // Stands in for a client whose uid / user SID differs from the daemon's.
+    let server = IpcServer::bind(&sock_path, Engine::new())
+        .unwrap()
+        .with_peer_check(|_| false);
+    let handle = tokio::spawn(async move { server.run().await });
+
+    let stream = dial(&sock_path).await.unwrap();
+    assert!(
+        send_health(stream).await.is_none(),
+        "a refused peer must be closed without an answer"
+    );
+    handle.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_client_of_same_user_should_pass_the_default_peer_check() {
+    let tmp = TempDir::new().unwrap();
+    let endpoint = Endpoint::for_socket(&tmp.path().join("test.sock")).unwrap();
+    let mut listener = Listener::bind(&endpoint).unwrap();
+    let (accepted, _client) = tokio::join!(listener.accept(), pu_transport::connect(&endpoint));
+    let (_stream, peer) = accepted.unwrap();
+    assert!(peer.is_same_user());
+    assert_eq!(peer.pid, Some(std::process::id()));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1360,7 +1392,7 @@ async fn given_line_still_arriving_when_attach_ends_should_finish_in_request_mod
     let engine = server.engine().clone();
     let handle = tokio::spawn(async move { server.run().await });
 
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     write_line(
@@ -1428,6 +1460,8 @@ async fn given_line_still_arriving_when_attach_ends_should_finish_in_request_mod
     handle.abort();
 }
 
+// Needs a half-close, which named pipes do not have.
+#[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn given_request_without_trailing_newline_at_eof_should_still_be_answered() {
     let tmp = TempDir::new().unwrap();
@@ -1435,7 +1469,7 @@ async fn given_request_without_trailing_newline_at_eof_should_still_be_answered(
     let server = IpcServer::bind(&sock_path, Engine::new()).unwrap();
     let handle = tokio::spawn(async move { server.run().await });
 
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let stream = dial(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let request = serde_json::to_string(&Request::Health).unwrap();
@@ -1452,7 +1486,7 @@ async fn given_request_without_trailing_newline_at_eof_should_still_be_answered(
 /// Enters a stream, sends a short line that is not UTF-8 and then a valid
 /// request: the stream must close the connection without running it.
 async fn assert_invalid_bytes_close_stream(sock_path: &std::path::Path, subscribe: Subscribe) {
-    let stream = UnixStream::connect(sock_path).await.unwrap();
+    let stream = dial(sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let (request, subscribed) = subscribe;

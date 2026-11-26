@@ -981,6 +981,7 @@ dependencies = [
  "nix",
  "notify",
  "pu-core",
+ "pu-transport",
  "reqwest",
  "rusqlite",
  "serde",

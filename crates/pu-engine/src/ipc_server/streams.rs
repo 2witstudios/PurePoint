@@ -568,10 +568,12 @@ pub(super) async fn handle_fs_stream(
 mod watch_tests {
     use super::*;
 
+    // A Windows pipe write completes into the transport's buffer, so the
+    // first write never stalls there; only a later one does.
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn given_client_not_reading_should_time_out_fs_event_write() {
-        let (ours, _theirs) = tokio::net::UnixStream::pair().unwrap();
+        let (ours, _theirs) = crate::ipc_server::tests::pair().await;
         let (_reader, mut writer) = ours.into_split();
         // Far more than the socket buffers hold, and nobody reads `_theirs`.
         let resp = Response::FsEvent {

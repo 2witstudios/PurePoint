@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 pu-core = { path = "../pu-core" }
+pu-transport = { path = "../pu-transport" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
