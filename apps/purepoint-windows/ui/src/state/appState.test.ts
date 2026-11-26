@@ -339,6 +339,24 @@ describe('AppState backend events', () => {
     expect(app.store.getState().daemonConnection.state).toBe('failed');
   });
 
+  it('applies a grid event to the layout of the project it names (WIN-6.4)', async () => {
+    const { app, registry } = setup();
+    app.openProject('C:\\a');
+    registry.reconcile('C:\\a', [agent('ag-1')], []);
+    registry.activeWorkspaceId = 'ws-ag-1';
+    await app.connect();
+
+    listeners.get('grid-event')?.({
+      payload: { projectRoot: 'C:\\b', command: { action: 'split', axis: 'v' } },
+    });
+    expect(Object.keys(registry.workspace('ws-ag-1')?.panes ?? {})).toHaveLength(1);
+
+    listeners.get('grid-event')?.({
+      payload: { projectRoot: 'C:\\a', command: { action: 'split', axis: 'v' } },
+    });
+    expect(Object.keys(registry.workspace('ws-ag-1')?.panes ?? {})).toHaveLength(2);
+  });
+
   it('suspends and shuts down on quit only when this app launched the daemon', async () => {
     const { app, requests } = setup();
     app.openProject('C:\\a');
