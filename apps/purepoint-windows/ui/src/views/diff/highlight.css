@@ -1,0 +1,45 @@
+/*
+ * Syntax colours for `services/codeHighlight.ts` (PP_HIGHLIGHTER's `pp-tok-*` classes), from
+ * EditorTheme's tokens. Shared by the diff body, InlineCodeView and (WIN-8.5) the editor.
+ * In a diff row the addition/deletion colour stays on plain text; tokens keep their colour.
+ */
+.pp-tok-keyword {
+  color: var(--pp-editor-keyword);
+}
+
+.pp-tok-string {
+  color: var(--pp-editor-string);
+}
+
+.pp-tok-comment {
+  color: var(--pp-editor-comment);
+  font-style: italic;
+}
+
+.pp-tok-number {
+  color: var(--pp-editor-number);
+}
+
+.pp-tok-type {
+  color: var(--pp-editor-type);
+}
+
+.pp-tok-function {
+  color: var(--pp-editor-function);
+}
+
+.pp-tok-property {
+  color: var(--pp-editor-property);
+}
+
+.pp-tok-preprocessor {
+  color: var(--pp-editor-preprocessor);
+}
+
+.pp-tok-emphasis {
+  font-style: italic;
+}
+
+.pp-tok-strong {
+  font-weight: 600;
+}

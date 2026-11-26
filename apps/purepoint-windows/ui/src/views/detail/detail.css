@@ -450,22 +450,6 @@
   flex-direction: column;
 }
 
-.inline-diff-body {
-  margin: 0;
-  padding: 4px 8px;
-  font: 11px var(--pp-font-mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.inline-diff-line.addition {
-  background: var(--pp-addition-background);
-}
-
-.inline-diff-line.deletion {
-  background: var(--pp-deletion-background);
-}
-
 .detail-changes {
   flex: 1;
   min-height: 0;

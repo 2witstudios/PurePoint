@@ -72,3 +72,7 @@ What the types mean:
 - `webview2-com` and `windows-core` match the versions Tauri 2.11 links, so the COM types `src-tauri/src/webview.rs` uses are the ones Tauri hands out.
 - typescript-eslint supports TypeScript below 6.1, so TypeScript stays on 6.0.
 - Release builds turn off WebView2's browser accelerator keys (reload, print, find, DevTools), its default context menu and DevTools; debug builds keep them.
+
+## Syntax highlighting
+
+Code is highlighted with CodeMirror 6's highlighters, not Shiki (WIN-8.3): `ui/src/services/codeHighlight.ts` parses with the Lezer grammars from `@codemirror/lang-*` (and `@codemirror/legacy-modes` stream parsers for Swift, TOML, shell, Ruby, C#, Scala, Haskell and Lua), loading each grammar as its own chunk on first use, and maps the syntax tags to EditorTheme's categories (`PP_HIGHLIGHTER`, classes `pp-tok-*` styled from the `--pp-editor-*` tokens in `ui/src/views/diff/highlight.css`). Parsing is synchronous and takes a few milliseconds per 200-line review page, which keeps the virtualized diff free of long tasks. The editor (WIN-8.5) reuses the same pieces: `loadLanguage(language)` gives the CodeMirror `Language` for a `LanguageSupport`, and `syntaxHighlighting(PP_HIGHLIGHTER)` colours it, so diffs, inline code and the editor share one grammar and one palette. File names map to languages with `detectEditorLanguage` (`ui/src/model/editorLanguage.ts`, Swift `EditorLanguage.detect(from:)`).

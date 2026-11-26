@@ -20,7 +20,7 @@ import {
   WORKSPACE_SIDEBAR_KEY,
 } from '../../state/sidebarVisibilityStore.ts';
 import { Icon } from '../../theme/Icon.tsx';
-import { InlineDiffBody } from './InlineDiffBody.tsx';
+import { InlineCodeView } from '../diff/InlineCodeView.tsx';
 import { ScreenPlaceholder } from './placeholders.tsx';
 import './detail.css';
 
@@ -119,7 +119,7 @@ function Changes({ state }: { state: WorkspaceFilesState }) {
           ) : loaded.hunks.length === 0 ? (
             <Message text="No text diff (empty, binary, or metadata-only change)." />
           ) : (
-            <InlineDiffBody hunks={loaded.hunks} filename={file.filename} />
+            <InlineCodeView hunks={loaded.hunks} filename={file.filename} />
           ))}
       </section>
     );
