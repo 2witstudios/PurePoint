@@ -13,7 +13,28 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+#[cfg(unix)]
 use tokio::net::UnixDatagram;
+
+/// Stand-in for the launch signal socket so the shared intake loop compiles.
+// WIN-3.9: replace with the Windows signal endpoint (named pipe / AF_UNIX).
+#[cfg(windows)]
+pub(crate) struct UnixDatagram {
+    _private: (),
+}
+
+#[cfg(windows)]
+impl UnixDatagram {
+    pub(crate) fn bind(_path: impl AsRef<Path>) -> std::io::Result<Self> {
+        // WIN-3.9: bind the Windows signal endpoint.
+        Err(crate::os::unsupported("agent signal socket"))
+    }
+
+    pub(crate) async fn recv(&self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        // WIN-3.9: receive one signal datagram.
+        std::future::pending().await
+    }
+}
 
 pub(crate) type SignalStates = Arc<Mutex<HashMap<String, Arc<LaunchState>>>>;
 
@@ -117,11 +138,24 @@ async fn refresh_codex(
 
 // Native image/PDF tool results can exceed 1MiB in one JSONL record. Keep the
 // per-poll I/O budget separate from this finite record-assembly limit.
+#[cfg_attr(windows, allow(dead_code))]
 const MAX_NATIVE_RECORD_BYTES: usize = 32 * 1024 * 1024;
 
 // A JSONL append may be incomplete while its already parsed prefix remains
 // valid. Track the greatest observed length so even an unread-tail truncation
 // invalidates that prefix; never follow replacement links or another inode.
+#[cfg(windows)]
+fn native_prefix_length(
+    _path: &Path,
+    _inode: Option<(u64, u64)>,
+    _offset: u64,
+    _observed_length: u64,
+) -> Option<u64> {
+    // WIN-3.8: open without following reparse points and check the owner SID / DACL.
+    None
+}
+
+#[cfg(unix)]
 fn native_prefix_length(
     path: &Path,
     inode: Option<(u64, u64)>,
@@ -143,6 +177,13 @@ struct NativeFileBoundary {
     inode: (u64, u64),
 }
 
+#[cfg(windows)]
+fn native_file_boundary(_path: &Path) -> Option<NativeFileBoundary> {
+    // WIN-3.8: open without following reparse points and check the owner SID / DACL.
+    None
+}
+
+#[cfg(unix)]
 fn native_file_boundary(path: &Path) -> Option<NativeFileBoundary> {
     use std::io::{Read, Seek, SeekFrom};
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -773,9 +814,11 @@ mod tests {
             tmp,
         )
     }
+    #[cfg(unix)]
     async fn settle() {
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
+    #[cfg(unix)]
     fn send(
         socket: &std::os::unix::net::UnixDatagram,
         path: &Path,
@@ -958,6 +1001,7 @@ mod tests {
         assert!(!publication.should_publish(None, start + Duration::from_secs(100)));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_private_launch_intake_should_reject_foreign_session_child_and_token_then_invalidate_on_exit()
      {
@@ -1028,6 +1072,7 @@ mod tests {
         );
         assert!(state.snapshot().unwrap().outcome.is_none());
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_pi_registration_should_require_owned_pid_and_detect_dropped_observations() {
         let (prepared, _tmp) = fixture("pi", None);
@@ -1075,6 +1120,7 @@ mod tests {
         assert_eq!(snapshot.observation.state, ObservationState::Lost);
         assert!(snapshot.outcome.is_none());
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_installed_old_helper_should_preserve_native_launch_and_leave_no_registration() {
         use std::os::unix::fs::PermissionsExt;
@@ -1327,6 +1373,7 @@ mod tests {
         assert_eq!(prepared.state.snapshot().unwrap(), snapshot);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn native_owner_qualification_must_enable_only_exact_adapter_and_current_requests() {
         use std::os::unix::fs::PermissionsExt;
@@ -1448,6 +1495,7 @@ mod tests {
         assert_eq!(final_snapshot.pending_attention[0].request_id, "native");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_owner_qualification_should_mark_only_authoritative_pending_and_withdraw_after_expiry()
      {
@@ -1532,6 +1580,7 @@ mod tests {
             SignalActivity::Working
         );
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_projection_clock_rollback_should_latch_denied_without_resolving_native_attention()
      {

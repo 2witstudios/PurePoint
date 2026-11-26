@@ -352,6 +352,7 @@ mod natural_exit_tests {
         .unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_agent_killed_by_shutdown_should_leave_agent_resumable() {
         let engine = Engine::new();

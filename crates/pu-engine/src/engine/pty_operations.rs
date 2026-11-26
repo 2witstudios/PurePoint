@@ -39,6 +39,7 @@ struct SizeClaim {
     claimed_at: u64,
 }
 
+#[cfg(unix)]
 use std::os::fd::OwnedFd;
 use std::sync::Arc;
 
@@ -47,6 +48,8 @@ use pu_core::protocol::Response;
 
 use crate::delivery::{DeliveryError, DeliveryOptions, deliver_prompt};
 use crate::output_buffer::OutputBuffer;
+#[cfg(windows)]
+use crate::pty_manager::OwnedFd;
 
 use super::Engine;
 
@@ -155,7 +158,7 @@ impl Engine {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn attachment_size(&self, agent_id: &str) -> PtySize {
         self.sizes
             .lock()
@@ -367,17 +370,26 @@ impl Engine {
         };
         let result = tokio::task::spawn_blocking(move || {
             buffer.resize_transaction(rows, cols, || {
-                use std::os::fd::AsRawFd;
-                let size = libc::winsize {
-                    ws_row: rows,
-                    ws_col: cols,
-                    ws_xpixel: 0,
-                    ws_ypixel: 0,
-                };
-                if unsafe { libc::ioctl(master_fd.as_raw_fd(), libc::TIOCSWINSZ, &size) } < 0 {
-                    Err(std::io::Error::last_os_error())
-                } else {
-                    Ok(())
+                #[cfg(unix)]
+                {
+                    use std::os::fd::AsRawFd;
+                    let size = libc::winsize {
+                        ws_row: rows,
+                        ws_col: cols,
+                        ws_xpixel: 0,
+                        ws_ypixel: 0,
+                    };
+                    if unsafe { libc::ioctl(master_fd.as_raw_fd(), libc::TIOCSWINSZ, &size) } < 0 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                }
+                #[cfg(windows)]
+                {
+                    // WIN-3.2: ResizePseudoConsole on the agent's ConPTY.
+                    let _ = &master_fd;
+                    Err(crate::os::unsupported("PTY resize"))
                 }
             })
         })
@@ -470,7 +482,9 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use pu_core::protocol::Request;
+    #[cfg(unix)]
     use tokio::io::AsyncWriteExt;
 
     impl super::Engine {
@@ -540,6 +554,7 @@ mod tests {
         task.await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_disconnected_prompt_waiting_for_readiness_should_never_type_when_box_appears() {
         let engine = super::Engine::new();

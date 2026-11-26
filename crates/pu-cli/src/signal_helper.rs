@@ -1,15 +1,27 @@
 //! Fail-open observer path; runs before CLI routing, plugin updates or daemon discovery.
+#[cfg(unix)]
 use std::io;
+#[cfg(unix)]
 use std::os::unix::net::UnixDatagram;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 const MAX_INPUT: usize = 256 * 1024;
 
+#[cfg(unix)]
 extern "C" fn deadline_exit(_: libc::c_int) {
     // Async-signal-safe escape even if a platform socket syscall stalls.
     unsafe { libc::_exit(0) }
 }
 
+#[cfg(windows)]
+pub fn run() {
+    // WIN-3.9: relay stdin to the daemon's Windows signal endpoint under a deadline.
+    // Fail-open: an observer helper that does nothing never blocks the agent.
+}
+
+#[cfg(unix)]
 pub fn run() {
     unsafe {
         if libc::signal(libc::SIGALRM, deadline_exit as libc::sighandler_t) == libc::SIG_ERR {
@@ -32,6 +44,7 @@ pub fn run() {
     let _ = relay();
 }
 
+#[cfg(unix)]
 fn relay() -> io::Result<()> {
     let deadline = Instant::now() + Duration::from_millis(50);
     let input = bounded_stdin(deadline)?;
@@ -57,6 +70,7 @@ fn relay() -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn bounded_stdin(deadline: Instant) -> io::Result<Vec<u8>> {
     let mut data = Vec::new();
     loop {

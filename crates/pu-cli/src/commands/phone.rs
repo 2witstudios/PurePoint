@@ -230,6 +230,7 @@ fn unit_state() -> String {
 }
 
 /// The payload this `pu` was released with, verified, and the `pu` beside it.
+#[cfg_attr(windows, allow(clippy::never_loop))]
 fn current_payload() -> Result<(PathBuf, PathBuf), CliError> {
     let payload = phone::payload_dir(phone::PU_VERSION)?;
     phone::read_manifest(&payload)?;
@@ -241,9 +242,21 @@ fn current_payload() -> Result<(PathBuf, PathBuf), CliError> {
                 path.display()
             ))
         })?;
+        // WIN-4.5: check the payload file's owner SID and DACL instead.
+        #[cfg(windows)]
+        {
+            let _ = meta;
+            return Err(CliError::Other(format!(
+                "cannot verify {} on Windows yet; refusing to run it",
+                path.display()
+            )));
+        }
+        #[cfg(unix)]
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         // SAFETY: geteuid has no preconditions.
+        #[cfg(unix)]
         let uid = unsafe { libc::geteuid() };
+        #[cfg(unix)]
         if meta.file_type().is_symlink()
             || (meta.uid() != uid && meta.uid() != 0)
             || meta.permissions().mode() & 0o022 != 0
@@ -321,7 +334,11 @@ fn install(now: bool, port: u16) -> Result<(), CliError> {
 
 fn linger_enabled() -> bool {
     // SAFETY: getuid has no preconditions.
+    #[cfg(unix)]
     let uid = unsafe { libc::getuid() };
+    // WIN-4.5: loginctl linger has no Windows counterpart.
+    #[cfg(windows)]
+    let uid: u32 = 0;
     Command::new("loginctl")
         .args([
             "show-user",
@@ -515,6 +532,8 @@ fn run_foreground(port: u16) -> Result<(), CliError> {
         }
     }
     // SAFETY: umask has no preconditions; the bridge also sets modes explicitly.
+    // WIN-4.5: Windows has no umask; the bridge must set owner-only ACLs itself.
+    #[cfg(unix)]
     unsafe {
         libc::umask(0o077);
     }
@@ -699,13 +718,31 @@ async fn pair(ttl: u32, text: bool) -> Result<(), CliError> {
     }
 }
 
+/// Stand-in so the pairing wait compiles.
+// WIN-4.5: end the wait on Ctrl-C / console close.
+#[cfg(windows)]
+struct Signals;
+
+#[cfg(windows)]
+impl Signals {
+    fn new() -> Result<Self, CliError> {
+        Ok(Signals)
+    }
+
+    async fn any(&mut self) -> &'static str {
+        std::future::pending().await
+    }
+}
+
 /// SIGINT, SIGTERM and SIGHUP (an SSH drop) all end the wait.
+#[cfg(unix)]
 struct Signals {
     term: tokio::signal::unix::Signal,
     hup: tokio::signal::unix::Signal,
     int: tokio::signal::unix::Signal,
 }
 
+#[cfg(unix)]
 impl Signals {
     fn new() -> Result<Self, CliError> {
         use tokio::signal::unix::{SignalKind, signal};
@@ -787,6 +824,13 @@ impl Drop for RevokeGuard<'_> {
     }
 }
 
+#[cfg(windows)]
+fn terminal_columns() -> Option<usize> {
+    // WIN-4.5: GetConsoleScreenBufferInfo for the console width.
+    None
+}
+
+#[cfg(unix)]
 fn terminal_columns() -> Option<usize> {
     // SAFETY: TIOCGWINSZ fills a winsize struct for a terminal fd.
     unsafe {
@@ -797,6 +841,14 @@ fn terminal_columns() -> Option<usize> {
 }
 
 /// Read one line without echo when stdin is a terminal.
+#[cfg(windows)]
+fn read_secret(prompt: &str) -> Result<String, CliError> {
+    // WIN-4.5: turn console echo off (SetConsoleMode) while reading.
+    read_line(prompt)
+}
+
+/// Read one line without echo when stdin is a terminal.
+#[cfg(unix)]
 fn read_secret(prompt: &str) -> Result<String, CliError> {
     eprint!("{prompt}");
     let _ = std::io::stderr().flush();

@@ -1,3 +1,6 @@
+// Talks to the daemon over its Unix socket.
+#![cfg(unix)]
+
 use pu_core::protocol::{Request, Response};
 use std::path::Path;
 use std::time::Duration;

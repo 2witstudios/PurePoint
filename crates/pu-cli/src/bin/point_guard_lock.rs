@@ -1,13 +1,21 @@
 //! Runtime-only holder of a lock shared with the owning Node file description.
 //! Never unlock explicitly: the parent's retained descriptor protects pending IO.
+#[cfg(unix)]
 use clap::Parser;
+#[cfg(unix)]
 use serde_json::json;
+#[cfg(unix)]
 use std::fs::{File, OpenOptions};
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(unix)]
 use std::path::PathBuf;
 
+#[cfg(unix)]
 #[derive(Parser)]
 #[command(hide = true)]
 struct Args {
@@ -18,6 +26,7 @@ struct Args {
     #[arg(long)]
     owner_pid: u32,
 }
+#[cfg(unix)]
 fn private(metadata: &std::fs::Metadata, directory: bool) -> bool {
     metadata.uid() == unsafe { libc::geteuid() }
         && metadata.mode() & 0o777 == if directory { 0o700 } else { 0o600 }
@@ -27,6 +36,7 @@ fn private(metadata: &std::fs::Metadata, directory: bool) -> bool {
             metadata.is_file() && metadata.nlink() == 1
         }
 }
+#[cfg(unix)]
 fn validate(file: &File, args: &Args) -> Result<(), &'static str> {
     let metadata = file.metadata().map_err(|_| "lock_private")?;
     if !private(&metadata, false) {
@@ -50,6 +60,7 @@ fn validate(file: &File, args: &Args) -> Result<(), &'static str> {
     }
     Ok(())
 }
+#[cfg(unix)]
 fn hold(args: &Args) -> Result<(), &'static str> {
     if !args.file.is_absolute()
         || args.nonce.is_empty()
@@ -98,6 +109,14 @@ fn hold(args: &Args) -> Result<(), &'static str> {
     drop(file);
     Ok(())
 }
+#[cfg(windows)]
+fn main() {
+    // WIN-4.5: hold the Point Guard lock (LockFileEx on the inherited handle).
+    eprintln!("pu-point-guard-lock is not available on Windows yet");
+    std::process::exit(1);
+}
+
+#[cfg(unix)]
 fn main() {
     let args = Args::parse();
     if let Err(code) = hold(&args) {

@@ -4,7 +4,9 @@ use pu_core::signals::*;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+#[cfg(unix)]
 use std::io::Read;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
@@ -191,7 +193,11 @@ pub(super) fn prepare(
         get("XDG_STATE_HOME").or_else(|| get("HOME").map(|p| p.join(".local/state")))?;
     let launch = pu_core::id::session_id();
     let artifacts = install::Artifacts::new(Path::new(project), &launch).ok()?;
+    #[cfg(unix)]
     let socket = tokio::net::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
+    // WIN-3.9: the Windows signal endpoint.
+    #[cfg(windows)]
+    let socket = super::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
     let identity = SignalIdentity {
         agent_id: agent.into(),
         worktree_id: worktree,
@@ -227,6 +233,13 @@ struct Registration {
     password: Option<String>,
 }
 
+#[cfg(windows)]
+fn registration(_path: &Path) -> Option<Registration> {
+    // WIN-3.8: open without following reparse points and check the owner SID / DACL.
+    None
+}
+
+#[cfg(unix)]
 fn registration(path: &Path) -> Option<Registration> {
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -912,6 +925,7 @@ mod tests {
         assert!(ended.pending_attention.is_empty());
         assert!(ended.outcome.is_none());
     }
+    #[cfg(unix)]
     fn write_registration(path: &Path, url: &str, version: &str) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::write(
@@ -924,6 +938,7 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
+    #[cfg(unix)]
     #[test]
     fn given_registration_should_accept_only_private_owner_file_and_local_pinned_service() {
         use std::os::unix::fs::PermissionsExt;
@@ -950,6 +965,7 @@ mod tests {
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert!(registration(&link).is_none());
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_multiple_roots_should_share_service_reads_and_preserve_each_root() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1142,6 +1158,7 @@ mod tests {
         task.abort();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_existing_service_should_read_native_snapshots_without_starting_server_or_mutating_requests()
      {

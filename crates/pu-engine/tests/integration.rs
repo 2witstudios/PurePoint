@@ -1,3 +1,6 @@
+// Drives the daemon over its Unix socket.
+#![cfg(unix)]
+
 use pu_core::protocol::{GridCommand, PROTOCOL_VERSION, Request, Response};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

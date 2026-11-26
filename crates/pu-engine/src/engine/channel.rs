@@ -31,7 +31,11 @@ fn identity(root: &Path, agent_id: Option<&str>) -> Result<ChannelAuthor, Channe
     }
     // OS account identity, never a client-supplied name or environment username.
     // SAFETY: geteuid has no pointer arguments or preconditions.
+    #[cfg(unix)]
     let uid = unsafe { libc::geteuid() };
+    // WIN-3.7: derive a stable human author id from the user's SID.
+    #[cfg(windows)]
+    let uid: u32 = 0;
     let name = crate::os::user_name(uid).unwrap_or_else(|| format!("Developer {uid}"));
     Ok(ChannelAuthor {
         id: format!("human:{uid}"),

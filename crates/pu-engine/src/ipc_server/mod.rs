@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::UnixListener;
 use tokio::sync::{Notify, Semaphore};
 
@@ -9,25 +10,42 @@ const MAX_MESSAGE_SIZE: u64 = 1024 * 1024; // 1MB
 /// The app holds a status and a grid stream per open project plus one attach
 /// stream per terminal pane, all for as long as they are open, so this must sit
 /// well above what a busy session uses.
+#[cfg(unix)]
 const MAX_CONNECTIONS: usize = 1024;
 const ATTACH_OUTPUT_CHUNK_SIZE: usize = 64 * 1024;
 /// How long a new connection may take to send its first complete request.
 /// Streams and request loops have no idle limit once a request has arrived.
+#[cfg(unix)]
 const FIRST_LINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 use crate::engine::Engine;
 use pu_core::protocol::{Request, Response};
 
+#[cfg(unix)]
 type IpcReader = BufReader<tokio::net::unix::OwnedReadHalf>;
+#[cfg(unix)]
 type IpcWriter = tokio::net::unix::OwnedWriteHalf;
+// WIN-3.4: named-pipe halves replace these stand-ins.
+#[cfg(windows)]
+type IpcReader = BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>;
+#[cfg(windows)]
+type IpcWriter = tokio::io::WriteHalf<tokio::io::DuplexStream>;
 
 mod streams;
 
-#[cfg(test)]
+// These drive the server over Unix sockets.
+#[cfg(all(test, unix))]
 mod tests;
 
 // Tokio may not yet have registered a readiness event for an already-visible
 // EOF. Check the kernel before polling delivery, which can enqueue an OS write.
+#[cfg(windows)]
+fn operation_disconnected(reader: &IpcReader) -> bool {
+    // WIN-3.4: peek the named pipe (PeekNamedPipe) for an already-visible EOF.
+    !reader.buffer().is_empty()
+}
+
+#[cfg(unix)]
 fn operation_disconnected(reader: &IpcReader) -> bool {
     use std::os::fd::AsRawFd;
     if !reader.buffer().is_empty() {
@@ -120,16 +138,20 @@ async fn reject_frame_too_large(writer: &mut IpcWriter) {
 
 /// Only processes running as the daemon's own user may use the socket. The
 /// 0600 socket mode already says so; this holds even if the mode is changed.
+#[cfg(unix)]
 fn peer_allowed(peer_uid: Option<u32>, daemon_euid: u32) -> bool {
     peer_uid == Some(daemon_euid)
 }
 
+#[cfg(unix)]
 fn daemon_euid() -> u32 {
     // SAFETY: geteuid has no preconditions and cannot fail.
     unsafe { libc::geteuid() }
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub struct IpcServer {
+    #[cfg(unix)]
     listener: UnixListener,
     engine: Arc<Engine>,
     shutdown: Arc<Notify>,
@@ -138,6 +160,13 @@ pub struct IpcServer {
 }
 
 impl IpcServer {
+    #[cfg(windows)]
+    pub fn bind(_socket_path: &Path, _engine: Engine) -> Result<Self, std::io::Error> {
+        // WIN-3.4: create the owner-only named pipe the daemon listens on.
+        Err(crate::os::unsupported("IPC server socket"))
+    }
+
+    #[cfg(unix)]
     pub fn bind(socket_path: &Path, engine: Engine) -> Result<Self, std::io::Error> {
         use std::os::unix::fs::PermissionsExt;
         // Remove stale socket if it exists
@@ -159,14 +188,14 @@ impl IpcServer {
     }
 
     /// Override the concurrent connection cap (defaults to `MAX_CONNECTIONS`).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_connection_limit(mut self, limit: usize) -> Self {
         self.conn_limit = Arc::new(Semaphore::new(limit));
         self
     }
 
     /// Override how long a connection may wait before its first request.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_first_line_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.first_line_timeout = timeout;
         self
@@ -177,6 +206,14 @@ impl IpcServer {
         &self.engine
     }
 
+    #[cfg(windows)]
+    pub async fn run(self) -> Result<(), std::io::Error> {
+        // WIN-3.4: named-pipe accept loop with a same-user peer check.
+        // WIN-3.5: Ctrl-C / console-close shutdown in place of SIGTERM/SIGINT/SIGHUP.
+        Err(crate::os::unsupported("IPC server"))
+    }
+
+    #[cfg(unix)]
     pub async fn run(self) -> Result<(), std::io::Error> {
         let mut sigterm =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
@@ -239,6 +276,7 @@ impl IpcServer {
         }
     }
 
+    #[cfg(unix)]
     async fn handle_connection(
         stream: tokio::net::UnixStream,
         engine: Arc<Engine>,
@@ -283,6 +321,7 @@ impl IpcServer {
 
     /// Handles a single parsed request line. Returns `true` to continue the
     /// connection loop, `false` to break.
+    #[cfg_attr(windows, allow(dead_code))]
     async fn dispatch_request(
         line: &str,
         reader: &mut IpcReader,
@@ -400,6 +439,7 @@ impl IpcServer {
 
 /// Best-effort, non-blocking BUSY reply to a connection over the limit; a
 /// partial or failed write is ignored since the stream is closed right after.
+#[cfg(unix)]
 fn reject_busy(stream: &tokio::net::UnixStream) {
     let resp = Response::Error {
         code: "BUSY".into(),

@@ -17,16 +17,40 @@ pub fn login_shell() -> String {
         .unwrap_or_else(|| "/bin/sh".into())
 }
 
+#[cfg(unix)]
 fn passwd_shell() -> Option<String> {
     let user = nix::unistd::User::from_uid(nix::unistd::getuid()).ok()??;
     let shell = user.shell.to_string_lossy().into_owned();
     (!shell.is_empty() && user.shell.exists()).then_some(shell)
 }
 
+#[cfg(windows)]
+fn passwd_shell() -> Option<String> {
+    // WIN-3.6: resolve the Windows default shell (pwsh/powershell/cmd) instead of passwd.
+    None
+}
+
 /// Account name for `uid` from the passwd database.
+#[cfg(unix)]
 pub fn user_name(uid: u32) -> Option<String> {
     let user = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid)).ok()??;
     (!user.name.is_empty()).then_some(user.name)
+}
+
+#[cfg(windows)]
+pub fn user_name(_uid: u32) -> Option<String> {
+    // WIN-3.6: look up the account name from the process token / USERNAME.
+    None
+}
+
+/// Error for a host facility the Windows port does not implement yet. Every
+/// caller names the WIN leaf that replaces it.
+#[cfg(windows)]
+pub(crate) fn unsupported(what: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!("{what} is not supported on Windows yet"),
+    )
 }
 
 /// Parse `/proc/<pid>/stat` into `(pid, ppid)`. The command name (field 2) is
@@ -155,12 +179,14 @@ mod tests {
         assert_eq!(cmdline_to_command(b""), "");
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_login_shell_should_be_nonempty_absolute_path() {
         let shell = login_shell();
         assert!(shell.starts_with('/'), "{shell}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_current_uid_should_resolve_user_name() {
         // SAFETY: geteuid has no preconditions.

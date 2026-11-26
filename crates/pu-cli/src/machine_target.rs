@@ -202,8 +202,13 @@ fn open_forwards() -> std::sync::MutexGuard<'static, Vec<(u32, PathBuf)>> {
 }
 
 /// Stop every open private forward's ssh and remove its socket and pid file.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn close_open_forwards() {
     for (pid, socket) in open_forwards().drain(..) {
+        // WIN-4.4: TerminateProcess the recorded ssh child.
+        #[cfg(windows)]
+        let _ = pid;
+        #[cfg(unix)]
         if let Ok(pid) = libc::pid_t::try_from(pid) {
             // SAFETY: plain signal delivery to the ssh child this process spawned.
             unsafe {
@@ -217,6 +222,14 @@ pub fn close_open_forwards() {
 
 /// On SIGTERM, SIGHUP or SIGINT, close open private forwards and exit with
 /// the conventional `128 + signal` status.
+#[cfg(windows)]
+pub fn close_forwards_on_signal() {
+    // WIN-4.4: close open forwards on Ctrl-C / console close.
+}
+
+/// On SIGTERM, SIGHUP or SIGINT, close open private forwards and exit with
+/// the conventional `128 + signal` status.
+#[cfg(unix)]
 pub fn close_forwards_on_signal() {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::signal::unix::{SignalKind, signal};
@@ -279,6 +292,7 @@ impl Endpoint {
     }
 }
 
+#[cfg(unix)]
 fn pid_is_alive(pid: libc::pid_t) -> bool {
     // SAFETY: signal 0 only checks for existence and permission.
     let result = unsafe { libc::kill(pid, 0) };
@@ -286,6 +300,7 @@ fn pid_is_alive(pid: libc::pid_t) -> bool {
 }
 
 /// `ps -p <pid> -o <field>=` (`-ww`: never truncate), if the pid exists.
+#[cfg(unix)]
 fn ps_field(pid: libc::pid_t, field: &str) -> Option<String> {
     let output = std::process::Command::new("ps")
         .args(["-ww", "-p", &pid.to_string(), "-o", &format!("{field}=")])
@@ -302,6 +317,7 @@ fn ps_field(pid: libc::pid_t, field: &str) -> Option<String> {
 /// Whether `pid` is the ssh forward for `socket`: its executable is named
 /// `ssh` (`ps` reports a path on macOS and a bare name on Linux) and its
 /// arguments carry `-L <socket>:`. Guards against signalling a recycled pid.
+#[cfg(unix)]
 fn pid_is_forward_ssh(pid: libc::pid_t, socket: &Path) -> bool {
     let is_ssh = ps_field(pid, "comm")
         .is_some_and(|comm| Path::new(&comm).file_name().is_some_and(|n| n == "ssh"));
@@ -311,6 +327,7 @@ fn pid_is_forward_ssh(pid: libc::pid_t, socket: &Path) -> bool {
 }
 
 /// The owning CLI pid of `cli-<pid>.sock` or `cli-<pid>.sock.pid`.
+#[cfg(unix)]
 fn cli_owner_pid(name: &str) -> Option<libc::pid_t> {
     let rest = name.strip_prefix("cli-")?;
     let rest = rest
@@ -321,6 +338,14 @@ fn cli_owner_pid(name: &str) -> Option<libc::pid_t> {
 
 /// Clean up after CLI processes that died without doing so (e.g. killed by a
 /// signal): stop their recorded ssh forward, then remove its socket and pid file.
+#[cfg(windows)]
+pub fn sweep_stale_sockets(_dir: &Path) {
+    // WIN-4.4: find dead CLI owners and their ssh children by process handle.
+}
+
+/// Clean up after CLI processes that died without doing so (e.g. killed by a
+/// signal): stop their recorded ssh forward, then remove its socket and pid file.
+#[cfg(unix)]
 pub fn sweep_stale_sockets(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -598,6 +623,7 @@ mod tests {
         assert!(!dead.exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_cli_file_names_should_parse_owner_pid() {
         assert_eq!(cli_owner_pid("cli-42.sock"), Some(42));

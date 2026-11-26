@@ -2,11 +2,45 @@ use std::path::Path;
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::UnixStream;
+#[cfg(windows)]
+pub(crate) use windows_stream::UnixStream;
 
 use pu_core::protocol::{Request, Response};
 
 use crate::error::CliError;
+
+/// Error for a facility the Windows port does not implement yet. Every caller
+/// names the WIN leaf that replaces it.
+#[cfg(windows)]
+pub(crate) fn unsupported(what: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!("{what} is not supported on Windows yet"),
+    )
+}
+
+/// Stand-in for the daemon connection so the shared request code compiles.
+#[cfg(windows)]
+mod windows_stream {
+    use tokio::io::{DuplexStream, ReadHalf, WriteHalf};
+
+    // WIN-4.1: replace with a named-pipe client connection.
+    #[allow(dead_code)]
+    pub(crate) struct UnixStream(DuplexStream);
+
+    impl UnixStream {
+        pub(crate) async fn connect(_path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+            // WIN-4.1: connect to the daemon's named pipe.
+            Err(super::unsupported("daemon connection"))
+        }
+
+        pub(crate) fn into_split(self) -> (ReadHalf<DuplexStream>, WriteHalf<DuplexStream>) {
+            tokio::io::split(self.0)
+        }
+    }
+}
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 

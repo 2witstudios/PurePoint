@@ -332,6 +332,7 @@ async fn given_real_ipc_server_should_persist_cli_send_reply_edit_and_reaction()
     task.abort(); // only this test's temporary in-process server, never a daemon session
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn given_incompatible_daemon_should_not_post_channel_message() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};

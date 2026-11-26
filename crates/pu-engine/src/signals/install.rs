@@ -1,4 +1,6 @@
+#[cfg(unix)]
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
@@ -21,6 +23,12 @@ pub(super) struct Artifacts {
 }
 
 impl Artifacts {
+    #[cfg(windows)]
+    pub fn new(_project: &Path, _launch: &str) -> std::io::Result<Self> {
+        // WIN-3.9: owner-only artifact directory plus the Windows signal endpoint.
+        Err(crate::os::unsupported("agent signal artifacts"))
+    }
+    #[cfg(unix)]
     pub fn new(project: &Path, launch: &str) -> std::io::Result<Self> {
         let base = project.join(".pu/agent-signals");
         std::fs::DirBuilder::new()
@@ -44,6 +52,12 @@ impl Artifacts {
             files: Vec::new(),
         })
     }
+    #[cfg(windows)]
+    pub fn write(&mut self, _name: &str, _data: Vec<u8>) -> std::io::Result<PathBuf> {
+        // WIN-3.9: create the artifact file owner-only.
+        Err(crate::os::unsupported("agent signal artifact write"))
+    }
+    #[cfg(unix)]
     pub fn write(&mut self, name: &str, data: Vec<u8>) -> std::io::Result<PathBuf> {
         let path = self.directory.join(name);
         let mut file = std::fs::OpenOptions::new()

@@ -5,6 +5,7 @@ use pu_core::protocol::{PROTOCOL_VERSION, Request, Response};
 
 use crate::error::CliError;
 
+#[cfg_attr(windows, allow(dead_code))]
 const DAEMON_BINARY: &str = "pu-engine";
 /// Names the one `pu-engine` to start: a path, or a name looked up on `PATH`.
 const ENGINE_PATH_ENV: &str = "PU_ENGINE_PATH";
@@ -24,6 +25,7 @@ pub fn find_daemon_binary() -> Result<PathBuf, String> {
 }
 
 /// `<x>.app/Contents` when `exe_dir` is that bundle's `Helpers` or `MacOS`.
+#[cfg_attr(windows, allow(dead_code))]
 fn bundle_contents(exe_dir: &Path) -> Option<&Path> {
     let name = exe_dir.file_name()?;
     let contents = exe_dir.parent()?;
@@ -33,6 +35,17 @@ fn bundle_contents(exe_dir: &Path) -> Option<&Path> {
     is_bundle.then_some(contents)
 }
 
+#[cfg(windows)]
+fn find_daemon_binary_in(
+    _exe: Option<&Path>,
+    _home: Option<&Path>,
+    _explicit: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, String> {
+    // WIN-4.2: locate pu-engine.exe and check it is trusted (owner SID + DACL).
+    Err("finding a trusted pu-engine is not supported on Windows yet".into())
+}
+
+#[cfg(unix)]
 fn find_daemon_binary_in(
     exe: Option<&Path>,
     home: Option<&Path>,
@@ -82,6 +95,7 @@ fn find_daemon_binary_in(
 /// an app bundle, the owner of the running `pu`. An app installed by another
 /// account is owned by that account, and its engine is as trustworthy as the
 /// `pu` running now.
+#[cfg_attr(windows, allow(dead_code))]
 fn allowed_owners(euid: u32, in_bundle: bool, exe_owner: Option<u32>) -> Vec<u32> {
     let mut owners = vec![euid, 0];
     owners.extend(exe_owner.filter(|_| in_bundle));
@@ -90,6 +104,7 @@ fn allowed_owners(euid: u32, in_bundle: bool, exe_owner: Option<u32>) -> Vec<u32
 
 /// An executable file owned by an allowed user that no other user can
 /// modify: anyone who could rewrite it would run code as this user.
+#[cfg(unix)]
 fn check_trusted_binary(path: &Path, owners: &[u32]) -> Result<(), &'static str> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let meta = std::fs::metadata(path).map_err(|_| "not found")?;
@@ -99,6 +114,7 @@ fn check_trusted_binary(path: &Path, owners: &[u32]) -> Result<(), &'static str>
     trusted_mode_and_owner(meta.permissions().mode(), meta.uid(), owners)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn trusted_mode_and_owner(mode: u32, owner: u32, owners: &[u32]) -> Result<(), &'static str> {
     if mode & 0o111 == 0 {
         Err("not executable")
@@ -115,6 +131,28 @@ fn trusted_mode_and_owner(mode: u32, owner: u32, owners: &[u32]) -> Result<(), &
 /// an SSH hangup or the caller's process group dying does not reach it) and no
 /// inherited stdio (so `ssh host 'pu health'` returns instead of waiting on
 /// the daemon's open descriptors).
+#[cfg(windows)]
+fn daemon_command(
+    binary: &Path,
+    socket: &Path,
+    stderr: std::process::Stdio,
+) -> std::process::Command {
+    // WIN-4.2: detach with DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP instead of setsid.
+    let mut command = std::process::Command::new(binary);
+    command
+        .arg("--socket")
+        .arg(socket)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(stderr);
+    command
+}
+
+/// Spawn the daemon detached from the caller's session: its own session (so
+/// an SSH hangup or the caller's process group dying does not reach it) and no
+/// inherited stdio (so `ssh host 'pu health'` returns instead of waiting on
+/// the daemon's open descriptors).
+#[cfg(unix)]
 fn daemon_command(
     binary: &Path,
     socket: &Path,
@@ -337,7 +375,8 @@ fn spawn_detached_daemon(socket: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-#[cfg(test)]
+// These exercise Unix ownership/mode trust checks, setsid and Unix-socket fake daemons.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

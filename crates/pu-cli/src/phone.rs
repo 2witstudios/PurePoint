@@ -6,10 +6,14 @@
 //! from a group/other-accessible file, and talks only to the exact socket the
 //! bridge creates under the private state directory.
 
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -25,7 +29,9 @@ pub const PU_VERSION: &str = match option_env!("PU_RELEASE_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 pub const DEFAULT_PORT: u16 = 8787;
+#[cfg(unix)]
 const ADMIN_TIMEOUT: Duration = Duration::from_secs(15);
+#[cfg(unix)]
 const MAX_RESPONSE: usize = 1024 * 1024;
 
 fn home() -> Result<PathBuf, CliError> {
@@ -61,16 +67,32 @@ pub fn payload_dir(version: &str) -> Result<PathBuf, CliError> {
     Ok(payload_root()?.join(version))
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub fn admin_socket(state: &Path) -> PathBuf {
     state.join("admin/admin.sock")
 }
 
+#[cfg(windows)]
+fn euid() -> u32 {
+    // WIN-4.5: compare owner SIDs instead of uids.
+    0
+}
+
+#[cfg(unix)]
 fn euid() -> u32 {
     // SAFETY: geteuid has no preconditions and cannot fail.
     unsafe { libc::geteuid() }
 }
 
 /// Owner-only check on an entry's metadata (never follows symlinks).
+#[cfg(windows)]
+pub fn private_entry(_meta: &std::fs::Metadata, _expect_dir: bool, _uid: u32) -> bool {
+    // WIN-4.5: owner SID + owner-only DACL check; until then nothing is private.
+    false
+}
+
+/// Owner-only check on an entry's metadata (never follows symlinks).
+#[cfg(unix)]
 pub fn private_entry(meta: &std::fs::Metadata, expect_dir: bool, uid: u32) -> bool {
     !meta.file_type().is_symlink()
         && (if expect_dir { meta.is_dir() } else { true })
@@ -78,6 +100,7 @@ pub fn private_entry(meta: &std::fs::Metadata, expect_dir: bool, uid: u32) -> bo
         && meta.permissions().mode() & 0o077 == 0
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn require_private(path: &Path, expect_dir: bool, what: &str) -> Result<(), CliError> {
     let meta = std::fs::symlink_metadata(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -98,6 +121,7 @@ fn require_private(path: &Path, expect_dir: bool, what: &str) -> Result<(), CliE
 }
 
 /// Read the owner admin token, only from a private regular file.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn read_token(file: &Path) -> Result<String, CliError> {
     let meta = std::fs::symlink_metadata(file)
         .map_err(|e| CliError::Other(format!("cannot read owner token: {e}")))?;
@@ -114,6 +138,7 @@ pub fn read_token(file: &Path) -> Result<String, CliError> {
 }
 
 /// Parse an HTTP/1.1 response read to EOF (the server sends `Connection: close`).
+#[cfg_attr(windows, allow(dead_code))]
 pub fn parse_http_response(raw: &[u8]) -> Result<(u16, Value), CliError> {
     let split = raw
         .windows(4)
@@ -162,13 +187,31 @@ fn dechunk(mut data: &[u8]) -> Result<Vec<u8>, CliError> {
 }
 
 /// The owner admin channel of a running bridge.
+#[cfg_attr(windows, allow(dead_code))]
 pub struct Admin {
     socket: PathBuf,
     token: String,
 }
 
 impl Admin {
+    #[cfg(windows)]
+    pub fn connect(_state: &Path) -> Result<Self, CliError> {
+        // WIN-4.5: verify and connect to the bridge's Windows admin endpoint.
+        Err(CliError::Other(
+            "Point Guard phone hosting is not available on Windows yet".into(),
+        ))
+    }
+
+    #[cfg(windows)]
+    pub fn call(&self, _request: Value) -> Result<Value, CliError> {
+        // WIN-4.5: HTTP over the bridge's Windows admin endpoint.
+        Err(CliError::Other(
+            "Point Guard phone hosting is not available on Windows yet".into(),
+        ))
+    }
+
     /// Verify the private state, socket directory and socket before trusting them.
+    #[cfg(unix)]
     pub fn connect(state: &Path) -> Result<Self, CliError> {
         require_private(state, true, "state directory")?;
         let socket = admin_socket(state);
@@ -191,6 +234,7 @@ impl Admin {
     }
 
     /// Run one admin operation. Errors carry the bridge's sanitized message.
+    #[cfg(unix)]
     pub fn call(&self, request: Value) -> Result<Value, CliError> {
         let body = serde_json::to_vec(&request)?;
         let mut stream = UnixStream::connect(&self.socket).map_err(|e| {
@@ -393,6 +437,17 @@ pub fn unit_file() -> Result<PathBuf, CliError> {
 
 /// Write the unit atomically as 0644, whatever the umask, into a directory
 /// no other user can write: the unit runs as the owner on its next start.
+#[cfg(windows)]
+pub fn write_unit_file(_file: &Path, _unit: &str) -> Result<(), CliError> {
+    // WIN-4.5: Windows has no systemd unit; replace with the Windows service story.
+    Err(CliError::Other(
+        "Point Guard phone hosting is not available on Windows yet".into(),
+    ))
+}
+
+/// Write the unit atomically as 0644, whatever the umask, into a directory
+/// no other user can write: the unit runs as the owner on its next start.
+#[cfg(unix)]
 pub fn write_unit_file(file: &Path, unit: &str) -> Result<(), CliError> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     let dir = file
@@ -729,6 +784,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_permissive_modes_should_write_the_unit_0644_in_an_unwritable_dir() {
         let root = tempfile::tempdir().unwrap();
@@ -830,6 +886,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_modes_should_accept_only_owner_private_entries() {
         let dir = tempfile::tempdir().unwrap();

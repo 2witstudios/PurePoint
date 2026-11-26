@@ -1,4 +1,6 @@
 //! `pu daemon proxy` as a real process, the way an SSH exec channel runs it.
+// Uses a /bin/sh fake engine and Unix sockets.
+#![cfg(unix)]
 
 use pu_core::protocol::{PROTOCOL_VERSION, Request, Response};
 use std::os::unix::fs::PermissionsExt;

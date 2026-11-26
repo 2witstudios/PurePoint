@@ -70,7 +70,9 @@ async fn run_attachment(
     attachment: u64,
     size_rx: &mut tokio::sync::broadcast::Receiver<crate::engine::PtySize>,
     buffer: std::sync::Arc<crate::output_buffer::OutputBuffer>,
-    master_fd: std::sync::Arc<std::os::fd::OwnedFd>,
+    #[cfg(unix)] master_fd: std::sync::Arc<std::os::fd::OwnedFd>,
+    // WIN-3.2: the ConPTY handle replaces the stand-in.
+    #[cfg(windows)] master_fd: std::sync::Arc<crate::pty_manager::OwnedFd>,
     exit_rx: &mut tokio::sync::watch::Receiver<Option<i32>>,
 ) -> bool {
     let mut watcher = buffer.subscribe();
@@ -566,6 +568,7 @@ pub(super) async fn handle_fs_stream(
 mod watch_tests {
     use super::*;
 
+    #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn given_client_not_reading_should_time_out_fs_event_write() {
         let (ours, _theirs) = tokio::net::UnixStream::pair().unwrap();

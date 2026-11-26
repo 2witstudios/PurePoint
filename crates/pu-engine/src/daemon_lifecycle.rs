@@ -1,10 +1,16 @@
-use std::fs::{File, OpenOptions};
+use std::fs::File;
+#[cfg(unix)]
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use nix::errno::Errno;
+#[cfg(unix)]
 use nix::fcntl::{Flock, FlockArg};
+#[cfg(unix)]
 use nix::sys::signal;
+#[cfg(unix)]
 use nix::unistd::Pid;
 
 /// The exclusive lock that makes a pu-engine the one daemon for its socket.
@@ -12,7 +18,11 @@ use nix::unistd::Pid;
 /// Held for the life of the process. The kernel drops it however the process
 /// dies, so a crashed daemon never leaves a stale lock behind.
 pub struct DaemonLock {
+    #[cfg(unix)]
     _lock: Flock<File>,
+    // WIN-3.5: an exclusive LockFileEx handle replaces this stand-in.
+    #[cfg(windows)]
+    _lock: File,
 }
 
 /// Lock file guarding `socket_path` (`daemon.sock` -> `daemon.sock.lock`).
@@ -42,6 +52,20 @@ fn sibling_path(socket_path: &Path, ext: &str) -> PathBuf {
 /// other-accessible one), and a `~/.pu` owned by another user is refused.
 /// Other existing directories are left as they are; the socket itself is
 /// owner-only either way.
+#[cfg(windows)]
+pub fn prepare_socket_dir(_socket_path: &Path, _global_dir: Option<&Path>) -> std::io::Result<()> {
+    // WIN-3.8: create/repair the directory with an owner-only DACL and check its owner SID.
+    Err(crate::os::unsupported("socket directory preparation"))
+}
+
+/// Create the directory that holds `socket_path`, missing parents at mode 0700.
+///
+/// When that directory is the global `~/.pu`, it also holds the registry,
+/// config and logs, so it is forced to 0700 (repairing a group- or
+/// other-accessible one), and a `~/.pu` owned by another user is refused.
+/// Other existing directories are left as they are; the socket itself is
+/// owner-only either way.
+#[cfg(unix)]
 pub fn prepare_socket_dir(socket_path: &Path, global_dir: Option<&Path>) -> std::io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     let Some(dir) = socket_path
@@ -80,6 +104,19 @@ pub fn prepare_socket_dir(socket_path: &Path, global_dir: Option<&Path>) -> std:
 /// must hold this before touching the socket: binding unlinks the existing
 /// socket file, so a second daemon would otherwise steal the path and orphan
 /// every agent the first one is running.
+#[cfg(windows)]
+pub fn try_acquire_daemon_lock(_socket_path: &Path) -> Result<Option<DaemonLock>, std::io::Error> {
+    // WIN-3.5: LockFileEx(LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY) on the lock file.
+    Err(crate::os::unsupported("daemon lock"))
+}
+
+/// Take the daemon lock for `socket_path` without blocking.
+///
+/// Returns `Ok(None)` when another live daemon already holds it. Every daemon
+/// must hold this before touching the socket: binding unlinks the existing
+/// socket file, so a second daemon would otherwise steal the path and orphan
+/// every agent the first one is running.
+#[cfg(unix)]
 pub fn try_acquire_daemon_lock(socket_path: &Path) -> Result<Option<DaemonLock>, std::io::Error> {
     let file = OpenOptions::new()
         .create(true)
@@ -126,6 +163,14 @@ pub fn cleanup_files(pid_path: &Path, socket_path: &Path) {
 
 /// Raise the open-file soft limit as far as the hard limit allows (capped, since
 /// macOS reports RLIM_INFINITY but rejects soft limits above OPEN_MAX).
+#[cfg(windows)]
+pub fn raise_fd_limit() {
+    // WIN-3.5: Windows has no RLIMIT_NOFILE; decide whether anything (e.g. _setmaxstdio) is needed.
+}
+
+/// Raise the open-file soft limit as far as the hard limit allows (capped, since
+/// macOS reports RLIM_INFINITY but rejects soft limits above OPEN_MAX).
+#[cfg(unix)]
 pub fn raise_fd_limit() {
     use nix::sys::resource::{Resource, getrlimit, setrlimit};
     const TARGET: u64 = 10_240;
@@ -140,6 +185,13 @@ pub fn raise_fd_limit() {
     }
 }
 
+#[cfg(windows)]
+pub fn is_process_alive(_pid: u32) -> bool {
+    // WIN-3.5: OpenProcess + GetExitCodeProcess == STILL_ACTIVE.
+    false
+}
+
+#[cfg(unix)]
 pub fn is_process_alive(pid: u32) -> bool {
     let Ok(raw) = i32::try_from(pid) else {
         return false;
@@ -152,11 +204,13 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_missing_global_dir_should_create_it_owner_only() {
         let tmp = TempDir::new().unwrap();
@@ -165,6 +219,7 @@ mod tests {
         assert_eq!(mode(&global), 0o700);
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_shared_global_dir_should_repair_it_to_owner_only() {
         use std::os::unix::fs::PermissionsExt;
@@ -178,6 +233,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_global_dir_owned_by_another_user_should_refuse() {
         // Any directory we do not own will do: `/` is root's (skip as root).
@@ -189,6 +245,7 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_custom_socket_dir_should_create_missing_but_keep_existing_modes() {
         use std::os::unix::fs::PermissionsExt;

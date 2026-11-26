@@ -1,14 +1,28 @@
 use std::collections::{HashMap, VecDeque};
+#[cfg(unix)]
 use std::ffi::CString;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(unix)]
 use nix::pty::openpty;
+#[cfg(unix)]
 use nix::sys::signal::{self, Signal};
+#[cfg(unix)]
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+#[cfg(unix)]
 use nix::unistd::{self, ForkResult, Pid};
 use tokio::sync::watch;
+
+/// Stand-in for the PTY master handle so signatures shared with Unix compile.
+// WIN-3.2: replace with the ConPTY handle pair (input/output pipes + HPCON).
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct OwnedFd {
+    _private: (),
+}
 
 use crate::output_buffer::OutputBuffer;
 
@@ -70,12 +84,14 @@ pub(crate) fn descendants_from_tree(tree: &HashMap<i32, Vec<i32>>, root_pid: i32
     result
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 async fn collect_process_descendants(root_pid: i32) -> Vec<i32> {
     let tree = snapshot_process_tree().await;
     descendants_from_tree(&tree, root_pid)
 }
 
 /// Fallback fd upper bound when sysconf(_SC_OPEN_MAX) fails or overflows i32.
+#[cfg(unix)]
 const FD_CLOSE_UPPER_BOUND: i32 = 10240;
 
 /// Chunked-submit tuning: bytes per write (small enough to avoid TUI paste-mode).
@@ -137,6 +153,13 @@ impl NativePtyHost {
         Self
     }
 
+    #[cfg(windows)]
+    pub async fn spawn(&self, _config: SpawnConfig) -> Result<AgentHandle, std::io::Error> {
+        // WIN-3.2: spawn the child under a ConPTY and start the reader/wait tasks.
+        Err(crate::os::unsupported("PTY spawn"))
+    }
+
+    #[cfg(unix)]
     pub async fn spawn(&self, config: SpawnConfig) -> Result<AgentHandle, std::io::Error> {
         let pty = openpty(None, None).map_err(std::io::Error::other)?;
 
@@ -324,6 +347,17 @@ impl NativePtyHost {
         Ok(ProcessState { exit_code })
     }
 
+    #[cfg(windows)]
+    pub async fn kill(
+        &self,
+        _handle: &AgentHandle,
+        _grace_period: Duration,
+    ) -> Result<ProcessState, std::io::Error> {
+        // WIN-3.3: terminate the agent's job object (tree kill) with a grace period.
+        Err(crate::os::unsupported("agent kill"))
+    }
+
+    #[cfg(unix)]
     pub async fn kill(
         &self,
         handle: &AgentHandle,
@@ -388,6 +422,18 @@ impl NativePtyHost {
     }
 
     /// Write to a PTY fd directly (for use without holding a session lock).
+    #[cfg(windows)]
+    pub async fn write_to_fd(
+        &self,
+        _fd_holder: &Arc<OwnedFd>,
+        _data: &[u8],
+    ) -> Result<(), std::io::Error> {
+        // WIN-3.2: write to the ConPTY input pipe.
+        Err(crate::os::unsupported("PTY write"))
+    }
+
+    /// Write to a PTY fd directly (for use without holding a session lock).
+    #[cfg(unix)]
     pub async fn write_to_fd(
         &self,
         fd_holder: &Arc<OwnedFd>,
@@ -455,6 +501,19 @@ impl NativePtyHost {
     }
 
     /// Resize a PTY fd directly (for use without holding a session lock).
+    #[cfg(windows)]
+    pub async fn resize_fd(
+        &self,
+        _fd_holder: &Arc<OwnedFd>,
+        _cols: u16,
+        _rows: u16,
+    ) -> Result<(), std::io::Error> {
+        // WIN-3.2: ResizePseudoConsole.
+        Err(crate::os::unsupported("PTY resize"))
+    }
+
+    /// Resize a PTY fd directly (for use without holding a session lock).
+    #[cfg(unix)]
     pub async fn resize_fd(
         &self,
         fd_holder: &Arc<OwnedFd>,
@@ -482,7 +541,8 @@ impl NativePtyHost {
     }
 }
 
-#[cfg(test)]
+// These spawn real /bin binaries under a Unix PTY.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::time::Duration;
