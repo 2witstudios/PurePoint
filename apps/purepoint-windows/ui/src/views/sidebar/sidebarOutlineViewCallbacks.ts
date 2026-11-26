@@ -14,7 +14,10 @@
 import type { SidebarSelection } from '../../model/sidebarItem.ts';
 import type { AppState } from '../../state/appState.ts';
 import { openCommandPalette } from '../shell/appCommands.ts';
-import type { SidebarOutlineCallbacks } from './SidebarOutlineViewController.tsx';
+import type {
+  SidebarOutlineCallbacks,
+  SidebarSelectOptions,
+} from './SidebarOutlineViewController.tsx';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -22,7 +25,7 @@ function errorMessage(error: unknown): string {
 
 export interface WireCallbacksOptions {
   /** The shell's selection binding. */
-  readonly select: (selection: SidebarSelection | null) => void;
+  readonly select: (selection: SidebarSelection | null, options?: SidebarSelectOptions) => void;
   /** Defaults to the app's `openCommandPalette` stub. */
   readonly showCommandPalette?: typeof openCommandPalette;
 }
@@ -34,8 +37,8 @@ export function wireCallbacks(
 ): SidebarOutlineCallbacks {
   const showCommandPalette = options.showCommandPalette ?? openCommandPalette;
   return {
-    onSelectionChanged: (selection) => {
-      options.select(selection);
+    onSelectionChanged: (selection, select) => {
+      options.select(selection, select);
     },
 
     onShowCommandPalette: (projectId, selection, includeWorktree) => {

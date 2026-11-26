@@ -243,25 +243,25 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Sidebar/AddMachineSheet+iOS.swift` | 390 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/AddMachineSheet.swift` | 125 | `ui/src/views/sidebar/AddMachineSheet.tsx` | WIN-8.14 | todo | — |
 | `Views/Sidebar/RemoteFolderPicker+iOS.swift` | 503 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Sidebar/SidebarFooter.swift` | 153 | `ui/src/views/sidebar/SidebarFooter.tsx` | WIN-7.2 | todo | — |
+| `Views/Sidebar/SidebarFooter.swift` | 153 | `ui/src/views/sidebar/SidebarFooter.tsx` | WIN-7.2 | ported | — |
 | `Views/Sidebar/SidebarMenuModel.swift` | 263 | `ui/src/model/sidebarMenu.ts` | WIN-6.5 | ported | — |
 | `Views/Sidebar/SidebarOutlineModel.swift` | 310 | `ui/src/model/sidebarOutline.ts` | WIN-6.5 | ported | — |
-| `Views/Sidebar/SidebarOutlineView+Callbacks.swift` | 124 | `ui/src/views/sidebar/sidebarOutlineViewCallbacks.ts` | WIN-7.2 | todo | — |
+| `Views/Sidebar/SidebarOutlineView+Callbacks.swift` | 124 | `ui/src/views/sidebar/sidebarOutlineViewCallbacks.ts` | WIN-7.2 | ported | — |
 | `Views/Sidebar/SidebarOutlineView+iOS.swift` | 37 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Sidebar/SidebarOutlineView.swift` | 37 | `ui/src/views/sidebar/SidebarOutlineView.tsx` | WIN-7.2 | todo | — |
+| `Views/Sidebar/SidebarOutlineView.swift` | 37 | `ui/src/views/sidebar/SidebarOutlineView.tsx` | WIN-7.2 | ported | — |
 | `Views/Sidebar/SidebarOutlineViewController+Actions.swift` | 128 | `ui/src/views/sidebar/sidebarOutlineViewControllerActions.ts` | WIN-7.8 | todo | — |
 | `Views/Sidebar/SidebarOutlineViewController+ProjectDrag.swift` | 54 | `ui/src/views/sidebar/sidebarOutlineViewControllerProjectDrag.ts` | WIN-7.8 | todo | — |
 | `Views/Sidebar/SidebarOutlineViewController+iOS.swift` | 593 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarOutlineViewController+iOSCells.swift` | 344 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarOutlineViewController+iOSKeys.swift` | 109 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarOutlineViewController+iOSMenus.swift` | 219 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Sidebar/SidebarOutlineViewController.swift` | 841 | `ui/src/views/sidebar/SidebarOutlineViewController.tsx` | WIN-7.2 | todo | — |
-| `Views/Sidebar/SidebarView.swift` | 108 | `ui/src/views/sidebar/SidebarView.tsx` | WIN-7.2 | todo | — |
+| `Views/Sidebar/SidebarOutlineViewController.swift` | 841 | `ui/src/views/sidebar/SidebarOutlineViewController.tsx` | WIN-7.2 | ported | — |
+| `Views/Sidebar/SidebarView.swift` | 108 | `ui/src/views/sidebar/SidebarView.tsx` | WIN-7.2 | ported | — |
 | `Views/Terminal/ScrollableTerminal+iOS.swift` | 648 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Terminal/ScrollableTerminal+iOSSupport.swift` | 380 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Terminal/ScrollableTerminal.swift` | 564 | `ui/src/views/terminal/scrollableTerminal.ts`, `ui/src/views/terminal/terminalTheme.ts`, `ui/src/views/terminal/terminalFontStore.ts` (xterm.js + WebGL with DOM fallback; wheel, SGR mouse, hover and autoscroll are xterm.js built-ins; Shift forces selection; remote-host uploads and file drops are WIN-8.14/WIN-7.4) | WIN-7.3 | ported | — |
 | `Views/Terminal/TerminalContainerView+iOS.swift` | 112 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Terminal/TerminalContainerView.swift` | 116 | `ui/src/views/terminal/TerminalPane.tsx`, `ui/src/views/terminal/AgentTerminals.tsx` (interim agent list and detail terminals until WIN-7.2/WIN-7.4) | WIN-7.3 | ported | — |
+| `Views/Terminal/TerminalContainerView.swift` | 116 | `ui/src/views/terminal/TerminalPane.tsx`, `ui/src/views/terminal/AgentTerminals.tsx` (interim detail terminals for the sidebar-selected agents until WIN-7.4) | WIN-7.3 | ported | — |
 | `Views/Terminal/TerminalPaneView+iOS.swift` | 247 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Terminal/TerminalPaneView.swift` | 251 | `ui/src/views/terminal/terminalPaneView.ts` | WIN-7.3 | ported | — |
 | `Views/Terminal/TerminalViewCache.swift` | 152 | `ui/src/views/terminal/terminalViewCache.ts`, `ui/src/views/terminal/terminals.ts` (evicts every hidden terminal 30 s after hiding, REQ-WINAPP-061) | WIN-7.3 | ported | — |
@@ -333,7 +333,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `SidebarOutlineModelTests.swift` | all | `ui/src/model/sidebarOutline.test.ts` | WIN-6.5 | ported | — |
 | `SidebarOutlineViewControllerIOSMenuTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `SidebarOutlineViewControllerIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `SidebarOutlineViewControllerTests.swift` | all | `ui/src/views/sidebar/SidebarOutline.test.tsx` | WIN-7.2 | todo | Platform-neutral cases only |
+| `SidebarOutlineViewControllerTests.swift` | all | `ui/src/views/sidebar/SidebarOutline.test.tsx` | WIN-7.2 | ported | Platform-neutral cases only |
 | `SidebarVisibilityTests.swift` | all | `ui/src/state/sidebarVisibilityStore.test.ts` | WIN-6.5 | ported | — |
 | `SpawnTargetResolverTests.swift` | all | `ui/src/state/spawnTargetResolver.test.ts` | WIN-6.6 | ported | — |
 | `StreamAccumulatorTests.swift` | all | `ui/src/state/streamAccumulator.test.ts` | WIN-8.16 | ported | Timer cases use fake timers |

@@ -27,7 +27,9 @@ import {
 import { makeWorktreeModel } from '../../model/workspaceModel.ts';
 import { createSidebarExpansionStore } from '../../state/sidebarExpansionStore.ts';
 import { AppStateContext } from '../shell/appContext.ts';
-import { ContentView } from '../shell/ContentView.tsx';
+import { ContentView, selectSidebarAgents } from '../shell/ContentView.tsx';
+import type { AppState } from '../../state/appState.ts';
+import { useAgentSelection } from '../terminal/agentSelection.ts';
 import { makeTestApp } from '../shell/testApp.ts';
 import { SidebarFooter } from './SidebarFooter.tsx';
 import {
@@ -464,6 +466,62 @@ describe('SidebarOutlineViewController', () => {
     expect(rows().some((row) => row.getAttribute('aria-selected') === 'true')).toBe(false);
   });
 
+  it('reports a Ctrl+click as additive, and names every row with a stable test id', () => {
+    const { store } = memoryStore();
+    const { project, rootWorkspace, worktreeWorkspace, workspacesByProject } = fixture();
+    const onSelectionChanged = vi.fn();
+    renderOutline({
+      projects: [project],
+      workspacesByProject,
+      expansionStore: store,
+      onSelectionChanged,
+    });
+
+    const name = project.projectRoot.split('/').pop() ?? '';
+    expect(screen.getByTestId(`sidebar-row-project-${name}`)).toBe(requireRow(projectKey(project)));
+    expect(screen.getByTestId('sidebar-row-worktree-wt-0')).toBe(
+      requireRow(worktreeKey(project, 'wt-0')),
+    );
+    const agentRow = screen.getByTestId('sidebar-row-agent-agent-wt-0');
+    expect(agentRow).toHaveAttribute('data-agent-id', 'agent-wt-0');
+
+    fireEvent.mouseDown(screen.getByTestId('sidebar-row-agent-root-agent'), { button: 0 });
+    expect(onSelectionChanged).toHaveBeenLastCalledWith(
+      sidebarSelection.workspace(rootWorkspace.id),
+    );
+    fireEvent.mouseDown(agentRow, { button: 0, ctrlKey: true });
+    expect(onSelectionChanged).toHaveBeenLastCalledWith(
+      sidebarSelection.workspace(worktreeWorkspace.id),
+      { additive: true },
+    );
+  });
+
+  it("shows a workspace row's agents in the terminals, Ctrl+click adding, other rows clearing", () => {
+    const one = adoptingWorkspace('agent-1', { kind: 'projectRoot' });
+    const two = splitPane(
+      adoptingWorkspace('agent-2', { kind: 'projectRoot' }),
+      0,
+      'horizontal',
+      agentContent('agent-3'),
+    ).workspace;
+    const byId = new Map([one, two].map((workspace) => [workspace.id, workspace]));
+    const app = {
+      registry: { workspace: (id: string) => byId.get(id) ?? null },
+    } as unknown as AppState;
+    const agentIds = () => useAgentSelection.getState().agentIds;
+
+    selectSidebarAgents(app, sidebarSelection.workspace(one.id), false);
+    expect(agentIds()).toEqual(['agent-1']);
+    selectSidebarAgents(app, sidebarSelection.workspace(two.id), true);
+    expect(agentIds()).toEqual(['agent-1', 'agent-2', 'agent-3']);
+    selectSidebarAgents(app, sidebarSelection.workspace(one.id), true);
+    expect(agentIds()).toEqual(['agent-2', 'agent-3']);
+    selectSidebarAgents(app, sidebarSelection.workspace(one.id), false);
+    expect(agentIds()).toEqual(['agent-1']);
+    selectSidebarAgents(app, sidebarSelection.project('/tmp/p'), false);
+    expect(agentIds()).toEqual([]);
+  });
+
   it('moves with the arrows, closes and opens with Left and Right', () => {
     const { store } = memoryStore();
     const { project, workspacesByProject } = fixture();
@@ -778,7 +836,7 @@ describe('SidebarView', () => {
       app.openProject('C:\\work\\purepoint');
     });
     fireEvent.mouseDown(screen.getByRole('treeitem', { name: 'purepoint' }), { button: 0 });
-    expect(screen.getByText('ProjectDetailView')).toBeInTheDocument();
+    expect(screen.getByText('purepoint', { selector: '.detail-title' })).toBeInTheDocument();
     expect(app.activeProjectRoot).toBe('C:\\work\\purepoint');
 
     fireEvent.click(screen.getByRole('button', { name: 'Point Guard' }));

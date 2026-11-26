@@ -65,22 +65,3 @@
 .agent-terminals > .terminal-pane {
   display: flex;
 }
-
-.sidebar-agent-list {
-  list-style: none;
-  margin: 12px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.sidebar-agent-list .sidebar-nav-row {
-  width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-agent-list .sidebar-nav-row[aria-pressed='true'] {
-  background: var(--control-pressed);
-}

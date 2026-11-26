@@ -110,10 +110,21 @@ export function provisionalSignalPill(signal: WorkspaceSignal): SignalPill {
   }
 }
 
+/** How a row was chosen. */
+export interface SidebarSelectOptions {
+  readonly additive?: boolean;
+}
+
 /** What the controller reports (Swift's `on…` callbacks), addressed by ids. */
 export interface SidebarOutlineCallbacks {
-  /** A row was chosen; null clears the selection. */
-  readonly onSelectionChanged?: (selection: SidebarSelection | null) => void;
+  /**
+   * A row was chosen; null clears the selection. `additive` is a Ctrl+click, which adds a
+   * workspace's agents to the terminals on screen rather than replacing them.
+   */
+  readonly onSelectionChanged?: (
+    selection: SidebarSelection | null,
+    options?: SidebarSelectOptions,
+  ) => void;
   /** An add button: (project, selection context, whether worktree variants are offered). */
   readonly onShowCommandPalette?: (
     projectId: string,
@@ -277,6 +288,29 @@ function findWorkspace(
 
 function rowDomId(rowKey: string): string {
   return 'sidebar-row-' + rowKey.replace(/[^\w-]/g, '_');
+}
+
+/**
+ * A row's stable test id: `sidebar-row-<kind>-<name>`, named as the row reads (a project by its
+ * folder, a worktree by its name, an agent by its title).
+ */
+function rowTestId(
+  node: SidebarNode,
+  project: ProjectSnapshot | null,
+  workspace: WorkspaceRenderState | null,
+): string {
+  switch (node.kind) {
+    case 'project':
+      return `sidebar-row-project-${projectName(node.project)}`;
+    case 'worktree':
+      return `sidebar-row-worktree-${node.worktree.name}`;
+    case 'workspace':
+      return `sidebar-row-agent-${workspace?.title ?? project?.projectId ?? node.workspace.id}`;
+    case 'machine':
+      return `sidebar-row-machine-${node.machine.name}`;
+    case 'sectionHeader':
+      return `sidebar-row-section-${node.title}`;
+  }
 }
 
 // MARK: - Cells
@@ -731,11 +765,13 @@ export function SidebarOutlineViewController({
 
   // MARK: Actions
 
-  const choose = (node: SidebarNode) => {
+  const choose = (node: SidebarNode, additive = false) => {
     if (!isSelectable(node)) return;
     const next = selectionFor(node);
     setPick({ rowKey: node.rowKey, selection: next ?? selection });
-    if (next !== null) callbacks.onSelectionChanged?.(next);
+    if (next === null) return;
+    if (additive) callbacks.onSelectionChanged?.(next, { additive: true });
+    else callbacks.onSelectionChanged?.(next);
   };
 
   const setExpanded = (node: SidebarNode, expanded: boolean) => {
@@ -909,6 +945,10 @@ export function SidebarOutlineViewController({
         role="treeitem"
         data-kind={node.kind}
         data-row-key={node.rowKey}
+        data-testid={rowTestId(node, project, workspace)}
+        data-agent-id={
+          node.kind === 'workspace' ? (primaryAgentId(node.workspace) ?? undefined) : undefined
+        }
         data-unavailable={cell.unavailable === true ? 'true' : undefined}
         aria-level={row.depth + 1}
         aria-selected={isSelectable(node) ? selected : undefined}
@@ -922,7 +962,7 @@ export function SidebarOutlineViewController({
         }}
         onMouseDown={(event) => {
           if (event.button !== 0) return;
-          choose(node);
+          choose(node, event.ctrlKey);
         }}
       >
         {expandable ? (

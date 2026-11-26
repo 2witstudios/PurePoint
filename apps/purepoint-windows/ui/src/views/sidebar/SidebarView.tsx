@@ -20,7 +20,10 @@ import { Icon } from '../../theme/Icon.tsx';
 import { useAppState } from '../shell/appContext.ts';
 import { SidebarFooter } from './SidebarFooter.tsx';
 import { SidebarOutlineView } from './SidebarOutlineView.tsx';
-import type { SidebarExpansionStoreApi } from './SidebarOutlineViewController.tsx';
+import type {
+  SidebarExpansionStoreApi,
+  SidebarSelectOptions,
+} from './SidebarOutlineViewController.tsx';
 import './sidebar.css';
 
 /** The SF Symbols the nav items draw (Swift `SidebarNavItem.icon`; `NAV_ITEM_ICONS` in Lucide). */
@@ -32,7 +35,10 @@ const NAV_SYMBOLS: Record<SidebarNavItem, SfSymbolName> = {
 
 export interface SidebarViewProps {
   readonly selection: SidebarSelection | null;
-  readonly onSelectionChange: (selection: SidebarSelection | null) => void;
+  readonly onSelectionChange: (
+    selection: SidebarSelection | null,
+    options?: SidebarSelectOptions,
+  ) => void;
   readonly expansionStore?: SidebarExpansionStoreApi;
 }
 
@@ -48,6 +54,7 @@ export function SidebarView({ selection, onSelectionChange, expansionStore }: Si
       <button
         type="button"
         className="sidebar-brand"
+        data-testid="sidebar-nav-dashboard"
         aria-current={selectionsEqual(selection, dashboard) ? 'page' : undefined}
         onClick={() => {
           onSelectionChange(dashboard);
@@ -66,6 +73,7 @@ export function SidebarView({ selection, onSelectionChange, expansionStore }: Si
               type="button"
               key={item}
               className="sidebar-nav-button"
+              data-testid={`sidebar-nav-${item}`}
               aria-current={selectionsEqual(selection, row) ? 'page' : undefined}
               onClick={() => {
                 onSelectionChange(row);

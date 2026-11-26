@@ -58,7 +58,7 @@ describe('Triggers', () => {
     await browser.execute(() => {
       (window as unknown as SpyWindow).__PU_OPENER_SPY__ = [];
     });
-    await $('button.sidebar-nav-row=Agents').click();
+    await $('[data-testid="sidebar-nav-agents"]').click();
     await $('button[role="tab"]=Triggers').click();
   });
 

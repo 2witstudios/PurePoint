@@ -10,6 +10,7 @@
 import { basename } from 'node:path';
 import { browser, $, expect } from '@wdio/globals';
 import { DaemonFixture } from '../fixtures/daemon.ts';
+import { projectRow, worktreeRow } from '../fixtures/sidebar.ts';
 
 const WORKTREE = 'e2e-wt';
 
@@ -68,7 +69,7 @@ describe('Project and worktree detail', () => {
   });
 
   it('opens the project detail from the sidebar', async () => {
-    const project = $('[data-testid="project-list"]').$(`li=${projectName}`);
+    const project = projectRow(projectName);
     await project.waitForDisplayed();
     await project.click();
     await expect($('[data-view="ProjectDetailView"]')).toBeDisplayed();
@@ -102,14 +103,15 @@ describe('Project and worktree detail', () => {
   });
 
   it('opens the worktree detail from the sidebar', async () => {
-    await $('[data-testid="project-list"]').$(`li=${projectName}`).click();
+    await projectRow(projectName).click();
     await expect($('[data-view="ProjectDetailView"]')).toBeDisplayed();
-    const row = $('[data-testid="worktree-row"]');
+    const row = worktreeRow(WORKTREE);
     await row.waitForDisplayed();
     await row.click();
     await expect($('[data-view="WorktreeDetailView"]')).toBeDisplayed();
-    const path = (await row.getAttribute('title')) ?? fixture.projectRoot;
-    const branch = (await fixture.gitIn(path, 'branch', '--show-current')).stdout.trim();
+    // The row reads as the worktree's branch, as the Mac's does.
+    const branch = (await row.getAttribute('aria-label')) ?? '';
+    expect(branch).toBe(`pu/${WORKTREE}`);
     await expectLabels([WORKTREE, branch, ...WORKTREE_LABELS]);
     await $('[aria-label="Toggle changes view"]').click();
     await expectLabels(WORKTREE_EDITOR_LABELS);

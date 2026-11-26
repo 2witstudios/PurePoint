@@ -4,6 +4,7 @@
 import { existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { browser, $, expect } from '@wdio/globals';
+import { projectRow } from '../fixtures/sidebar.ts';
 
 function fixtureEnv(name: 'PU_E2E_HOME' | 'PU_E2E_PROJECT_ROOT'): string {
   const value = process.env[name];
@@ -29,11 +30,11 @@ describe('PurePoint smoke', () => {
 
   it('lists the fixture project from the daemon', async () => {
     const projectRoot = fixtureEnv('PU_E2E_PROJECT_ROOT');
-    const list = $('[data-testid="project-list"]');
-    await expect(list).toBeExisting();
-    const item = list.$(`li=${basename(projectRoot)}`);
+    await expect($('[role="tree"][aria-label="Projects"]')).toBeExisting();
+    const item = projectRow(basename(projectRoot));
     await expect(item).toBeDisplayed();
-    await expect(item).toHaveAttribute('title', projectRoot);
+    await expect(item).toHaveAttribute('data-kind', 'project');
+    await expect(item).toHaveAttribute('aria-label', basename(projectRoot));
   });
 
   it('installs its CLI copy into the fixture HOME', async () => {

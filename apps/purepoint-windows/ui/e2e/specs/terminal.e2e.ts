@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { browser, $, expect } from '@wdio/globals';
 import { AttachTap } from '../fixtures/attachTap.ts';
 import { DaemonFixture } from '../fixtures/daemon.ts';
+import { agentRow, agentRowSelector } from '../fixtures/sidebar.ts';
 import { workspace } from '../fixtures/paths.ts';
 
 const echoScript = join(workspace.appDir, 'ui', 'e2e', 'fixtures', 'echo-bytes.mjs');
@@ -72,23 +73,24 @@ async function locate(agentId: string, needle: string): Promise<{ x: number; y: 
   return point;
 }
 
-/** Select agents in the interim sidebar list: the first replaces, the rest Ctrl+click in. */
+/** Select agents' rows in the sidebar outline: the first replaces, the rest Ctrl+click in. */
 async function showAgents(agentIds: readonly string[]): Promise<void> {
-  await browser.execute((ids: readonly string[]) => {
-    ids.forEach((id, index) => {
-      const button = document.querySelector(`[data-testid="agent-list"] [data-agent-id="${id}"]`);
-      button?.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: index > 0 }));
+  await browser.execute((selectors: readonly string[]) => {
+    selectors.forEach((selector, index) => {
+      const row = document.querySelector(selector);
+      // The outline selects on mouse down, as NSOutlineView does.
+      row?.dispatchEvent(
+        new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: index > 0 }),
+      );
     });
-  }, agentIds);
+  }, agentIds.map(agentRowSelector));
   for (const id of agentIds) {
     await expect($(`[data-testid="terminal-pane"][data-agent-id="${id}"] .xterm`)).toBeDisplayed();
   }
 }
 
 async function waitForAgentRow(agentId: string): Promise<void> {
-  await expect($(`[data-testid="agent-list"] [data-agent-id="${agentId}"]`)).toBeExisting({
-    wait: 30_000,
-  });
+  await expect(agentRow(agentId)).toBeExisting({ wait: 30_000 });
 }
 
 /** Click a pane's text area at a screen point (focuses it). */

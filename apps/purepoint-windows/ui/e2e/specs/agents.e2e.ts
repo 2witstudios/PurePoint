@@ -4,6 +4,7 @@
 
 import { browser, $, expect } from '@wdio/globals';
 import { DaemonFixture } from '../fixtures/daemon.ts';
+import { agentRow } from '../fixtures/sidebar.ts';
 
 interface SpyWindow {
   __PU_OPENER_SPY__?: string[];
@@ -59,7 +60,7 @@ describe('Agents hub', () => {
     await browser.execute(() => {
       (window as unknown as SpyWindow).__PU_OPENER_SPY__ = [];
     });
-    await $('button.sidebar-nav-row=Agents').click();
+    await $('[data-testid="sidebar-nav-agents"]').click();
     await expect($('[data-testid="agents-hub"]')).toBeDisplayed();
   });
 
@@ -88,9 +89,7 @@ describe('Agents hub', () => {
       timeout: 30_000,
       timeoutMsg: `pu status never listed ${String(agentId)}`,
     });
-    await expect($(`[data-testid="agent-list"] [data-agent-id="${String(agentId)}"]`)).toBeExisting(
-      { wait: 30_000 },
-    );
+    await expect(agentRow(String(agentId))).toBeExisting({ wait: 30_000 });
   });
 
   it('creates a terminal agent definition', async () => {

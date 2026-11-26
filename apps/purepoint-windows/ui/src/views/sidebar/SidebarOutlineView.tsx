@@ -13,6 +13,7 @@ import type { WorkspaceRegistryState } from '../../state/workspaceRegistry.ts';
 import { useAppState } from '../shell/appContext.ts';
 import {
   type SidebarExpansionStoreApi,
+  type SidebarSelectOptions,
   SidebarOutlineViewController,
 } from './SidebarOutlineViewController.tsx';
 import { wireCallbacks } from './sidebarOutlineViewCallbacks.ts';
@@ -27,7 +28,10 @@ const NO_REGISTRY = createStore<WorkspaceRegistryState>()(() => ({
 
 export interface SidebarOutlineViewProps {
   readonly selection: SidebarSelection | null;
-  readonly onSelectionChange: (selection: SidebarSelection | null) => void;
+  readonly onSelectionChange: (
+    selection: SidebarSelection | null,
+    options?: SidebarSelectOptions,
+  ) => void;
   readonly expansionStore?: SidebarExpansionStoreApi;
 }
 

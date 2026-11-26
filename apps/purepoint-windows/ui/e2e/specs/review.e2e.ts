@@ -7,6 +7,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { browser, $, $$, expect } from '@wdio/globals';
 import { DaemonFixture } from '../fixtures/daemon.ts';
+import { worktreeRow } from '../fixtures/sidebar.ts';
 
 const WORKTREE = 'review-wt';
 const BIG_FILE = 'big.ts';
@@ -49,8 +50,8 @@ describe('Review changes', () => {
   });
 
   it('opens the worktree review on its branch changes', async () => {
-    // The worktree's agent shares its name, so look only in the project/worktree list.
-    const row = $(`//ul[@data-testid="project-list"]//li[normalize-space()="${WORKTREE}"]`);
+    // The worktree's agent shares its name; the worktree row has its own test id.
+    const row = worktreeRow(WORKTREE);
     await row.waitForDisplayed({ timeout: 30_000 });
     await row.click();
     await expect($('[data-view="ReviewChangesView"]')).toBeDisplayed();

@@ -1,6 +1,6 @@
-// Which agents' terminals the detail area shows (WIN-7.3). Until the pane grid (WIN-7.4) and the
-// sidebar outline (WIN-7.2) select agents through workspaces, the interim sidebar agent list
-// selects them here: a click shows one agent, Ctrl+click adds or removes one from the set.
+// Which agents' terminals the detail area shows (WIN-7.3). Until the pane grid (WIN-7.4) shows a
+// workspace's agents itself, the sidebar's workspace rows select them here (ContentView's
+// `selectSidebarAgents`): a click shows one row's agents, Ctrl+click adds or removes them.
 import { create } from 'zustand';
 
 export interface AgentSelectionState {

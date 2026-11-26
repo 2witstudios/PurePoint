@@ -5,6 +5,7 @@
 import { basename } from 'node:path';
 import { browser, $, expect } from '@wdio/globals';
 import { DaemonFixture } from '../fixtures/daemon.ts';
+import { projectRow } from '../fixtures/sidebar.ts';
 
 interface ChannelReadJson {
   type: string;
@@ -28,7 +29,7 @@ describe('Project channel', () => {
   }
 
   it('opens the channel from the project detail', async () => {
-    const project = $('[data-testid="project-list"]').$(`li=${projectName}`);
+    const project = projectRow(projectName);
     await project.waitForDisplayed();
     await project.click();
     await expect($('[data-view="ProjectDetailView"]')).toBeDisplayed();
