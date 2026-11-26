@@ -131,7 +131,12 @@ async fn native_pid_domain() -> Option<&'static str> {
                 }
                 Ok::<String, ()>(format!("linux:{machine}:{}", namespace.to_str().ok_or(())?))
             }
-            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            #[cfg(windows)]
+            {
+                let computer = std::env::var("COMPUTERNAME").map_err(|_| ())?;
+                windows_pid_domain(&computer).ok_or(())
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
             {
                 Err::<String, ()>(())
             }
@@ -139,6 +144,14 @@ async fn native_pid_domain() -> Option<&'static str> {
         .await
         .ok()
         .map(String::as_str)
+}
+
+/// Claude Code's Windows registry namespace, as recorded in WIN-1.1:
+/// `win32:` + lowercase `COMPUTERNAME`.
+#[cfg(windows)]
+fn windows_pid_domain(computer: &str) -> Option<String> {
+    let computer = computer.trim();
+    (!computer.is_empty()).then(|| format!("win32:{}", computer.to_lowercase()))
 }
 
 impl Observer {
@@ -1646,5 +1659,34 @@ mod tests {
                     && s.pending_attention.is_empty()
             }));
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// The registry row Claude Code 2.1.332 wrote on Windows in the WIN-1.1
+    /// spike (`docs/research/windows-conpty.md` section 8), with the host
+    /// redacted as recorded there: COMPUTERNAME=DESKTOP-XXXXXXX.
+    const RECORDED_ROW: &str = r#"{"pid":14520,"sessionId":"00000000-0000-4000-8000-000000000000","cwd":"C:\\Users\\user\\dev","startedAt":1795653828085,"procStart":"134401274260337323","version":"2.1.332","peerProtocol":1,"peerFeatures":["notify_idle","artifact_yield"],"kind":"interactive","entrypoint":"cli","pidDomain":"win32:desktop-xxxxxxx","messagingSocketPath":"\\\\.\\pipe\\LOCAL\\cc-msg-0","status":"idle"}"#;
+
+    #[test]
+    fn given_recorded_registry_row_should_match_its_computer_name() {
+        let row: Value = serde_json::from_str(RECORDED_ROW).unwrap();
+        assert_eq!(
+            row["pidDomain"].as_str(),
+            windows_pid_domain("DESKTOP-XXXXXXX").as_deref()
+        );
+        assert_eq!(windows_pid_domain(" "), None);
+    }
+
+    #[tokio::test]
+    async fn given_this_machine_should_use_lowercase_computer_name() {
+        let computer = std::env::var("COMPUTERNAME").unwrap();
+        assert_eq!(
+            native_pid_domain().await,
+            Some(format!("win32:{}", computer.to_lowercase()).as_str())
+        );
     }
 }

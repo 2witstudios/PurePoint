@@ -129,7 +129,13 @@ pub fn proc_process_tree() -> Option<HashMap<i32, Vec<i32>>> {
     Some(children)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Parent→children map of every process, from one Toolhelp32 snapshot.
+#[cfg(windows)]
+pub fn proc_process_tree() -> Option<HashMap<i32, Vec<i32>>> {
+    crate::win_proc::process_tree()
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn proc_process_tree() -> Option<HashMap<i32, Vec<i32>>> {
     None
 }
@@ -142,6 +148,13 @@ pub fn cmdline_to_command(cmdline: &[u8]) -> String {
 }
 
 /// Full command line of `pid`, or None if it is gone or unreadable.
+#[cfg(windows)]
+pub fn process_command(pid: u32) -> Option<String> {
+    crate::win_proc::process_command(pid)
+}
+
+/// Full command line of `pid`, or None if it is gone or unreadable.
+#[cfg(unix)]
 pub fn process_command(pid: u32) -> Option<String> {
     // Containers may not mount /proc; `ps` (if any) still works there.
     if cfg!(target_os = "linux")
@@ -187,6 +200,8 @@ pub fn proc_open_files(pids: &[i32], limit: usize) -> Option<Vec<PathBuf>> {
     Some(paths)
 }
 
+/// None outside Linux. On Windows there is no cheap open-file query, so Codex
+/// discovery uses rollout creation times instead (`read_source`).
 #[cfg(not(target_os = "linux"))]
 pub fn proc_open_files(_pids: &[i32], _limit: usize) -> Option<Vec<PathBuf>> {
     None

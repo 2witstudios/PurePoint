@@ -106,9 +106,9 @@ pub fn native_root(runtime: Runtime, env: &[(String, String)]) -> Result<PathBuf
         Runtime::Claude => get("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
         Runtime::Codex => get("CODEX_HOME").unwrap_or_else(|| home.join(".codex")),
         Runtime::Opencode => get("XDG_DATA_HOME")
-            .unwrap_or_else(|| home.join(".local/share"))
+            .unwrap_or_else(|| home.join(".local").join("share"))
             .join("opencode"),
-        Runtime::Pi => get("PI_CODING_AGENT_DIR").unwrap_or_else(|| home.join(".pi/agent")),
+        Runtime::Pi => get("PI_CODING_AGENT_DIR").unwrap_or_else(|| home.join(".pi").join("agent")),
         Runtime::Terminal => return Err(SourceError::IdentityUnavailable),
     })
 }
@@ -324,13 +324,27 @@ pub fn commit_binding(
 
 // Descriptor ownership is local metadata. DNS/service lookups can otherwise
 // stall the shared scan and withdraw every launch at the two-second deadline.
+#[cfg(unix)]
 fn codex_lsof_command(pids: &str, fields: &str) -> tokio::process::Command {
     let mut command = tokio::process::Command::new("lsof");
     command.args(["-nP", "-a", "-p", pids, fields]);
     command
 }
 
+/// Windows: the newest rollout this launch owns by creation time (see
+/// [`discover_codex_roots`]).
+#[cfg(windows)]
+pub async fn discover_codex(pid: u32, cwd: &str) -> Result<Binding, SourceError> {
+    discover_codex_roots(vec![(String::new(), pid, cwd.to_owned())])
+        .await
+        .remove("")
+        .flatten()
+        .ok_or(SourceError::IdentityUnavailable)?
+        .into_binding()
+}
+
 /// Only descriptors held by the owned process tree are discovery candidates.
+#[cfg(unix)]
 pub async fn discover_codex(pid: u32, cwd: &str) -> Result<Binding, SourceError> {
     use tokio::io::AsyncReadExt;
     let tree = crate::pty_manager::snapshot_process_tree().await;
@@ -393,6 +407,7 @@ impl CodexCandidate {
 /// One process-tree snapshot and one owned-descriptor query for all observed
 /// launches. PID-tagged lsof output preserves ownership even for identical cwds.
 /// Limits fail closed; no directory scan, service, or process ownership changes.
+#[cfg(unix)]
 pub(crate) async fn discover_codex_roots(
     roots: Vec<(String, u32, String)>,
 ) -> std::collections::HashMap<String, Option<CodexCandidate>> {
@@ -513,6 +528,138 @@ pub(crate) async fn discover_codex_roots(
     .unwrap_or_default()
 }
 
+/// Windows has no cheap open-file query (WINAPP-051), so ownership comes
+/// from time: each rollout goes to the latest launch in the same cwd that
+/// started at or before the rollout was created, and each launch takes its
+/// newest. Process start times come from `GetProcessTimes`.
+#[cfg(windows)]
+pub(crate) async fn discover_codex_roots(
+    roots: Vec<(String, u32, String)>,
+) -> std::collections::HashMap<String, Option<CodexCandidate>> {
+    use std::collections::HashMap;
+    if roots.is_empty() || roots.len() > 256 {
+        return HashMap::new();
+    }
+    tokio::task::spawn_blocking(move || {
+        let launches: Vec<_> = roots
+            .into_iter()
+            .filter_map(|(id, pid, cwd)| Some((id, crate::win_proc::process_start_time(pid)?, cwd)))
+            .collect();
+        let Some(earliest) = launches.iter().map(|(_, since, _)| *since).min() else {
+            return HashMap::new();
+        };
+        let Ok(root) = native_root(Runtime::Codex, &crate::win_env::daemon_env()) else {
+            return HashMap::new();
+        };
+        let rollouts: Vec<_> = recent_codex_rollouts(&root.join("sessions"), earliest)
+            .into_iter()
+            .filter_map(|(path, created)| {
+                let header = first_record(&path).ok()?;
+                Some((path, created, header))
+            })
+            .collect();
+        assign_codex_rollouts(&launches, &rollouts)
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Rollouts created at or after `since`, read only from the day directories
+/// (`sessions/YYYY/MM/DD`, named by local date) that can hold them; a day of
+/// slack on each side covers every UTC offset.
+#[cfg(windows)]
+fn recent_codex_rollouts(
+    sessions: &Path,
+    since: std::time::SystemTime,
+) -> Vec<(PathBuf, std::time::SystemTime)> {
+    use chrono::{DateTime, Utc};
+    let first = (DateTime::<Utc>::from(since) - chrono::Duration::days(1)).date_naive();
+    let last = (Utc::now() + chrono::Duration::days(1)).date_naive();
+    let days: Vec<_> = first.iter_days().take_while(|day| *day <= last).collect();
+    let mut found = Vec::new();
+    let mut visited = 0;
+    // Newest days first, so the discovery bound drops the oldest candidates.
+    for day in days.iter().rev().take(400) {
+        let dir = sessions
+            .join(day.format("%Y").to_string())
+            .join(day.format("%m").to_string())
+            .join(day.format("%d").to_string());
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > MAX_DISCOVERY {
+                return found;
+            }
+            if !entry.file_type().is_ok_and(|kind| kind.is_file())
+                || filter_codex_rollouts(vec![entry.path()]).is_empty()
+            {
+                continue;
+            }
+            if let Ok(created) = entry.metadata().and_then(|m| m.created())
+                && created >= since
+            {
+                found.push((entry.path(), created));
+            }
+        }
+    }
+    found
+}
+
+/// Pure ownership rule for [`discover_codex_roots`] on Windows. `launches`
+/// are `(id, start time, cwd)` and `rollouts` are `(path, creation time,
+/// header)`. A rollout that launches started at the same instant could all
+/// own makes each of them ambiguous unless it owns another.
+#[cfg(windows)]
+fn assign_codex_rollouts(
+    launches: &[(String, std::time::SystemTime, String)],
+    rollouts: &[(PathBuf, std::time::SystemTime, Value)],
+) -> std::collections::HashMap<String, Option<CodexCandidate>> {
+    use std::collections::{HashMap, HashSet};
+    let mut owned: HashMap<&str, Vec<(std::time::SystemTime, Binding)>> = HashMap::new();
+    let mut contested: HashSet<&str> = HashSet::new();
+    for (path, created, header) in rollouts {
+        let claims: Vec<_> = launches
+            .iter()
+            .filter(|(_, since, _)| since <= created)
+            .filter_map(|(id, since, cwd)| {
+                let binding = codex_header_binding(path, header, cwd).ok()??;
+                Some((id.as_str(), *since, binding))
+            })
+            .collect();
+        let Some(latest) = claims.iter().map(|(_, since, _)| *since).max() else {
+            continue;
+        };
+        let mut owners: Vec<_> = claims
+            .into_iter()
+            .filter(|(_, since, _)| *since == latest)
+            .collect();
+        if owners.len() == 1 {
+            let (id, _, binding) = owners.pop().unwrap();
+            owned.entry(id).or_default().push((*created, binding));
+        } else {
+            contested.extend(owners.iter().map(|(id, ..)| *id));
+        }
+    }
+    launches
+        .iter()
+        .map(|(id, ..)| {
+            let newest = owned.remove(id.as_str()).and_then(|mut bindings| {
+                bindings.sort_by_key(|(created, _)| *created);
+                bindings.pop()
+            });
+            let candidate = match newest {
+                Some((_, binding)) => Some(CodexCandidate::Bound(binding)),
+                None => contested
+                    .contains(id.as_str())
+                    .then_some(CodexCandidate::Ambiguous),
+            };
+            (id.clone(), candidate)
+        })
+        .collect()
+}
+
 fn filter_codex_rollouts(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths
         .into_iter()
@@ -559,35 +706,44 @@ pub fn select_codex_source(paths: &[PathBuf], cwd: &str) -> Result<Binding, Sour
     let mut bindings = std::collections::BTreeMap::new();
     for path in paths {
         let header = first_record(path)?;
-        let p = &header["payload"];
-        if header["type"] != "session_meta" || p["source"] != "cli" {
-            continue;
+        if let Some(binding) = codex_header_binding(path, &header, cwd)? {
+            bindings.insert(path.clone(), binding);
         }
-        if p["cwd"].as_str() != Some(cwd) {
-            continue;
-        }
-        let Some(id) = p["id"].as_str().filter(|id| valid_session_id(id)) else {
-            return Err(SourceError::IdentityMismatch);
-        };
-        if p.get("session_id").is_some_and(|v| v.as_str() != Some(id)) {
-            return Err(SourceError::IdentityMismatch);
-        }
-        bindings.insert(
-            path.clone(),
-            Binding {
-                version: 1,
-                runtime: Runtime::Codex,
-                session_id: id.to_owned(),
-                path: path.clone(),
-                cwd: cwd.to_owned(),
-            },
-        );
     }
     match bindings.len() {
         0 => Err(SourceError::IdentityUnavailable),
         1 => Ok(bindings.into_values().next().unwrap()),
         _ => Err(SourceError::Ambiguous),
     }
+}
+
+/// A rollout header's binding when it is a CLI session in `cwd`; None when it
+/// is another kind of session or another cwd.
+fn codex_header_binding(
+    path: &Path,
+    header: &Value,
+    cwd: &str,
+) -> Result<Option<Binding>, SourceError> {
+    let p = &header["payload"];
+    if header["type"] != "session_meta" || p["source"] != "cli" {
+        return Ok(None);
+    }
+    if p["cwd"].as_str() != Some(cwd) {
+        return Ok(None);
+    }
+    let Some(id) = p["id"].as_str().filter(|id| valid_session_id(id)) else {
+        return Err(SourceError::IdentityMismatch);
+    };
+    if p.get("session_id").is_some_and(|v| v.as_str() != Some(id)) {
+        return Err(SourceError::IdentityMismatch);
+    }
+    Ok(Some(Binding {
+        version: 1,
+        runtime: Runtime::Codex,
+        session_id: id.to_owned(),
+        path: path.to_path_buf(),
+        cwd: cwd.to_owned(),
+    }))
 }
 
 pub fn read_jsonl(binding: &Binding) -> Result<Transcript, SourceError> {
@@ -1202,5 +1358,135 @@ mod batched_discovery_tests {
             child.kill().await.unwrap();
             child.wait().await.unwrap();
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use serde_json::json;
+    use std::time::{Duration, SystemTime};
+
+    fn header(id: &str, cwd: &str, source: &str) -> Value {
+        json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"source":source}})
+    }
+
+    fn bound(
+        result: &std::collections::HashMap<String, Option<CodexCandidate>>,
+        id: &str,
+    ) -> String {
+        match result.get(id) {
+            Some(Some(CodexCandidate::Bound(binding))) => binding.session_id.clone(),
+            other => panic!("{id}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn given_two_concurrent_codex_agents_should_each_take_their_own_newest_rollout() {
+        let t = |s: u64| SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000 + s);
+        let cwd = r"C:\Users\me\dev\project";
+        let launches = vec![
+            ("first".to_string(), t(1), cwd.to_string()),
+            ("second".to_string(), t(10), cwd.to_string()),
+            ("elsewhere".to_string(), t(20), r"C:\other".to_string()),
+            ("idle".to_string(), t(50), cwd.to_string()),
+        ];
+        let rollout = |name: &str, at: u64, h: Value| (PathBuf::from(name), t(at), h);
+        let rollouts = vec![
+            // Created before every launch: nobody's.
+            rollout("old.jsonl", 0, header("old", cwd, "cli")),
+            rollout("a1.jsonl", 2, header("a1", cwd, "cli")),
+            rollout("b1.jsonl", 12, header("b1", cwd, "cli")),
+            // `elsewhere` launched since, but in another cwd: still `second`'s.
+            rollout("b2.jsonl", 25, header("b2", cwd, "cli")),
+            rollout("c1.jsonl", 22, header("c1", r"C:\other", "cli")),
+            // Delegated (non-CLI) threads never bind.
+            rollout("x.jsonl", 30, header("x", cwd, "exec")),
+        ];
+        let result = assign_codex_rollouts(&launches, &rollouts);
+        assert_eq!(bound(&result, "first"), "a1");
+        assert_eq!(bound(&result, "second"), "b2");
+        assert_eq!(bound(&result, "elsewhere"), "c1");
+        assert!(matches!(result.get("idle"), Some(None)));
+    }
+
+    #[test]
+    fn given_launches_at_the_same_instant_should_report_ambiguity() {
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        let launches = vec![
+            ("a".to_string(), t, r"C:\p".to_string()),
+            ("b".to_string(), t, r"C:\p".to_string()),
+        ];
+        let rollouts = vec![(PathBuf::from("r.jsonl"), t, header("r", r"C:\p", "cli"))];
+        let result = assign_codex_rollouts(&launches, &rollouts);
+        assert!(matches!(
+            result.get("a"),
+            Some(Some(CodexCandidate::Ambiguous))
+        ));
+        assert!(matches!(
+            result.get("b"),
+            Some(Some(CodexCandidate::Ambiguous))
+        ));
+    }
+
+    #[test]
+    fn given_dated_session_dirs_should_list_only_rollouts_created_since_launch() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions = temp.path().join("sessions");
+        let today = chrono::Local::now();
+        let dir = sessions
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let rollout = dir.join("rollout-2026-11-25T10-00-00-abc.jsonl");
+        std::fs::write(&rollout, "{}\n").unwrap();
+        std::fs::write(dir.join("notes.jsonl"), "{}\n").unwrap();
+        let hour = Duration::from_secs(3600);
+        let found = recent_codex_rollouts(&sessions, SystemTime::now() - hour);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, rollout);
+        assert!(recent_codex_rollouts(&sessions, SystemTime::now() + hour).is_empty());
+    }
+
+    #[test]
+    fn given_windows_profile_should_resolve_native_history_roots() {
+        let env = |extra: &[(&str, &str)]| {
+            let mut env = vec![("USERPROFILE".to_string(), r"C:\Users\me".to_string())];
+            env.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+            env
+        };
+        assert_eq!(
+            native_root(Runtime::Claude, &env(&[])).unwrap(),
+            PathBuf::from(r"C:\Users\me\.claude")
+        );
+        assert_eq!(
+            native_root(Runtime::Codex, &env(&[])).unwrap(),
+            PathBuf::from(r"C:\Users\me\.codex")
+        );
+        assert_eq!(
+            native_root(Runtime::Codex, &env(&[("CODEX_HOME", r"D:\codex")])).unwrap(),
+            PathBuf::from(r"D:\codex")
+        );
+        let opencode = native_root(Runtime::Opencode, &env(&[])).unwrap();
+        assert_eq!(opencode.as_os_str(), r"C:\Users\me\.local\share\opencode");
+    }
+
+    #[test]
+    fn given_windows_cwd_should_encode_claude_project_dir_like_claude_code() {
+        // Claude Code 2.1.332 keeps `C:\Users\<user>\dev` sessions under
+        // `%USERPROFILE%\.claude\projects\C--Users-<user>-dev` (seen on a real install).
+        let env = vec![("USERPROFILE".to_string(), r"C:\Users\me".to_string())];
+        let binding = resolve_exact(
+            Runtime::Claude,
+            "abc-123",
+            r"C:\Users\me\dev\Pure Point",
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            binding.path.as_os_str(),
+            r"C:\Users\me\.claude\projects\C--Users-me-dev-Pure-Point\abc-123.jsonl"
+        );
     }
 }

@@ -19,3 +19,5 @@ pub mod signals;
 
 #[cfg(windows)]
 pub(crate) mod win_env;
+#[cfg(windows)]
+pub(crate) mod win_proc;
