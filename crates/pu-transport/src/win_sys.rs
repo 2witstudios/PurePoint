@@ -182,17 +182,23 @@ pub fn process_trust(pid: u32) -> io::Result<TokenTrust> {
     process_token_trust(token_raw(&process))
 }
 
+/// Medium mandatory integrity, the level of a normal desktop process.
+pub const MEDIUM_INTEGRITY: u32 = 0x2000;
+
 /// Why a server with token `server` is not trusted by a client running at
 /// integrity `client_integrity`; `None` when it is. A sandboxed or
-/// lower-integrity process of the same user could squat on the pipe name.
+/// lower-integrity process of the same user could squat on the pipe name, so
+/// the server must reach the client's level, capped at Medium: an elevated
+/// (High) `pu` in an admin terminal still talks to the user's normal daemon.
 pub fn untrusted_server_reason(server: TokenTrust, client_integrity: u32) -> Option<String> {
+    let required = client_integrity.min(MEDIUM_INTEGRITY);
     if server.app_container {
         Some("server runs in an AppContainer".into())
     } else if server.restricted {
         Some("server runs with a restricted token".into())
-    } else if server.integrity < client_integrity {
+    } else if server.integrity < required {
         Some(format!(
-            "server integrity {:#x} is below the client's {client_integrity:#x}",
+            "server integrity {:#x} is below the required {required:#x}",
             server.integrity
         ))
     } else {

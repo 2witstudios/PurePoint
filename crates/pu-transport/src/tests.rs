@@ -189,7 +189,10 @@ fn given_server_token_trust_should_refuse_lower_integrity_and_sandboxed_servers(
     assert_eq!(untrusted_server_reason(plain(MEDIUM), MEDIUM), None);
     assert_eq!(untrusted_server_reason(plain(HIGH), MEDIUM), None);
     assert!(untrusted_server_reason(plain(LOW), MEDIUM).is_some());
-    assert!(untrusted_server_reason(plain(MEDIUM), HIGH).is_some());
+    // An elevated client (admin terminal) trusts the user's normal daemon...
+    assert_eq!(untrusted_server_reason(plain(MEDIUM), HIGH), None);
+    // ...but never one below Medium.
+    assert!(untrusted_server_reason(plain(LOW), HIGH).is_some());
     let sandboxed = TokenTrust {
         app_container: true,
         ..plain(HIGH)

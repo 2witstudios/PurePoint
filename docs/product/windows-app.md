@@ -282,7 +282,7 @@ Windows app = Mac app on Windows 11 22H2+, with a native daemon. Endpoint = priv
 | Pipe SDDL | `O:<user SID>D:P(A;;GA;;;<user SID>)(A;;GA;;;SY)` (reads back as `FA`) |
 | Flags | first instance `FILE_FLAG_FIRST_PIPE_INSTANCE`; every instance `PIPE_REJECT_REMOTE_CLIENTS`. A failed first create (error 5) means `AddrInUse` |
 | Server check of client | `GetNamedPipeClientProcessId` → `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` → `TokenUser` must equal the daemon's SID |
-| Client check of server | `GetNamedPipeServerProcessId` → token user SID must equal the caller's; and if `<socket>.pid` names a live process, it must be the server PID |
+| Client check of server | `GetNamedPipeServerProcessId` → token user SID must equal the caller's; the server token must not be an AppContainer or restricted token, and its integrity must be at least the client's capped at Medium (an elevated `pu` still reaches the normal daemon; a Low-integrity squatter is refused even with no PID file); and if `<socket>.pid` names a live process, it must be the server PID |
 | Busy | client retries `ERROR_PIPE_BUSY` for 2 s. Over-cap connections get `BUSY` through an awaited `write_all` (1 s timeout, 128 concurrent writers at most) |
 | Disconnect probe | `PeekNamedPipe` (broken pipe) plus a tokio readiness check into the connection's stash (`ReadHalf::peer_sent_or_closed`) |
 | Half-close | none; a connection ends when both halves drop |
