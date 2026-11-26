@@ -179,11 +179,16 @@ export function makeWorkspace(init: WorkspaceInit): Workspace {
 /**
  * A brand-new single-pane workspace holding one agent. The ID is derived from the agent so it is
  * stable across launches without any random or time-based input: restarting can never invent a
- * different grouping.
+ * different grouping. `id` overrides the derived ID when that one is already taken
+ * (`adoptedWorkspaceId`).
  */
-export function adoptingWorkspace(agentId: string, container: WorkspaceContainer): Workspace {
+export function adoptingWorkspace(
+  agentId: string,
+  container: WorkspaceContainer,
+  id = `ws-${agentId}`,
+): Workspace {
   return makeWorkspace({
-    id: `ws-${agentId}`,
+    id,
     container,
     root: leaf(0),
     panes: { 0: { tabs: [{ id: 0, content: agentContent(agentId) }], activeTabId: 0 } },
@@ -978,13 +983,31 @@ export function reconcileWorkspaces(
   // Any live agent no tab claimed becomes its own single-pane workspace. This is the step that
   // makes a loose sidebar item impossible: an agent the layout forgot still surfaces as a
   // workspace, never as a bare agent row.
+  const takenIds = new Set(result.map((workspace) => workspace.id));
   for (const agent of live) {
     if (claimed.has(agent.id)) continue;
     claimed.add(agent.id);
-    result.push(adoptingWorkspace(agent.id, agent.container));
+    const id = adoptedWorkspaceId(agent.id, takenIds);
+    takenIds.add(id);
+    result.push(adoptingWorkspace(agent.id, agent.container, id));
   }
 
   return result;
+}
+
+/**
+ * The ID for a workspace adopting `agentId`: `ws-<agentId>`, or when a kept workspace already uses
+ * that ID (it once adopted the agent, which has since moved out of it), the first free one of
+ * `ws-<agentId>-2`, `-3`, ... Swift reuses `ws-<agentId>` and so publishes two workspaces with one
+ * ID (WIN-6.2 fix). Deterministic: the same kept IDs always give the same answer, and the adopted
+ * workspace keeps its ID on the next reconcile because it then holds the agent.
+ */
+export function adoptedWorkspaceId(agentId: string, takenIds: ReadonlySet<string>): string {
+  const base = `ws-${agentId}`;
+  if (!takenIds.has(base)) return base;
+  let suffix = 2;
+  while (takenIds.has(`${base}-${String(suffix)}`)) suffix += 1;
+  return `${base}-${String(suffix)}`;
 }
 
 function draftAgentIds(d: Draft): string[] {

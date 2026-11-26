@@ -121,7 +121,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/CommandPaletteOpenCoordinator.swift` | 18 | `ui/src/state/commandPaletteOpenCoordinator.ts` | WIN-6.6 | todo | — |
 | `State/DiffState.swift` | 281 | `ui/src/state/diffState.ts` | WIN-6.0 | todo | — |
 | `State/EditorState.swift` | 263 | `ui/src/state/editorState.ts` | WIN-8.5 | todo | — |
-| `State/FileTabStore.swift` | 62 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | todo | — |
+| `State/FileTabStore.swift` | 62 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | ported | — |
 | `State/FileTreeState.swift` | 208 | `ui/src/state/fileTreeState.ts` | WIN-8.4 | todo | — |
 | `State/KeyBindingState.swift` | 138 | `ui/src/state/keyBindingStore.ts` | WIN-6.7 | ported | — |
 | `State/MachineState+OpenProject.swift` | 67 | `ui/src/state/machineStateOpenProject.ts` | WIN-8.14 | todo | — |
@@ -139,7 +139,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/StreamAccumulator.swift` | 193 | `ui/src/state/sessions.ts` | WIN-8.16 | todo | — |
 | `State/TriggersState.swift` | 93 | `ui/src/state/triggersState.ts` | WIN-8.9 | todo | — |
 | `State/WorkspaceFilesState.swift` | 139 | `ui/src/state/workspaceFilesState.ts` | WIN-8.4 | todo | — |
-| `State/WorkspaceRegistry.swift` | 749 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | todo | — |
+| `State/WorkspaceRegistry.swift` | 749 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | ported | — |
 | `Theme/EditorTheme.swift` | 49 | `ui/src/theme/tokens.css` (`--pp-editor-*`) | WIN-5.8 | ported | — |
 | `Theme/PurePointTheme.swift` | 63 | `ui/src/theme/tokens.css` (metrics, fonts) | WIN-5.8 | ported | — |
 | `Theme/TerminalTheme.swift` | 118 | `ui/src/theme/tokens.css` (`--pp-terminal-*`) | WIN-5.8 | ported | — |
@@ -216,7 +216,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/PaneGrid/DraggableSplit.swift` | 160 | `ui/src/views/paneGrid/DraggableSplit.tsx` | WIN-7.4 | todo | — |
 | `Views/PaneGrid/PaneCellView.swift` | 178 | `ui/src/views/paneGrid/PaneCellView.tsx` | WIN-7.4 | todo | — |
 | `Views/PaneGrid/PaneGridView.swift` | 74 | `ui/src/views/paneGrid/PaneGridView.tsx` | WIN-7.4 | todo | — |
-| `Views/PaneGrid/PaneSplitNode.swift` | 223 | `ui/src/model/paneSplit.ts` | WIN-6.2 | todo | — |
+| `Views/PaneGrid/PaneSplitNode.swift` | 223 | `ui/src/model/paneSplit.ts` | WIN-6.2 | ported | — |
 | `Views/PaneGrid/PaneTabBar.swift` | 439 | `ui/src/views/paneGrid/PaneTabBar.tsx` | WIN-7.4 | todo | — |
 | `Views/PaneGrid/PaneTabDragInteraction+iOS.swift` | 172 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/PaneGrid/WorkspacePersistence.swift` | 562 | `ui/src/model/workspacePersistence.ts` | WIN-6.3 | todo | — |
@@ -300,7 +300,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `DaemonWorkspaceServiceTests.swift` | all | `ui/src/services/workspaceService.test.ts` | WIN-6.0 | todo | — |
 | `DiffLayoutTests.swift` | all | `ui/src/views/detail/diffLayout.test.ts` | WIN-8.3 | todo | — |
 | `DiffRenderingIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `DraggableSplitTests.swift` | all | `ui/src/model/paneSplit.test.ts` | WIN-6.2 | todo | — |
+| `DraggableSplitTests.swift` | all | `ui/src/model/paneSplit.test.ts` | WIN-6.2 | ported | — |
 | `EditorIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `FilePaneTests.swift` | all | `ui/src/views/filePane/FilePaneView.test.tsx` | WIN-8.5 | todo | Relevant cases only |
 | `FileTreeOutlineIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
@@ -315,7 +315,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `MachinesTests.swift` | all | `ui/src/model/machine.test.ts`, `src-tauri/src/daemon/machine.rs` (#[cfg(test)]) | WIN-8.14 | todo | — |
 | `MarkdownHTMLRendererTests.swift` | all | `ui/src/services/markdownHtml.test.ts` | WIN-8.6 | todo | — |
 | `PaneTabDragIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `PaneTabStackTests.swift` | all | `ui/src/state/workspaceRegistry.tabs.test.ts` | WIN-6.2 | todo | — |
+| `PaneTabStackTests.swift` | all | `ui/src/state/workspaceRegistry.tabs.test.ts` | WIN-6.2 | ported | — |
 | `PointGuardAttachmentIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `PointGuardPairingTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `PointGuardPlaysTests.swift` | all | `ui/src/model/pointGuardPlays.test.ts` | WIN-8.13 | todo | — |
@@ -345,9 +345,9 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `WorkspaceFilesStateTests.swift` | all | `ui/src/state/workspaceFilesState.test.ts` | WIN-8.4 | todo | — |
 | `WorkspaceModelTests.swift` | all | `ui/src/model/workspaceModel.test.ts` | WIN-6.1 | ported | — |
 | `WorkspaceReconcilerTests.swift` | all | `ui/src/model/workspace.test.ts`, `ui/src/model/workspace.property.test.ts` | WIN-6.1 | ported | The five `WorkspacePersistence` file-format cases are `it.todo` until WIN-6.3 ports the persistence; WIN-6.3 adds the Swift fixture test beside it |
-| `WorkspaceRegistryTests.swift` | all | `ui/src/state/workspaceRegistry.test.ts` | WIN-6.2 | todo | — |
+| `WorkspaceRegistryTests.swift` | all | `ui/src/state/workspaceRegistry.test.ts` | WIN-6.2 | ported | — |
 | `purepoint_macosTests.swift` | `GlobalAgentSettingsTests` | `ui/src/state/agentConfigState.test.ts` | WIN-8.7 | todo | — |
-| `purepoint_macosTests.swift` | `PaneSplitNodeTests` | `ui/src/model/paneSplit.test.ts` | WIN-6.2 | todo | — |
+| `purepoint_macosTests.swift` | `PaneSplitNodeTests` | `ui/src/model/paneSplit.test.ts` | WIN-6.2 | ported | — |
 | `purepoint_macosTests.swift` | `GridLayoutPersistenceTests` | `ui/src/model/workspacePersistence.test.ts` | WIN-6.3 | todo | — |
 
 ## SF Symbols

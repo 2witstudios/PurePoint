@@ -1,6 +1,6 @@
-// Port of the parts of apps/purepoint-macos/purepoint-macos/Views/PaneGrid/PaneSplitNode.swift
-// that the workspace model needs (WIN-6.1). WIN-6.2 owns the rest of the file (topTrailingLeafId,
-// rowCount) and its PaneSplitNodeTests.
+// Port of apps/purepoint-macos/purepoint-macos/Views/PaneGrid/PaneSplitNode.swift (WIN-6.1, completed
+// in WIN-6.2), plus the split geometry of Views/PaneGrid/DraggableSplit.swift (`sizes`, `ratio`) so
+// its tests run without the view, which WIN-7.4 renders.
 //
 // The tree is geometry only: it says *where* panes are, never *what* they show. A leaf's content
 // is its tab stack, kept in `Workspace.panes` under the leaf's ID, so moving a tab between panes
@@ -52,6 +52,22 @@ export function firstLeafId(node: PaneSplitNode): number {
 
 export function lastLeafId(node: PaneSplitNode): number {
   return node.type === 'leaf' ? node.id : lastLeafId(node.second);
+}
+
+/** The pane in the grid's top-right corner, whose tab strip ends at the window's trailing edge. */
+export function topTrailingLeafId(node: PaneSplitNode): number {
+  if (node.type === 'leaf') return node.id;
+  return node.axis === 'horizontal'
+    ? topTrailingLeafId(node.first)
+    : topTrailingLeafId(node.second);
+}
+
+// MARK: - Structural analysis (2x3 constraint)
+
+/** The number of rows: horizontal splits at the top level. */
+export function rowCount(node: PaneSplitNode): number {
+  if (node.type === 'leaf') return 1;
+  return node.axis === 'horizontal' ? rowCount(node.first) + rowCount(node.second) : 1;
 }
 
 /** Whether the tree can take another split. Swift takes an axis it ignores; only the count matters. */
@@ -164,4 +180,52 @@ export function siblingLeafId(node: PaneSplitNode, leafId: number): number | nul
   const last = path?.at(-1);
   if (last === undefined || last.node.type !== 'split') return null;
   return firstLeafId(last.wentFirst ? last.node.second : last.node.first);
+}
+
+/** Structural equality of two trees (Swift's synthesized `==`). */
+export function nodesEqual(a: PaneSplitNode, b: PaneSplitNode): boolean {
+  if (a.type === 'leaf' || b.type === 'leaf') {
+    return a.type === 'leaf' && b.type === 'leaf' && a.id === b.id;
+  }
+  return (
+    a.axis === b.axis &&
+    a.ratio === b.ratio &&
+    nodesEqual(a.first, b.first) &&
+    nodesEqual(a.second, b.second)
+  );
+}
+
+// MARK: - Split geometry (DraggableSplit.swift)
+
+/** Thickness of the hairline between a split's two sides. */
+export const SPLIT_DIVIDER_THICKNESS = 1;
+/** The hit area each side of the hairline: a finger or a pointer needs more than the hairline. */
+export const SPLIT_DRAG_INSET = 8;
+/** The smallest a pane can be dragged to. */
+export const SPLIT_MIN_PANE_SIZE = 120;
+
+/**
+ * The two children's sizes along the split axis in a split `total` long. A ratio of 0 or 1
+ * collapses one side and drops the divider.
+ */
+export function splitSizes(total: number, ratio: number): { first: number; second: number } {
+  const length = Math.max(total, 0);
+  if (ratio <= 0) return { first: 0, second: length };
+  if (ratio >= 1) return { first: length, second: 0 };
+  const available = Math.max(length - SPLIT_DIVIDER_THICKNESS, 0);
+  // Swift's `rounded()` rounds half away from zero; the product is never negative here.
+  const first = Math.round(available * ratio);
+  return { first, second: available - first };
+}
+
+/**
+ * The ratio after dragging `translation` from `start`, keeping each side at least
+ * `SPLIT_MIN_PANE_SIZE` when the split has room for both.
+ */
+export function splitDragRatio(start: number, translation: number, total: number): number {
+  if (!(total > 0)) return 0.5;
+  const proposed = start + translation / total;
+  const minRatio = SPLIT_MIN_PANE_SIZE / total;
+  if (!(minRatio < 0.5)) return 0.5;
+  return Math.min(Math.max(proposed, minRatio), 1 - minRatio);
 }

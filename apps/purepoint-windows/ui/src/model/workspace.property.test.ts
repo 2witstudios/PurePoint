@@ -174,9 +174,8 @@ function randomScenario(seed: number): Scenario {
 }
 
 /**
- * Swift's adopted-workspace ID is `ws-<agentId>`. When a stored workspace already has that ID but
- * no longer holds that agent, adopting the agent would duplicate the ID (see the WIN-6.1 report).
- * Real IDs are random and never reused, so the generator drops those scenarios.
+ * A stored workspace whose ID is `ws-<agentId>` but which no longer holds that live agent: the
+ * agent is adopted under a suffixed ID (WIN-6.2). Counted so the generator provably covers it.
  */
 function hasAdoptionIdCollision({ stored, live }: Scenario): boolean {
   const storedIds = new Set(stored.map((workspace) => workspace.id));
@@ -230,12 +229,11 @@ function expectEveryAgentInExactlyOneTab(
 
 describe('reconcileWorkspaces properties', () => {
   it(`places every live agent in exactly one tab and is idempotent (${String(ITERATIONS)} seeds)`, () => {
-    let checked = 0;
+    let collisions = 0;
     for (let i = 0; i < ITERATIONS; i++) {
       const seed = BASE_SEED + i;
       const scenario = randomScenario(seed);
-      if (hasAdoptionIdCollision(scenario)) continue;
-      checked += 1;
+      if (hasAdoptionIdCollision(scenario)) collisions += 1;
       const { stored, live, reserved } = scenario;
 
       const once = reconcileWorkspaces(stored, live, reserved);
@@ -249,19 +247,29 @@ describe('reconcileWorkspaces properties', () => {
         `seed ${String(seed)}: not deterministic`,
       ).toEqual(once);
     }
-    // The collision filter must not hollow the test out.
-    expect(checked).toBeGreaterThan(ITERATIONS * 0.8);
+    // The generator must actually produce adoption-ID collisions, which are no longer skipped.
+    expect(collisions).toBeGreaterThan(0);
   });
 
-  it('documents the Swift adoption-ID collision the generator avoids', () => {
-    // ws-ag-a now holds only ag-b; ag-a is live but in no tab, so it is adopted as ws-ag-a too.
+  it('givenAdoptedAgentWhoseWorkspaceIdIsTakenShouldChooseAUniqueId (WIN-6.2 regression)', () => {
+    // ws-ag-a now holds only ag-b; ag-a is live but in no tab, so it is adopted. Swift adopts it
+    // as ws-ag-a too, publishing two workspaces with one ID.
     let workspace = adoptingWorkspace('ag-a', PROJECT_ROOT);
     workspace = newTab(workspace, 0, agentContent('ag-b')).workspace;
     workspace = closeTab(workspace, 0).workspace;
-    const live = [liveAgent('ag-a', PROJECT_ROOT), liveAgent('ag-b', PROJECT_ROOT)];
+    const taken = { ...adoptingWorkspace('ag-z', PROJECT_ROOT), id: 'ws-ag-a-2' };
+    const live = [
+      liveAgent('ag-a', PROJECT_ROOT),
+      liveAgent('ag-b', PROJECT_ROOT),
+      liveAgent('ag-z', PROJECT_ROOT),
+    ];
 
-    const result = reconcileWorkspaces([workspace], live);
+    const result = reconcileWorkspaces([workspace, taken], live);
 
-    expect(result.map((w) => w.id)).toEqual(['ws-ag-a', 'ws-ag-a']);
+    expect(result.map((w) => w.id)).toEqual(['ws-ag-a', 'ws-ag-a-2', 'ws-ag-a-3']);
+    expect(workspaceAgentIds(result[2] ?? workspace)).toEqual(['ag-a']);
+    // Stable: the adopted workspace now holds its agent, so it keeps its ID.
+    expect(reconcileWorkspaces(result, live)).toEqual(result);
+    expect(reconcileWorkspaces([workspace, taken], live)).toEqual(result);
   });
 });
