@@ -949,6 +949,51 @@ async fn given_rapid_applied_sizes_should_report_every_change_in_order() {
     engine.unregister_attachment(&id, owner).await;
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn given_cancellable_request_and_eof_already_buffered_should_never_start_typing() {
+    let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+    let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let (server, client) = pair().await;
+    let (read, mut write) = server.into_split();
+    // Half-close: the Unix socket's EOF is visible before dispatch.
+    let (_client_read, mut client_write) = client.into_split();
+    client_write.shutdown().await.unwrap();
+    let request = serde_json::to_string(&Request::Input {
+        agent_id: id,
+        data: b"QQQQQQQQQQQQQQQQ".to_vec(),
+        submit: true,
+        cancel_on_disconnect: true,
+    })
+    .unwrap();
+    let mut reader = BufReader::new(read);
+    let before = buffer.current_offset();
+    assert!(
+        !IpcServer::dispatch_request(
+            &request,
+            &mut reader,
+            &mut Vec::new(),
+            &mut write,
+            &engine,
+            &Notify::new(),
+        )
+        .await
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let (data, _, _) = buffer.read_from(before);
+    assert!(
+        data.is_empty(),
+        "PTY output changed after pre-observed EOF: {data:?}"
+    );
+    assert_eq!(
+        buffer.current_offset(),
+        before,
+        "even a partial first chunk must not be queued"
+    );
+}
+
+#[cfg(windows)]
 #[tokio::test]
 async fn given_cancellable_request_and_eof_already_buffered_should_never_start_typing() {
     let (engine, id, _tmp) =
@@ -998,12 +1043,6 @@ async fn given_cancellable_request_and_eof_already_buffered_should_never_start_t
     assert!(
         !data.contains(&b'Q'),
         "PTY output changed after pre-observed EOF: {data:?}"
-    );
-    #[cfg(unix)]
-    assert_eq!(
-        buffer.current_offset(),
-        before,
-        "even a partial first chunk must not be queued"
     );
 }
 
