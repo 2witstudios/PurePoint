@@ -1,7 +1,8 @@
 // WIN-8.15: Open Project through the native folder picker, and local files handed to Windows.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { open, openPath, openUrl, revealItemInDir } = vi.hoisted(() => ({
+const { invoke, open, openPath, openUrl, revealItemInDir } = vi.hoisted(() => ({
+  invoke: vi.fn(() => Promise.resolve()),
   open: vi.fn<(options: unknown) => Promise<string | string[] | null>>(),
   openPath: vi.fn(() => Promise.resolve()),
   openUrl: vi.fn(() => Promise.resolve()),
@@ -9,10 +10,16 @@ const { open, openPath, openUrl, revealItemInDir } = vi.hoisted(() => ({
 }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open }));
 vi.mock('@tauri-apps/plugin-opener', () => ({ openPath, openUrl, revealItemInDir }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 
 import { appLifecycleHooks, openProjectWithPicker } from './appLifecycle.ts';
 import { pickFolder } from './dialog.ts';
-import { openExternal, openInDefaultApp, revealInExplorer } from './opener.ts';
+import {
+  isBlockedFromDefaultApp,
+  openExternal,
+  openInDefaultApp,
+  revealInExplorer,
+} from './opener.ts';
 
 type SpyGlobal = { __PU_DIALOG_SPY__?: (string | null)[]; __PU_OPENER_SPY__?: string[] };
 const spies = globalThis as SpyGlobal;
@@ -76,13 +83,50 @@ describe('openProjectWithPicker', () => {
 });
 
 describe('opener', () => {
-  it('should hand URLs, files and reveals to the opener plugin', () => {
+  it('should hand URLs and reveals to the opener plugin and files to the checked command', () => {
     openExternal('https://purepoint.dev');
-    openInDefaultApp('C:\\repo\\README.md');
+    expect(openInDefaultApp('C:\\repo\\README.md')).toBe('opened');
     revealInExplorer('C:\\repo\\src');
     expect(openUrl).toHaveBeenCalledWith('https://purepoint.dev');
-    expect(openPath).toHaveBeenCalledWith('C:\\repo\\README.md');
+    expect(invoke).toHaveBeenCalledWith('open_in_default_app', { path: 'C:\\repo\\README.md' });
+    expect(openPath).not.toHaveBeenCalled();
     expect(revealItemInDir).toHaveBeenCalledWith('C:\\repo\\src');
+  });
+
+  it('given a program or script, should refuse to open it in its default app', () => {
+    const blocked = [
+      'run.js',
+      'x.vbs',
+      'x.wsf',
+      'x.hta',
+      'x.bat',
+      'x.CMD',
+      'x.lnk',
+      'x.url',
+      'x.scr',
+      'x.msi',
+      'x.exe',
+      'x.cpl',
+      'x.jar',
+      'x.appref-ms',
+      'x.settingcontent-ms',
+      'x.ps1',
+      'x.com',
+      'x.pif',
+      'x.bat.',
+      'x.exe . ',
+      'a.txt:evil.exe',
+      'x.{20D04FE0-3AEA-1069-A2D8-08002B30309D}',
+    ];
+    for (const name of blocked) {
+      expect(isBlockedFromDefaultApp(`C:\\repo\\${name}`), name).toBe(true);
+      expect(openInDefaultApp(`C:\\repo\\${name}`), name).toBe('blocked');
+    }
+    for (const name of ['README.md', 'a.txt', 'image.png', 'Makefile', '.env', 'js']) {
+      expect(isBlockedFromDefaultApp(`C:\\repo\\${name}`), name).toBe(false);
+    }
+    expect(isBlockedFromDefaultApp('/srv/app/x.sh.js')).toBe(true);
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it('given the test spy, should record instead of opening anything', () => {

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: the app-drawn title bar (WIN-7.1) drags, minimizes, maximizes and closes it; links open in the browser through the opener plugin (WIN-7.3); agent signals post toasts through the notification plugin (WIN-7.7); Open Project picks a folder through the dialog plugin, and local files open in their default app or in Explorer through the opener plugin (WIN-8.15). The updater plugin (WIN-10.3) gets no permission here: the app's own updater_* commands check, download and install, so an install always passes the release-key check and stops Point Guard and the daemon first.",
+  "description": "Main window: the app-drawn title bar (WIN-7.1) drags, minimizes, maximizes and closes it; links open in the browser through the opener plugin (WIN-7.3); agent signals post toasts through the notification plugin (WIN-7.7); Open Project picks a folder through the dialog plugin, and local files reveal in Explorer through the opener plugin (WIN-8.15). The plugin is not granted open_path: Open in Default App goes through the app's open_in_default_app command, which opens only project files Windows would not run. The updater plugin (WIN-10.3) gets no permission here: the app's own updater_* commands check, download and install, so an install always passes the release-key check and stops Point Guard and the daemon first.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -10,7 +10,6 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "opener:default",
-    { "identifier": "opener:allow-open-path", "allow": [{ "path": "**" }] },
     "dialog:allow-open",
     "notification:default"
   ]

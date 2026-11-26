@@ -150,6 +150,39 @@ export function FileTreeDeleteDialog({
   );
 }
 
+/** Open in Default App refused a program or script (Windows would run it): offer Reveal. */
+export function FileTreeBlockedOpenDialog({
+  node,
+  onReveal,
+  onCancel,
+}: {
+  node: FileNode;
+  onReveal: () => void;
+  onCancel: () => void;
+}) {
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    button.current?.focus();
+  }, []);
+  return (
+    <Alert
+      title={`${node.name} was not opened`}
+      message="Windows would run this file instead of opening it, so PurePoint does not open it directly. You can reveal it in Explorer and decide there."
+      onCancel={onCancel}
+      testId="file-tree-blocked-open"
+    >
+      <div className="file-tree-alert-buttons">
+        <button type="button" ref={button} className="file-tree-alert-default" onClick={onReveal}>
+          Reveal in Explorer
+        </button>
+        <button type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </Alert>
+  );
+}
+
 export function FileTreeErrorDialog({
   title,
   message,
