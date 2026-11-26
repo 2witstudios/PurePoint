@@ -3,9 +3,9 @@
 //! through their machine's daemon (`fs_*` and `git_exec`), which confines every path to its
 //! registered projects.
 //!
-//! The daemon side is a [`GitExec`]: one blocking request and its reply. WIN-5.3 wires the
-//! real daemon client; until then [`UnavailableGitExec`] answers every request with the
-//! Mac's "machine is not available" failure.
+//! The daemon side is a [`GitExec`]: one blocking request and its reply. The real one is
+//! `crate::daemon::DaemonGitExec` (WIN-5.3); [`UnavailableGitExec`] answers every request
+//! with the Mac's "machine is not available" failure.
 //!
 //! Every method blocks; callers stay off the UI thread. Directory watching (`makeWatcher`,
 //! `DaemonDirectoryWatcher`, `DaemonFsSubscription`) lives with the watchers and
@@ -334,12 +334,12 @@ impl ProjectHost for LocalProjectHost {
 // MARK: - Remote (daemon)
 
 /// A one-shot request to a machine's daemon: `git_exec`, plus the `fs_*` reads the review
-/// needs. The daemon implementation is wired by WIN-5.3.
+/// needs. Implemented over the daemon client by `crate::daemon::DaemonGitExec`.
 pub trait GitExec: Send + Sync {
     fn send(&self, request: Request, timeout: Duration) -> Result<Response, HostError>;
 }
 
-/// Stands in for the daemon client until WIN-5.3: every request fails as "not available".
+/// A host with no daemon: every request fails as "not available".
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UnavailableGitExec;
 

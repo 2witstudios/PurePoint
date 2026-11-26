@@ -3,20 +3,21 @@
 //!
 //! Each host has one service, so its caches and patch snapshots outlive single calls (a
 //! review page reads the snapshot an earlier call created). Calls run on the blocking pool.
-//! `machine_id` picks a remote machine's host; until WIN-5.3 wires the daemon client every
-//! remote call fails with "This project's machine is not available."
+//! `machine_id` picks a remote machine's host, whose git runs through that machine's daemon
+//! (`git_exec` over `ssh.exe … pu daemon proxy`, WIN-5.3).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use tauri::State;
 
-use super::host::{DaemonProjectHost, LocalProjectHost, ProjectHost, UnavailableGitExec};
+use super::host::{DaemonProjectHost, LocalProjectHost, ProjectHost};
 use super::model::{
     DiffData, FileDiff, GitBranchReview, GitError, GitLocalReview, GitResult, GitReviewSummary,
     PullRequestInfo, ReviewPage, ReviewPageCursor,
 };
 use super::service::GitService;
+use crate::daemon::DaemonGitExec;
 
 type Shared = Arc<Mutex<GitService>>;
 
@@ -41,7 +42,9 @@ impl GitState {
             .or_insert_with(|| {
                 let host: Arc<dyn ProjectHost> = match machine_id {
                     None => Arc::new(LocalProjectHost),
-                    Some(id) => Arc::new(DaemonProjectHost::new(UnavailableGitExec, id)),
+                    Some(id) => {
+                        Arc::new(DaemonProjectHost::new(DaemonGitExec::for_machine(id), id))
+                    }
                 };
                 Arc::new(Mutex::new(GitService::new(None, host)))
             })

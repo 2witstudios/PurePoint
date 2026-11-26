@@ -46,8 +46,17 @@ pub fn run() {
             git::commands::git_pr_list,
             git::commands::git_pr_diff,
             git::commands::git_gh_available,
+            daemon::daemon_request,
+            daemon::daemon_health,
+            daemon::daemon_status,
         ])
         .setup(|app| {
+            {
+                use tauri::Manager;
+                let daemon = daemon::DaemonState::for_app(app.handle());
+                daemon.start();
+                app.manage(daemon);
+            }
             #[cfg(windows)]
             {
                 use tauri::Manager;

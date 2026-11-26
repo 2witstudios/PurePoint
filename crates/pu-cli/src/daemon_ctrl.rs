@@ -37,20 +37,18 @@ fn bundle_contents(exe_dir: &Path) -> Option<&Path> {
     is_bundle.then_some(contents)
 }
 
-/// The engine executable's file name on Windows.
-#[cfg(windows)]
-const DAEMON_EXE: &str = "pu-engine.exe";
-
 /// Windows: the same order, without the app-bundle case: `PU_ENGINE_PATH`
 /// alone when set, else `pu-engine.exe` beside `pu.exe`, then
 /// `%USERPROFILE%\.pu\bin`. Trust is the file's owner and DACL
-/// ([`pu_core::win_security::check_trusted_binary`]).
+/// ([`pu_core::win_security::check_trusted_binary`]); the search order and
+/// trust check are shared with the Windows app ([`pu_core::engine_binary`]).
 #[cfg(windows)]
 fn find_daemon_binary_in(
     exe: Option<&Path>,
     home: Option<&Path>,
     explicit: Option<&std::ffi::OsStr>,
 ) -> Result<PathBuf, String> {
+    use pu_core::engine_binary;
     let candidates = if let Some(explicit) = explicit {
         match which::which(explicit) {
             Ok(path) => vec![path],
@@ -62,23 +60,9 @@ fn find_daemon_binary_in(
             }
         }
     } else {
-        exe.and_then(Path::parent)
-            .map(|dir| dir.join(DAEMON_EXE))
-            .into_iter()
-            .chain(home.map(|home| home.join(".pu").join("bin").join(DAEMON_EXE)))
-            .collect()
+        engine_binary::candidates(exe.and_then(Path::parent), home)
     };
-    let mut reasons = Vec::new();
-    for path in candidates {
-        match pu_core::win_security::check_trusted_binary(&path) {
-            Ok(()) => return Ok(path),
-            Err(reason) => reasons.push(format!("{}: {reason}", path.display())),
-        }
-    }
-    if reasons.is_empty() {
-        reasons.push("no candidate locations".into());
-    }
-    Err(reasons.join("; "))
+    engine_binary::first_trusted(candidates)
 }
 
 #[cfg(unix)]
