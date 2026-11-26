@@ -2883,6 +2883,7 @@ dependencies = [
  "pu-transport",
  "serde",
  "serde_json",
+ "sha2 0.11.2",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",

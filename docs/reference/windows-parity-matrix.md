@@ -60,7 +60,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `PurePointiPadApp.swift` | 67 | — | — | excluded | Whole-file `#if os(iOS)` (iPad app entry point) |
 | `Services/AgentSignalNotifications.swift` | 173 | `ui/src/services/notifications.ts` | WIN-7.7 | todo | — |
 | `Services/AttachmentUpload.swift` | 102 | `ui/src/services/attachmentUpload.ts` | WIN-9.7 | todo | — |
-| `Services/BundleSeal.swift` | 52 | `src-tauri/src/pointguard/seal.rs` | WIN-9.3 | todo | — |
+| `Services/BundleSeal.swift` | 52 | `src-tauri/src/pointguard/seal.rs` (SHA-256 manifest seal; Authenticode not provisioned) | WIN-9.3 | ported | — |
 | `Services/CLIInstaller.swift` | 215 | `src-tauri/src/installer/cli.rs`, `src-tauri/src/installer/user_path.rs`, `src-tauri/src/installer/mod.rs`, `ui/src/services/installer.ts` | WIN-10.1 | ported | — |
 | `Services/CheckForUpdatesViewModel.swift` | 25 | `ui/src/services/updater.ts` (tauri-plugin-updater) | WIN-10.3 | todo | — |
 | `Services/ClaudeConversationIndex.swift` | 497 | `src-tauri/src/conversations/claude.rs`, `src-tauri/src/conversations/util.rs`, `ui/src/services/conversations.ts` | WIN-8.12 | ported | — |
@@ -93,8 +93,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/PiAttachmentImport.swift` | 72 | `ui/src/services/attachmentImport.ts` | WIN-9.7 | todo | — |
 | `Services/PiPairedMac+iOS.swift` | 225 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/PiPairingSecret.swift` | 41 | `src-tauri/src/secrets/pairing.rs` (Credential Manager) | WIN-9.7 | todo | — |
-| `Services/PointGuardApplicationDelegate.swift` | 51 | `src-tauri/src/pointguard/lifecycle.rs` | WIN-9.3 | todo | — |
-| `Services/PointGuardTailnet.swift` | 81 | `src-tauri/src/pointguard/tailnet.rs` | WIN-9.3 | todo | — |
+| `Services/PointGuardApplicationDelegate.swift` | 51 | `src-tauri/src/pointguard/lifecycle.rs` (main window `CloseRequested`) | WIN-9.3 | ported | — |
+| `Services/PointGuardTailnet.swift` | 81 | `src-tauri/src/pointguard/tailnet.rs` | WIN-9.3 | ported | — |
 | `Services/ProjectHost.swift` | 719 | `src-tauri/src/git/host.rs` (`GitExec` daemon client wired by WIN-5.3; directory watchers live with `watchers/` and `subscriptions/`) | WIN-8.1 | ported | — |
 | `Services/SSH/CitadelSSH.swift` | 257 | — | — | excluded | Whole-file `#if os(iOS)`; Citadel SSH, replaced by system `ssh.exe` (DEC-5, DEC-11) |
 | `Services/SSH/DebugLaunchArguments+iOS.swift` | 214 | — | — | excluded | `+iOS` file (iPad build only) |
@@ -127,7 +127,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/MachineState+OpenProject.swift` | 67 | `ui/src/state/machineStateOpenProject.ts` | WIN-8.14 | todo | — |
 | `State/MachineState.swift` | 515 | `ui/src/state/machineState.ts` | WIN-8.14 | todo | — |
 | `State/PiChatModel.swift` | 827 | `ui/src/state/piChat.ts` | WIN-9.4 | todo | — |
-| `State/PointGuardServiceModel.swift` | 516 | `src-tauri/src/pointguard/service.rs`, `ui/src/state/pointGuardService.ts` | WIN-9.3 | todo | — |
+| `State/PointGuardServiceModel.swift` | 516 | `src-tauri/src/pointguard/service.rs`, `src-tauri/src/pointguard/runtime.rs`, `src-tauri/src/pointguard/admin.rs`, `ui/src/services/pointguard.ts`, `ui/src/state/pointGuardService.ts` | WIN-9.3 | ported | — |
 | `State/ProjectState.swift` | 748 | `ui/src/state/projectState.ts`, `ui/src/state/remoteLayoutSaver.ts`, `ui/src/state/cachedWorkspacePersistence.ts`, `ui/src/services/fs.ts`, `src-tauri/src/files/text.rs` | WIN-6.0 | ported | — |
 | `State/RemoteFolderBrowser+iOS.swift` | 242 | — | — | excluded | `+iOS` file (iPad build only) |
 | `State/ScheduleState.swift` | 282 | `ui/src/state/scheduleState.ts` | WIN-8.8 | todo | — |
