@@ -19,7 +19,8 @@
 // - `channel` (ChannelState, WIN-8.10) polls through the project's daemon client; its unread count
 //   feeds `snapshot().channelUnread`, and AppState follows `channel.store` for it.
 // - A remote project is followed through its machine's daemon client (WIN-8.14); its layout loads
-//   and saves through that daemon's `fs_*` requests.
+//   and saves through that daemon's `fs_*` requests, and its status and grid streams run on the
+//   machine's daemon (the subscriptions take its machine id).
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { AgentStatusReport, Request, Response, WorktreeEntry } from '../protocol';
@@ -66,8 +67,9 @@ import type { WorkspaceRegistry } from './workspaceRegistry';
 
 /** What ProjectState reaches through Swift singletons. */
 export interface ProjectEnvironment {
-  startSubscriptions(projectRoot: string): Promise<void>;
-  stopSubscriptions(projectRoot: string): Promise<unknown>;
+  /** `machineId`: a remote project's machine, whose daemon the streams are on. */
+  startSubscriptions(projectRoot: string, machineId: string | null): Promise<void>;
+  stopSubscriptions(projectRoot: string, machineId: string | null): Promise<unknown>;
   watchManifest(projectRoot: string): Promise<WatchId>;
   unwatch(id: WatchId): Promise<unknown>;
   /** Sends a request, releasing the watchers of a worktree it removes (WIN-3.13). */
@@ -373,6 +375,8 @@ export class ProjectState {
     this.store.setState({ hasLoadedWorktrees: false });
     this.startRemoteLayoutRestore();
     this.channel.startBackground();
+    // Status and grid stream from the machine's daemon, like a local project's.
+    this.startSubscriptions();
     void (async () => {
       try {
         const snapshot = await this.service.loadWorkspace(this.projectRoot);
@@ -465,7 +469,7 @@ export class ProjectState {
     this.stopManifestWatch();
     if (this.subscribed) {
       this.subscribed = false;
-      void this.env.stopSubscriptions(this.projectRoot).catch(() => false);
+      void this.env.stopSubscriptions(this.projectRoot, this.machineId).catch(() => false);
     }
   }
 
@@ -477,7 +481,7 @@ export class ProjectState {
 
   private startSubscriptions(): void {
     this.subscribed = true;
-    void this.env.startSubscriptions(this.projectRoot).catch((error: unknown) => {
+    void this.env.startSubscriptions(this.projectRoot, this.machineId).catch((error: unknown) => {
       this.env.log(`[Subscriptions ${this.projectId}] ${errorMessage(error)}`);
     });
   }

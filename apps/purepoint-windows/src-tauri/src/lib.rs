@@ -40,6 +40,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(git::commands::GitState::default())
         .manage(attach::AttachState::default())
+        // Each machine's daemon client over the ssh relay (WIN-8.14).
+        .manage(daemon::machine::MachineClients::default())
         .manage(pointguard::chat::ChatSockets::default())
         .manage(secrets::pairing::PairingSecrets::default())
         .invoke_handler(tauri::generate_handler![
@@ -65,6 +67,14 @@ pub fn run() {
             daemon::daemon_request,
             daemon::daemon_health,
             daemon::daemon_status,
+            daemon::machine::machines_load,
+            daemon::machine::machines_add,
+            daemon::machine::machines_remove,
+            daemon::machine::machines_ssh_config,
+            daemon::machine::machine_request,
+            daemon::machine::machine_probe,
+            daemon::machine::machine_start_daemon,
+            daemon::machine::machine_test_connection,
             installer::installer_status,
             installer::installer_run,
             subscriptions::subscriptions_start_project,

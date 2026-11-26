@@ -413,6 +413,11 @@ describe('AppState machines', () => {
           hideProject: () => {},
           removeProject: () => Promise.resolve(),
           moveProject: () => {},
+          client: { send: () => Promise.reject(new Error('no daemon')) },
+          startDaemon: () => {},
+          showHiddenProjects: () => {},
+          dismissError: () => {},
+          openProject: () => Promise.resolve(),
         };
         return state;
       },
@@ -452,6 +457,43 @@ describe('AppState machines', () => {
     expect(app.daemonError).toBe(
       'Could not read machines from %USERPROFILE%\\.pu\\machines.json: bad json',
     );
+  });
+
+  it("routes a machine's status events to its project, not a local one with the same root", async () => {
+    const { ProjectState: Project } = await import('./projectState');
+    const remote = new Project({
+      projectRoot: '/srv/app',
+      machineId: 'm1',
+      client: { send: () => Promise.resolve({ type: 'ok' }) },
+    });
+    const local = new Project({
+      projectRoot: '/srv/app',
+      client: { send: () => Promise.resolve({ type: 'ok' }) },
+    });
+    const { directory } = fakeDirectory([{ id: 'm1', name: 'Box', sshHost: 'box' }]);
+    const app = new AppState({
+      machines: {
+        ...directory,
+        makeState: (machine, owner) => ({
+          ...directory.makeState(machine, owner),
+          projects: [remote],
+        }),
+      },
+      storage: memoryStorage(),
+      client: { send: () => Promise.resolve({ type: 'ok' }) },
+      startProject: () => undefined,
+      followsLocalDaemon: false,
+    });
+    app.store.setState({ projects: [local] });
+    await app.loadMachines();
+    const remoteApply = vi.spyOn(remote, 'applyStatusEvent');
+    const localApply = vi.spyOn(local, 'applyStatusEvent');
+    app.handleStatusEvent({ projectRoot: '/srv/app', machineId: 'm1', worktrees: [], agents: [] });
+    expect(remoteApply).toHaveBeenCalledOnce();
+    expect(localApply).not.toHaveBeenCalled();
+    app.handleStatusEvent({ projectRoot: '/srv/app', worktrees: [], agents: [] });
+    expect(localApply).toHaveBeenCalledOnce();
+    expect(app.projectState('machine:m1:/srv/app')).toBe(remote);
   });
 });
 

@@ -7,8 +7,8 @@
 // - The command palette is WIN-7.5: New calls the named `openCommandPalette` stub with the
 //   project it would open for. Open runs the menu's Open Project command (the folder picker,
 //   `appLifecycleHooks.openProject`, WIN-8.15).
-// - Add Machine (the `desktopcomputer` button and `AddMachineSheet`) arrives with the machines
-//   port (WIN-8.14).
+// - Add Machine (the `desktopcomputer` button) opens `AddMachineSheet` through the machine sheets
+//   store, which SidebarView renders (WIN-8.14).
 
 import { displayString } from '../../model/keyBinding.ts';
 import type { SidebarSelection } from '../../model/sidebarItem.ts';
@@ -19,6 +19,7 @@ import { isPointGuard } from '../../model/workspace.ts';
 import { useAppState } from '../shell/appContext.ts';
 import { openCommandPalette } from '../shell/appCommands.ts';
 import { appLifecycleHooks } from '../../services/appLifecycle.ts';
+import { useMachineSheets } from './machineSheets.ts';
 
 /** The project New opens the palette for (Swift `activeProject`). */
 export function footerActiveProjectId(
@@ -83,6 +84,17 @@ export function SidebarFooter({
         }}
       >
         <Icon name="gear" size={14} />
+      </button>
+      <button
+        type="button"
+        className="sidebar-footer-button"
+        aria-label="Add Machine"
+        title="Add Machine…"
+        onClick={() => {
+          useMachineSheets.getState().showAddMachine(true);
+        }}
+      >
+        <Icon name="desktopcomputer" size={14} />
       </button>
       <span className="sidebar-footer-spacer" />
       <button

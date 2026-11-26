@@ -32,9 +32,19 @@ describe('subscription service', () => {
     await subscriptions.startProjectSubscriptions('C:\\p');
     expect(invoke).toHaveBeenLastCalledWith('subscriptions_start_project', {
       projectRoot: 'C:\\p',
+      machineId: null,
     });
     await subscriptions.stopProjectSubscriptions('C:\\p');
-    expect(invoke).toHaveBeenLastCalledWith('subscriptions_stop_project', { projectRoot: 'C:\\p' });
+    expect(invoke).toHaveBeenLastCalledWith('subscriptions_stop_project', {
+      projectRoot: 'C:\\p',
+      machineId: null,
+    });
+    // A remote project's streams run on its machine's daemon (WIN-8.14).
+    await subscriptions.startProjectSubscriptions('/srv/app', 'm1');
+    expect(invoke).toHaveBeenLastCalledWith('subscriptions_start_project', {
+      projectRoot: '/srv/app',
+      machineId: 'm1',
+    });
     await subscriptions.startProjectsSubscription();
     expect(invoke).toHaveBeenLastCalledWith('subscriptions_start_projects', undefined);
     await subscriptions.stopProjectsSubscription();
@@ -44,6 +54,7 @@ describe('subscription service', () => {
     expect(invoke).toHaveBeenLastCalledWith('subscriptions_grid_command', {
       projectRoot: 'C:\\p',
       command,
+      machineId: null,
     });
   });
 

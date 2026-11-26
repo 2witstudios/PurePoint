@@ -19,6 +19,9 @@ import type { SfSymbolName } from '../../theme/icons.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { useAppState } from '../shell/appContext.ts';
 import { SidebarFooter } from './SidebarFooter.tsx';
+import { AddMachineSheet } from './AddMachineSheet.tsx';
+import { RemoteFolderPicker } from './RemoteFolderPicker.tsx';
+import { useMachineSheets } from './machineSheets.ts';
 import { SidebarOutlineView } from './SidebarOutlineView.tsx';
 import type {
   SidebarExpansionStoreApi,
@@ -100,6 +103,39 @@ export function SidebarView({ selection, onSelectionChange, expansionStore }: Si
       )}
 
       <SidebarFooter selection={selection} />
+      <MachineSheets />
     </nav>
+  );
+}
+
+/** Add Machine and the remote folder picker, when one is up (WIN-8.14). */
+function MachineSheets() {
+  const app = useAppState();
+  const addMachine = useMachineSheets((state) => state.addMachine);
+  const pickerMachineId = useMachineSheets((state) => state.folderPickerMachineId);
+  const machines = useStore(app.store, (state) => state.machines);
+  const pickerMachine =
+    pickerMachineId === null
+      ? undefined
+      : machines.find((machine) => machine.machine.id === pickerMachineId);
+  return (
+    <>
+      {addMachine && (
+        <AddMachineSheet
+          onDismiss={() => {
+            useMachineSheets.getState().showAddMachine(false);
+          }}
+        />
+      )}
+      {pickerMachine !== undefined && (
+        <RemoteFolderPicker
+          key={pickerMachine.machine.id}
+          machine={pickerMachine}
+          onDismiss={() => {
+            useMachineSheets.getState().openFolderPicker(null);
+          }}
+        />
+      )}
+    </>
   );
 }

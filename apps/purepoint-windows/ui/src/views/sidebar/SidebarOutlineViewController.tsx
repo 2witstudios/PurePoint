@@ -18,7 +18,9 @@
 //   item of the row's menu — Kill Agent / Close Workspace, Delete Worktree, Remove Project,
 //   Remove Machine — with the confirmation that menu item asks for.
 // - Context menus, the worktree add menu and project drag are WIN-7.8; the add buttons open the
-//   command palette directly (`onShowCommandPalette`).
+//   command palette directly (`onShowCommandPalette`). Until the menus land, a machine row shows
+//   its two actions inline (WIN-8.14): Start Daemon while its daemon is stopped, and an add
+//   button (Open Remote Project) while it runs.
 // - The agent signal pill is `AgentModel.signalPresentation` (WIN-7.7) read when the row draws;
 //   callers can pass their own `presentSignal`.
 
@@ -35,6 +37,8 @@ import {
   type ProjectSnapshot,
   type SidebarNode,
   type SidebarSelection,
+  isDaemonRunning,
+  isDaemonStopped,
   isExpandable,
   projectName,
   selectionsEqual,
@@ -127,6 +131,10 @@ export interface SidebarOutlineCallbacks {
   readonly onRemoveMachine?: (machineId: string) => void;
   /** Enter on a machine row (Swift `toggleConnection(of:)`). */
   readonly onToggleMachineConnection?: (machineId: string) => void;
+  /** A machine's Start Daemon (Swift `machine.startDaemon()`). */
+  readonly onStartDaemon?: (machineId: string) => void;
+  /** A machine row's add button: choose a folder on it to open as a project. */
+  readonly onOpenRemoteProject?: (machineId: string) => void;
 }
 
 export interface SidebarOutlineViewControllerProps extends SidebarOutlineCallbacks {
@@ -357,10 +365,18 @@ interface CellProps {
   readonly presentSignal: (signal: WorkspaceSignal) => SignalPill;
   readonly renameEditor: ReactNode;
   readonly onAdd: (node: SidebarNode) => void;
+  readonly onStartDaemon: (machineId: string) => void;
 }
 
 /** A row's content (Swift `make…Cell`) and its accessible name and tooltip. */
-function cellFor({ node, workspace, presentSignal, renameEditor, onAdd }: CellProps): {
+function cellFor({
+  node,
+  workspace,
+  presentSignal,
+  renameEditor,
+  onAdd,
+  onStartDaemon,
+}: CellProps): {
   content: ReactNode;
   label: string;
   tooltip?: string;
@@ -444,6 +460,31 @@ function cellFor({ node, workspace, presentSignal, renameEditor, onAdd }: CellPr
                 size={12}
                 className="sidebar-warning"
                 label="Error"
+              />
+            )}
+            {isDaemonStopped(machine.state) && (
+              <button
+                type="button"
+                className="sidebar-row-action"
+                tabIndex={-1}
+                disabled={machine.isStartingDaemon}
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onStartDaemon(machine.id);
+                }}
+              >
+                {machine.isStartingDaemon ? 'Starting Daemon…' : 'Start Daemon'}
+              </button>
+            )}
+            {isDaemonRunning(machine.state) && (
+              <AddButton
+                label="Open Remote Project"
+                onClick={() => {
+                  onAdd(node);
+                }}
               />
             )}
           </>
@@ -779,7 +820,9 @@ export function SidebarOutlineViewController({
   };
 
   const showCommandPalette = (node: SidebarNode) => {
-    if (node.kind === 'project') {
+    if (node.kind === 'machine') {
+      callbacks.onOpenRemoteProject?.(node.machine.id);
+    } else if (node.kind === 'project') {
       callbacks.onShowCommandPalette?.(node.project.projectId, null, true);
     } else if (node.kind === 'worktree') {
       callbacks.onShowCommandPalette?.(
@@ -921,6 +964,9 @@ export function SidebarOutlineViewController({
           />
         ) : null,
       onAdd: showCommandPalette,
+      onStartDaemon: (machineId) => {
+        callbacks.onStartDaemon?.(machineId);
+      },
     });
     const expandable = isExpandable(node);
     const selected = node.rowKey === selectedKey;

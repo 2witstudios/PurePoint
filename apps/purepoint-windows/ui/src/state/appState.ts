@@ -15,14 +15,16 @@
 //   the key window (`setWindowFocused`), and a notification's route is checked against the
 //   project's status as last reported, not a fresh `status` request (the status subscription
 //   streams every change, so the reported status is current).
-// - `MachineState` is WIN-8.14: machines arrive through the injected `MachineDirectory`, and the
-//   machine list stays empty without one.
+// - Machines (WIN-8.14) arrive through the injected `MachineDirectory` (the app's is
+//   `TauriMachineDirectory`); the machine list stays empty without one. Remote projects' status,
+//   grid and subscription events carry their machine's id and go to that machine's project.
 // - The binary watcher that restarts an updated daemon is the backend's (WIN-5.3 lifecycle).
 // - Canonical paths: the daemon reports the roots it registered and the Windows app opens them
 //   as reported, so no `realpath` step is needed to match them.
 // - Library screens' states (agents hub, schedules, triggers) are their own leaves (WIN-8.x).
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import type { Machine } from '../model/machine';
 import { type AgentModel, agentSignalPresentation, isAgentAlive } from '../model/workspaceModel';
 import { makeSignalAlertAgent, type SignalAlertAgent } from '../model/agentSignalPolicy';
 import {
@@ -35,7 +37,7 @@ import {
 import { opaqueKey, signalQualificationKey } from '../model/agentSignalSnapshot';
 import { isPointGuard, workspaceSurfaces } from '../model/workspace';
 import type { AgentSignalNotifications } from '../services/agentSignalNotifications';
-import { parseProjectKey } from '../model/projectKey';
+import { parseProjectKey, projectKey, projectKeyId } from '../model/projectKey';
 import { ProjectOrderSaver, movingProject, sortedByProjectOrder } from '../model/projectOrder';
 import type { MachineSnapshot, ProjectSnapshot, SidebarSelection } from '../model/sidebarItem';
 import { selection as sidebarSelection } from '../model/sidebarItem';
@@ -70,22 +72,27 @@ import {
 
 // MARK: - Machines seam (WIN-8.14)
 
-/** A machine in `%USERPROFILE%\.pu\machines.json` (Swift `Machine`). */
-export interface Machine {
-  /** Lowercase UUID. */
-  readonly id: string;
-  readonly name: string;
-  readonly sshHost: string;
-}
+export type { Machine } from '../model/machine';
 
-/** What AppState asks of a machine's live state (Swift `MachineState`). */
+/**
+ * What AppState asks of a machine's live state (Swift `MachineState`; the app's is
+ * `LiveMachineState` in `machineState.ts`).
+ */
 export interface MachineState {
   readonly machine: Machine;
   readonly projects: readonly ProjectState[];
+  /** The machine's daemon, through the backend's ssh relay. */
+  readonly client: DaemonRequester;
   snapshot(): MachineSnapshot;
   update(from: Machine): void;
   connect(): void;
-  disconnect(options?: { readonly keepUnsaved?: boolean }): void;
+  /** `remember`: stay disconnected at the next launch (an explicit Disconnect). */
+  disconnect(options?: { readonly keepUnsaved?: boolean; readonly remember?: boolean }): void;
+  startDaemon(): void;
+  showHiddenProjects(): void;
+  dismissError(): void;
+  /** Register a folder on the machine as a project (`init`); rejects with the daemon's refusal. */
+  openProject(root: string): Promise<void>;
   hideProject(root: string): void;
   removeProject(root: string, suspendAgents: boolean): Promise<void>;
   moveProject(root: string, index: number): void;
@@ -477,17 +484,31 @@ export class AppState implements ProjectStateOwner {
     return this.localManagedProjects.find((project) => project.projectRoot === root) ?? null;
   }
 
+  /** The project an event names: a machine's when it carries a machine id, else a local one. */
+  private eventProject(root: string, machineId: string | null | undefined): ProjectState | null {
+    if (machineId === null || machineId === undefined) return this.localProject(root);
+    const machine = this.machines.find((candidate) => candidate.machine.id === machineId);
+    return machine?.projects.find((project) => project.projectRoot === root) ?? null;
+  }
+
   handleStatusEvent(event: StatusEvent): void {
-    this.localProject(event.projectRoot)?.applyStatusEvent(event.worktrees, event.agents);
+    this.eventProject(event.projectRoot, event.machineId)?.applyStatusEvent(
+      event.worktrees,
+      event.agents,
+    );
   }
 
   handleGridEvent(event: GridEvent): void {
-    this.registry?.handleRemoteCommand(event.command, event.projectRoot);
+    const machineId = event.machineId ?? null;
+    this.registry?.handleRemoteCommand(
+      event.command,
+      projectKeyId(projectKey(event.projectRoot, machineId)),
+    );
   }
 
   handleSubscriptionState(event: SubscriptionStateEvent): void {
     if (event.projectRoot === null) return;
-    this.localProject(event.projectRoot)?.handleSubscriptionState(event);
+    this.eventProject(event.projectRoot, event.machineId)?.handleSubscriptionState(event);
   }
 
   handleManifestChanged(event: ManifestChanged): void {
@@ -537,6 +558,20 @@ export class AppState implements ProjectStateOwner {
   private unfollow(project: ProjectState): void {
     this.projectUnsubscribers.get(project)?.();
     this.projectUnsubscribers.delete(project);
+  }
+
+  /** A machine's own state changed (connection, actions, its project list). */
+  machineChanged(): void {
+    this.bumpRevision();
+  }
+
+  /** Follow a remote project's state for the sidebar, as local projects are followed. */
+  followProject(project: ProjectState): void {
+    this.follow(project);
+  }
+
+  unfollowProject(project: ProjectState): void {
+    this.unfollow(project);
   }
 
   private bumpRevision(): void {

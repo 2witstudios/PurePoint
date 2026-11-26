@@ -35,21 +35,8 @@ export interface DaemonRequester {
 /** The local daemon, through the backend (`daemon_request`), which starts it if needed. */
 export const localDaemonClient: DaemonRequester = { send: daemonRequest };
 
-/**
- * A machine's daemon. The backend reaches machines over `ssh.exe` for git and `fs_*` only; general
- * requests to a machine arrive with machines (WIN-8.14). Until then every request rejects.
- */
-export function unavailableMachineClient(machineId: string): DaemonRequester {
-  return {
-    send: () =>
-      Promise.reject(
-        new DaemonClientError(
-          'notRunning',
-          `This project's machine (${machineId}) is not available.`,
-        ),
-      ),
-  };
-}
+// A machine's daemon is `machineDaemonClient` (services/machines.ts, WIN-8.14): the backend's
+// ssh relay carries every request to it.
 
 // MARK: - Errors
 

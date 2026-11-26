@@ -292,6 +292,22 @@
   background: var(--control-hover);
 }
 
+/* A machine row's inline action (Start Daemon) until the row menus land (WIN-7.8). */
+.sidebar-row-action {
+  flex: none;
+  height: 16px;
+  padding: 0 6px;
+  border: 1px solid var(--menu-border);
+  border-radius: 4px;
+  background: var(--pp-system-control-background);
+  color: inherit;
+  font: 10px var(--pp-font-ui);
+}
+
+.sidebar-row-action:disabled {
+  color: var(--secondary-text);
+}
+
 .sidebar-rename {
   flex: 1;
   min-width: 0;
@@ -392,4 +408,126 @@
   border-color: transparent;
   background: var(--sidebar-accent);
   color: #fff;
+}
+
+/* Machine sheets (WIN-8.14): Add Machine and the remote folder picker. */
+.sidebar-sheet {
+  width: min(440px, calc(100vw - 32px));
+}
+
+.sidebar-sheet-field {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font: 12px var(--pp-font-ui);
+}
+
+.sidebar-sheet-field input {
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--menu-border);
+  border-radius: 4px;
+  background: var(--pp-system-control-background);
+  color: inherit;
+  font: inherit;
+}
+
+.sidebar-sheet-note {
+  margin: 4px 0 12px;
+  font: 11px var(--pp-font-ui);
+  color: var(--secondary-text);
+  overflow-wrap: anywhere;
+}
+
+.sidebar-sheet-note[data-ok='false'] {
+  color: var(--pp-status-error, #d70015);
+}
+
+.sidebar-confirm-buttons .sidebar-sheet-leading {
+  margin-right: auto;
+}
+
+.sidebar-confirm-buttons button:disabled {
+  opacity: 0.5;
+}
+
+.remote-folder-picker {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.remote-folder-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+
+.remote-folder-bar button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--menu-border);
+  border-radius: 4px;
+  background: var(--pp-system-control-background);
+  color: inherit;
+}
+
+.remote-folder-bar button:disabled {
+  opacity: 0.4;
+}
+
+.remote-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 12px var(--pp-font-ui);
+}
+
+.remote-folder-list {
+  height: 260px;
+  overflow: auto;
+  border: 1px solid var(--menu-border);
+  border-radius: 4px;
+  background: var(--pp-system-control-background);
+}
+
+.remote-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  font: 12px var(--pp-font-ui);
+  cursor: default;
+  user-select: none;
+}
+
+.remote-folder-row[aria-selected='true'] {
+  background: var(--sidebar-accent);
+  color: #fff;
+}
+
+.remote-folder-link,
+.remote-folder-empty {
+  color: var(--secondary-text);
+  font-size: 11px;
+}
+
+.remote-folder-empty {
+  padding: 8px;
+}
+
+.remote-folder-hidden {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  font: 12px var(--pp-font-ui);
 }

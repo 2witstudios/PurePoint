@@ -14,6 +14,10 @@
 //! Every stream also raises `subscription-state` (`subscribed`, `retrying`, `daemon_lost`,
 //! `failed`). Stopping a stream aborts its task, which closes its connection.
 //!
+//! A remote project's status and grid streams (WIN-8.14) run on its machine's daemon, through
+//! the ssh relay; their events carry the machine's id (`machineId`) beside the project root,
+//! and the running streams are keyed by both.
+//!
 //! Tauri surface (front end: `ui/src/services/subscriptions.ts`): commands
 //! `subscriptions_start_project`, `subscriptions_stop_project`,
 //! `subscriptions_start_projects`, `subscriptions_stop_projects` and
@@ -39,6 +43,7 @@ use tokio::task::JoinHandle;
 
 use crate::daemon::DaemonState;
 use crate::daemon::client::{DaemonClient, DaemonError, LineReader, parse};
+use crate::daemon::machine::MachineClients;
 
 pub const STATUS_EVENT: &str = "status-event";
 pub const GRID_EVENT: &str = "grid-event";
@@ -162,6 +167,37 @@ pub enum SubscriptionEvent {
     Projects { projects: Vec<String> },
     /// `subscription-state`.
     State(StateChange),
+    /// Any of the above from a machine's daemon: the event's own fields plus `machineId`.
+    Remote(RemoteEvent),
+}
+
+/// A machine's subscription event: the local event's payload with `machineId` added.
+#[derive(Debug, Clone, Serialize)]
+pub struct RemoteEvent {
+    #[serde(skip)]
+    name: &'static str,
+    #[serde(flatten)]
+    payload: serde_json::Map<String, serde_json::Value>,
+}
+
+impl RemoteEvent {
+    /// `event`, tagged as coming from `machine_id`'s daemon.
+    pub fn new(machine_id: &str, event: &SubscriptionEvent) -> Self {
+        let mut payload = match serde_json::to_value(event) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        payload.insert("machineId".into(), machine_id.into());
+        Self {
+            name: event.name(),
+            payload,
+        }
+    }
+
+    /// The machine's id.
+    pub fn machine_id(&self) -> Option<&str> {
+        self.payload.get("machineId").and_then(|v| v.as_str())
+    }
 }
 
 impl SubscriptionEvent {
@@ -171,7 +207,16 @@ impl SubscriptionEvent {
             Self::Grid { .. } => GRID_EVENT,
             Self::Projects { .. } => PROJECTS_EVENT,
             Self::State(_) => STATE_EVENT,
+            Self::Remote(remote) => remote.name,
         }
+    }
+}
+
+/// The running streams' key: the root, qualified by its machine (the front end's project key).
+fn project_key(project_root: &str, machine_id: Option<&str>) -> String {
+    match machine_id {
+        Some(machine) => format!("machine:{}:{project_root}", machine.to_ascii_lowercase()),
+        None => project_root.to_owned(),
     }
 }
 
@@ -305,22 +350,45 @@ impl Subscriptions {
     /// (`ProjectState.startStatusSubscription` and `startGridSubscription`). Must be called
     /// inside a Tokio runtime.
     pub fn start_project(&self, client: &DaemonClient, project_root: &str) {
+        self.start_project_on(client, project_root, None);
+    }
+
+    /// [`Self::start_project`] on `machine_id`'s daemon when given: its events carry the id.
+    pub fn start_project_on(
+        &self,
+        client: &DaemonClient,
+        project_root: &str,
+        machine_id: Option<&str>,
+    ) {
+        let emit = match machine_id {
+            None => self.emit.clone(),
+            Some(machine) => {
+                let emit = self.emit.clone();
+                let machine_id = machine.to_ascii_lowercase();
+                Arc::new(move |event: SubscriptionEvent| {
+                    emit(SubscriptionEvent::Remote(RemoteEvent::new(
+                        &machine_id,
+                        &event,
+                    )));
+                }) as Emit
+            }
+        };
         let grid_writer = grid::GridWriter::default();
         let status = tokio::spawn(status::run(
             client.clone(),
             project_root.to_owned(),
             self.policies.status,
-            self.emit.clone(),
+            emit.clone(),
         ));
         let grid = tokio::spawn(grid::run(
             client.clone(),
             project_root.to_owned(),
             self.policies.grid,
-            self.emit.clone(),
+            emit,
             grid_writer.clone(),
         ));
         let previous = self.running().projects.insert(
-            project_root.to_owned(),
+            project_key(project_root, machine_id),
             ProjectSubscriptions {
                 status,
                 grid,
@@ -332,7 +400,15 @@ impl Subscriptions {
 
     /// Stop `project_root`'s subscriptions; false if none were running.
     pub fn stop_project(&self, project_root: &str) -> bool {
-        let removed = self.running().projects.remove(project_root);
+        self.stop_project_on(project_root, None)
+    }
+
+    /// Stop a project's subscriptions on `machine_id`'s daemon (or the local one).
+    pub fn stop_project_on(&self, project_root: &str, machine_id: Option<&str>) -> bool {
+        let removed = self
+            .running()
+            .projects
+            .remove(&project_key(project_root, machine_id));
         removed.is_some()
     }
 
@@ -369,10 +445,20 @@ impl Subscriptions {
     /// Write a grid command on `project_root`'s grid connection; false when it has none
     /// (`DaemonGridSubscription.sendCommand`).
     pub async fn send_grid_command(&self, project_root: &str, command: GridCommand) -> bool {
+        self.send_grid_command_on(project_root, None, command).await
+    }
+
+    /// [`Self::send_grid_command`] for a project on `machine_id`'s daemon (or the local one).
+    pub async fn send_grid_command_on(
+        &self,
+        project_root: &str,
+        machine_id: Option<&str>,
+        command: GridCommand,
+    ) -> bool {
         let writer = self
             .running()
             .projects
-            .get(project_root)
+            .get(&project_key(project_root, machine_id))
             .map(|subs| subs.grid_writer.clone());
         match writer {
             Some(writer) => writer.send(project_root, command).await,
@@ -388,15 +474,24 @@ impl Subscriptions {
     }
 }
 
-/// Start (or restart) a project's status and grid subscriptions.
+/// Start (or restart) a project's status and grid subscriptions, on `machine_id`'s daemon
+/// when given.
 #[tauri::command]
 pub async fn subscriptions_start_project(
     daemon: State<'_, DaemonState>,
+    machines: State<'_, MachineClients>,
     subscriptions: State<'_, Subscriptions>,
     project_root: String,
+    machine_id: Option<String>,
 ) -> Result<(), DaemonError> {
-    let lifecycle = daemon.lifecycle()?;
-    subscriptions.start_project(lifecycle.client(), &project_root);
+    match machine_id {
+        Some(machine) => subscriptions.start_project_on(
+            &machines.client(&machine),
+            &project_root,
+            Some(&machine),
+        ),
+        None => subscriptions.start_project(daemon.lifecycle()?.client(), &project_root),
+    }
     Ok(())
 }
 
@@ -405,8 +500,9 @@ pub async fn subscriptions_start_project(
 pub fn subscriptions_stop_project(
     subscriptions: State<'_, Subscriptions>,
     project_root: String,
+    machine_id: Option<String>,
 ) -> bool {
-    subscriptions.stop_project(&project_root)
+    subscriptions.stop_project_on(&project_root, machine_id.as_deref())
 }
 
 /// Follow the daemon's registered projects, starting the daemon first if needed.
@@ -434,8 +530,9 @@ pub async fn subscriptions_grid_command(
     subscriptions: State<'_, Subscriptions>,
     project_root: String,
     command: GridCommand,
+    machine_id: Option<String>,
 ) -> Result<bool, DaemonError> {
     Ok(subscriptions
-        .send_grid_command(&project_root, command)
+        .send_grid_command_on(&project_root, machine_id.as_deref(), command)
         .await)
 }
