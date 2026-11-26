@@ -69,11 +69,11 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/DaemonAttachSession.swift` | 354 | `src-tauri/src/attach/session.rs` | WIN-5.4 | todo | — |
 | `Services/DaemonClient.swift` | 138 | `src-tauri/src/daemon/client.rs`, `src-tauri/src/daemon/relay.rs`, `ui/src/services/daemon.ts` | WIN-5.3 | ported | — |
 | `Services/DaemonConnection.swift` | 80 | `ui/src/services/daemonConnection.ts` | WIN-6.0 | todo | — |
-| `Services/DaemonGridSubscription.swift` | 127 | `src-tauri/src/subscriptions/grid.rs`, `ui/src/state/gridCommands.ts` | WIN-6.4 | todo | — |
+| `Services/DaemonGridSubscription.swift` | 127 | `src-tauri/src/subscriptions/grid.rs`, `ui/src/state/gridCommands.ts` | WIN-6.4 | todo | WIN-5.5 ported the stream (`grid.rs`: same backoff, 20 retries, commands on the subscription connection; `grid-event {projectRoot, command}`, `subscriptions_grid_command`); WIN-6.4 applies commands to the registry (`handleRemoteCommand`) |
 | `Services/DaemonLifecycle.swift` | 285 | `src-tauri/src/daemon/lifecycle.rs` | WIN-5.3 | ported | — |
-| `Services/DaemonProjectsSubscription.swift` | 69 | `src-tauri/src/subscriptions/projects.rs` | WIN-5.5 | todo | — |
+| `Services/DaemonProjectsSubscription.swift` | 69 | `src-tauri/src/subscriptions/projects.rs`, `ui/src/services/subscriptions.ts` | WIN-5.5 | ported | 0.5 s doubling to 10 s, never gives up; `projects-changed {projects}`; `subscriptions_start_projects` ensures the daemon first (`followLocalProjects`) |
 | `Services/DaemonProtocol.swift` | 1438 | `ui/src/protocol/generated/` (from pu-core via ts-rs) | WIN-5.2 | todo | — |
-| `Services/DaemonStatusSubscription.swift` | 143 | `src-tauri/src/subscriptions/status.rs` | WIN-5.5 | todo | — |
+| `Services/DaemonStatusSubscription.swift` | 143 | `src-tauri/src/subscriptions/status.rs`, `ui/src/services/subscriptions.ts` | WIN-5.5 | ported | Per project root; 0.5 s doubling to 5 s, `BUSY` retried, `subscription-state` `daemon_lost` on a dropped stream or the 4th failure; `status-event` carries the raw payload (AgentModel mapping goes with WIN-6.0); no iOS foreground handling |
 | `Services/DaemonTransport.swift` | 197 | `src-tauri/src/daemon/client.rs` (replaces the Swift transport) | WIN-6.0 | todo | — |
 | `Services/DaemonWorkspaceService.swift` | 73 | `ui/src/services/workspaceService.ts` | WIN-6.0 | todo | — |
 | `Services/FileIOService.swift` | 175 | `src-tauri/src/git/file_io.rs`, `ui/src/services/fileIO.ts` | WIN-8.5 | todo | — |

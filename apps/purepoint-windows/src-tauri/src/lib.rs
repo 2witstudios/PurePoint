@@ -49,6 +49,11 @@ pub fn run() {
             daemon::daemon_request,
             daemon::daemon_health,
             daemon::daemon_status,
+            subscriptions::subscriptions_start_project,
+            subscriptions::subscriptions_stop_project,
+            subscriptions::subscriptions_start_projects,
+            subscriptions::subscriptions_stop_projects,
+            subscriptions::subscriptions_grid_command,
             watchers::commands::watch_manifest,
             watchers::commands::watch_worktree,
             watchers::commands::watch_file_tree,
@@ -64,6 +69,7 @@ pub fn run() {
                 let daemon = daemon::DaemonState::for_app(app.handle());
                 daemon.start();
                 app.manage(daemon);
+                app.manage(subscriptions::Subscriptions::for_app(app.handle().clone()));
                 app.manage(watchers::commands::WatcherState::new(app.handle().clone()));
             }
             #[cfg(windows)]

@@ -49,7 +49,7 @@ impl DaemonState {
         Self { lifecycle }
     }
 
-    fn lifecycle(&self) -> Result<Arc<DaemonLifecycle>, DaemonError> {
+    pub(crate) fn lifecycle(&self) -> Result<Arc<DaemonLifecycle>, DaemonError> {
         self.lifecycle.clone().map_err(DaemonError::Io)
     }
 
