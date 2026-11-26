@@ -2,6 +2,8 @@ mod agent_lifecycle;
 mod attach_file;
 mod build_cache;
 mod channel;
+#[cfg(all(test, windows))]
+mod conpty_tests;
 mod definitions;
 mod fs_ops;
 mod helpers;

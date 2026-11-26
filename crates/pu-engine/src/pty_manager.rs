@@ -18,6 +18,9 @@ use tokio::sync::watch;
 
 use crate::output_buffer::OutputBuffer;
 
+#[cfg(windows)]
+mod conpty;
+
 /// The agent's terminal: a Unix PTY master or a Windows pseudoconsole.
 ///
 /// Every method blocks, so async callers run them on the blocking pool. No
@@ -113,7 +116,6 @@ impl std::io::Read for FdReader {
 }
 
 /// Drain `reader` into `buffer` until EOF or a read error (EINTR is retried).
-#[cfg_attr(windows, allow(dead_code))]
 fn pump_output(mut reader: Box<dyn std::io::Read + Send>, buffer: &OutputBuffer) {
     let mut tmp = [0u8; 4096];
     loop {
@@ -254,9 +256,29 @@ impl NativePtyHost {
     }
 
     #[cfg(windows)]
-    pub async fn spawn(&self, _config: SpawnConfig) -> Result<AgentHandle, std::io::Error> {
-        // WIN-3.2: spawn the child under a ConPTY and start the reader/wait tasks.
-        Err(crate::os::unsupported("PTY spawn"))
+    pub async fn spawn(&self, config: SpawnConfig) -> Result<AgentHandle, std::io::Error> {
+        let buffer = Arc::new(OutputBuffer::new());
+        buffer.resize_terminal(config.rows, config.cols);
+        let (exit_tx, exit_rx) = watch::channel(None);
+        let cwd = config.cwd.clone();
+        let read_buf = buffer.clone();
+        let pty: Pty =
+            tokio::task::spawn_blocking(move || conpty::spawn(&config, read_buf, exit_tx))
+                .await
+                .map_err(std::io::Error::other)??;
+        Ok(AgentHandle {
+            project_root: None,
+            cwd,
+            name: "shell".into(),
+            agent_type: "terminal".into(),
+            worktree_id: None,
+            started_at: chrono::Utc::now(),
+            pid: pty.pid(),
+            output_buffer: buffer,
+            pty,
+            exit_rx,
+            screen_aware: false,
+        })
     }
 
     #[cfg(unix)]
