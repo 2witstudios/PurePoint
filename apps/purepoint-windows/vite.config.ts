@@ -1,4 +1,5 @@
 /// <reference types="vitest/config" />
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
@@ -11,12 +12,22 @@ const outDir = fileURLToPath(new URL('./dist', import.meta.url));
 // (WIN-9.4); its one package import, `ws`, resolves to this app's copy.
 const wsPackage = fileURLToPath(new URL('./node_modules/ws/wrapper.mjs', import.meta.url));
 
+/** Settings › About's Build (WIN-8.11): the commit the app is built from. */
+function buildId(): string {
+  try {
+    return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
+  } catch {
+    return 'dev';
+  }
+}
+
 // Tauri loads the dev server from a fixed port and the production bundle from
 // ../dist (see src-tauri/tauri.conf.json); keep the two in step.
 export default defineConfig({
   root: uiRoot,
   plugins: [react()],
   clearScreen: false,
+  define: { __PUREPOINT_BUILD__: JSON.stringify(buildId()) },
   server: {
     port: 1420,
     strictPort: true,

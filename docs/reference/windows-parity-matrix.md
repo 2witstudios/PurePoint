@@ -132,7 +132,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/RemoteFolderBrowser+iOS.swift` | 242 | — | — | excluded | `+iOS` file (iPad build only) |
 | `State/ScheduleState.swift` | 282 | `ui/src/state/scheduleState.ts` | WIN-8.8 | ported | — |
 | `State/SessionListState.swift` | 164 | `ui/src/state/sessions.ts` | WIN-8.16 | ported | — |
-| `State/SettingsState.swift` | 111 | `ui/src/state/settingsState.ts` | WIN-8.11 | todo | — |
+| `State/SettingsState.swift` | 111 | `ui/src/state/settingsState.ts` (appearance, terminal font size and hotkeys through their own stores: `ui/src/theme/themeStore.ts`, `ui/src/views/terminal/terminalFontStore.ts`, `ui/src/state/keyBindingStore.ts`; the palette reads its preferences here) | WIN-8.11 | ported | — |
 | `State/SidebarExpansionStore.swift` | 45 | `ui/src/state/sidebarExpansionStore.ts` | WIN-6.5 | ported | — |
 | `State/SidebarVisibility.swift` | 38 | `ui/src/state/sidebarVisibilityStore.ts` | WIN-6.5 | ported | — |
 | `State/SpawnTargetResolver.swift` | 31 | `ui/src/state/spawnTargetResolver.ts` | WIN-6.6 | ported | — |
@@ -231,15 +231,15 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Schedule/ScheduleView.swift` | 63 | `ui/src/views/schedule/ScheduleView.tsx`, `ui/src/views/schedule/schedule.css` | WIN-8.8 | ported | — |
 | `Views/Schedule/TimeGridView.swift` | 177 | `ui/src/views/schedule/TimeGridView.tsx` | WIN-8.8 | ported | — |
 | `Views/Schedule/WeekCalendarView.swift` | 55 | `ui/src/views/schedule/WeekCalendarView.tsx` | WIN-8.8 | ported | — |
-| `Views/Settings/SettingsAboutView.swift` | 74 | `ui/src/views/settings/SettingsAboutView.tsx` | WIN-8.11 | todo | — |
-| `Views/Settings/SettingsAgentsView.swift` | 296 | `ui/src/views/settings/SettingsAgentsView.tsx` | WIN-8.11 | todo | — |
-| `Views/Settings/SettingsDisplayView.swift` | 49 | `ui/src/views/settings/SettingsDisplayView.tsx` | WIN-8.11 | todo | — |
-| `Views/Settings/SettingsGeneralView.swift` | 128 | `ui/src/views/settings/SettingsGeneralView.tsx` | WIN-8.11 | todo | — |
+| `Views/Settings/SettingsAboutView.swift` | 74 | `ui/src/views/settings/SettingsAboutView.tsx` (Build is the commit, `__PUREPOINT_BUILD__`) | WIN-8.11 | ported | — |
+| `Views/Settings/SettingsAgentsView.swift` | 296 | `ui/src/views/settings/SettingsAgentsView.tsx` | WIN-8.11 | ported | — |
+| `Views/Settings/SettingsDisplayView.swift` | 49 | `ui/src/views/settings/SettingsDisplayView.tsx` | WIN-8.11 | ported | — |
+| `Views/Settings/SettingsGeneralView.swift` | 128 | `ui/src/views/settings/SettingsGeneralView.tsx` (notification sound toggles not ported: toasts play the Windows sound) | WIN-8.11 | ported | — |
 | `Views/Settings/SettingsHotkeysView+iOS.swift` | 106 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Settings/SettingsHotkeysView.swift` | 221 | `ui/src/views/settings/SettingsHotkeysView.tsx` | WIN-8.11 | todo | — |
+| `Views/Settings/SettingsHotkeysView.swift` | 221 | `ui/src/views/settings/SettingsHotkeysView.tsx`, `ui/src/views/settings/hotkeyRecorder.ts` (records `KeyboardEvent.code`; refuses reserved terminal chords) | WIN-8.11 | ported | — |
 | `Views/Settings/SettingsPointGuardView.swift` | 20 | `ui/src/views/settings/SettingsPointGuardView.tsx` | WIN-9.5 | todo | — |
-| `Views/Settings/SettingsSection.swift` | 41 | `ui/src/views/settings/SettingsSection.tsx` | WIN-8.11 | todo | — |
-| `Views/Settings/SettingsView.swift` | 138 | `ui/src/views/settings/SettingsView.tsx` | WIN-8.11 | todo | — |
+| `Views/Settings/SettingsSection.swift` | 41 | `ui/src/views/settings/SettingsSection.ts` | WIN-8.11 | ported | — |
+| `Views/Settings/SettingsView.swift` | 138 | `ui/src/views/settings/SettingsView.tsx`, `ui/src/views/settings/SettingsGroup.tsx`, `ui/src/views/settings/settings.css` | WIN-8.11 | ported | — |
 | `Views/Sidebar/AddMachineSheet+iOS.swift` | 390 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/AddMachineSheet.swift` | 125 | `ui/src/views/sidebar/AddMachineSheet.tsx` (`ui/src/views/sidebar/machineSheets.ts`) | WIN-8.14 | ported | — |
 | `Views/Sidebar/RemoteFolderPicker+iOS.swift` | 503 | — | — | excluded | `+iOS` file (iPad build only) |
@@ -308,7 +308,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `GitReviewTests.swift` | all | `src-tauri/src/git/tests/git_review.rs` | WIN-8.1 | ported | DiffState-only assertions go with WIN-6.0; WorktreeWatcher checks with WIN-5.6 |
 | `HexEncodingTests.swift` | all | `ui/src/services/daemonConnection.test.ts` | WIN-6.0 | ported | — |
 | `HotkeyKeyCommandTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `HotkeyRecorderTests.swift` | all | — | — | ios-only | Windows recorder gets new tests in WIN-8.11 |
+| `HotkeyRecorderTests.swift` | all | — | — | ios-only | Windows recorder tests: `ui/src/views/settings/hotkeyRecorder.test.ts`, `ui/src/views/settings/SettingsView.test.tsx` (WIN-8.11) |
 | `IPadWindowingTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `KeyBindingStateTests.swift` | all | `ui/src/state/keyBindingStore.test.ts` | WIN-6.7 | ported | — |
 | `LocalFilePresenterIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |

@@ -23,7 +23,8 @@ import { useKeyBindingStore } from '../../state/keyBindingStore.ts';
 import { SIDEBAR_KEY, useSidebarVisibilityStore } from '../../state/sidebarVisibilityStore.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { runWindowAction } from '../../services/windowChrome.ts';
-import { DetailView, ScreenPlaceholder } from '../detail/DetailView.tsx';
+import { DetailView } from '../detail/DetailView.tsx';
+import { SettingsView } from '../settings/SettingsView.tsx';
 import { SidebarView } from '../sidebar/SidebarView.tsx';
 import { createPaneActions } from '../panegrid/paneCommands.ts';
 import {
@@ -37,7 +38,7 @@ import { MenuBar } from './MenuBar.tsx';
 import { CommandPaletteHost } from '../palette/CommandPalettePanel.tsx';
 import { showNewAgentPalette } from '../palette/openPalette.ts';
 import { ShellBanners } from './ShellBanners.tsx';
-import { AboutUpdateStatus, UpdateDialog } from './UpdateDialog.tsx';
+import { UpdateDialog } from './UpdateDialog.tsx';
 import { canCheckForUpdates } from '../../services/updater.ts';
 import { checkForUpdates, useUpdaterStore } from '../../state/updaterStore.ts';
 import {
@@ -142,15 +143,25 @@ export function SidebarResizer({ store = useSidebarWidthStore }) {
   );
 }
 
-/**
- * Settings as an overlay (Swift `appState.showSettings`); the screen itself is WIN-8.11. Until
- * then the About pane's update row (SettingsAboutView's Check for Updates…) sits under it.
- */
-function SettingsOverlay({ onClose }: { onClose: () => void }) {
+/** Settings as an overlay (Swift `appState.showSettings`); the screen is views/settings (WIN-8.11). */
+function SettingsOverlay({ app, onClose }: { app: AppState; onClose: () => void }) {
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     panel.current?.focus();
   }, []);
+  // Esc closes Settings wherever focus is (a saving field can drop it to the body). The hotkey
+  // recorder takes its keys in the capture phase first, so Esc there only cancels the recording.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [onClose]);
   return (
     <div
       className="settings-backdrop"
@@ -165,15 +176,8 @@ function SettingsOverlay({ onClose }: { onClose: () => void }) {
         aria-label="Settings"
         tabIndex={-1}
         ref={panel}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.stopPropagation();
-            onClose();
-          }
-        }}
       >
-        <ScreenPlaceholder icon="gear" title="Settings" view="SettingsView" />
-        <AboutUpdateStatus />
+        <SettingsView app={app} />
       </div>
     </div>
   );
@@ -394,6 +398,7 @@ export function ContentView() {
         <CommandPaletteHost />
         {showSettings && (
           <SettingsOverlay
+            app={app}
             onClose={() => {
               app.setShowSettings(false);
             }}

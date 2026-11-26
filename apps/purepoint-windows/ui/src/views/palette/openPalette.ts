@@ -8,8 +8,8 @@
 // items in the user's order and shows the palette; the choice spawns through the project.
 //
 // Differences from Swift:
-// - The agents added in Settings › Agents (`AgentVariant.addedAgents`) arrive with the settings
-//   screen (WIN-8.11); until then the built-ins are Claude, Codex, OpenCode and Terminal.
+// - The agents added in Settings › Agents (Swift `AgentVariant.addedAgents`) are the window's
+//   `agentConfigStateFor(app).addedAgents` (WIN-8.11), passed to `allVariants`.
 // - The hub keeps `AgentDefinition` / `SwarmDefinition`; the palette items take the daemon's
 //   `AgentDefInfo` / `SwarmDefInfo`, which these are converted back to.
 import {
@@ -26,9 +26,9 @@ import type { AgentDefInfo, SwarmDefInfo } from '../../protocol';
 import { entriesFromListing, fileIndex, remoteListingLimit } from '../../services/fileIndex.ts';
 import { type AgentsHubState, agentsHubStateFor } from '../../state/agentsHubState.ts';
 import type { AppState } from '../../state/appState.ts';
-import { CommandPalettePreferences } from '../../state/commandPalettePreferences.ts';
+import { agentConfigStateFor } from '../../state/agentConfigState.ts';
+import { type SettingsFields, settingsStore } from '../../state/settingsState.ts';
 import type { ProjectState } from '../../state/projectState.ts';
-import { browserStorage } from '../../state/storage.ts';
 import { requestPaletteOpen, showPalette } from './paletteStore.ts';
 
 /**
@@ -43,21 +43,12 @@ export interface CommandPaletteRequest {
 
 // MARK: Preferences
 
-let preferences: CommandPalettePreferences | null = null;
-
-/** Swift `settingsState`'s palette preferences, in `localStorage` (memory when unavailable). */
-export function palettePreferences(): CommandPalettePreferences {
-  if (preferences === null) {
-    const memory = new Map<string, string>();
-    const storage = browserStorage() ?? {
-      getItem: (key: string) => memory.get(key) ?? null,
-      setItem: (key: string, value: string) => {
-        memory.set(key, value);
-      },
-    };
-    preferences = new CommandPalettePreferences(storage);
-  }
-  return preferences;
+/** Swift `settingsState`'s palette preferences: the Settings store (state/settingsState.ts). */
+export function palettePreferences(): Pick<
+  SettingsFields,
+  'usePointGuardNames' | 'commandPaletteOrder'
+> {
+  return settingsStore.getState();
 }
 
 // MARK: Items
@@ -91,6 +82,9 @@ export function swarmDefInfo(swarm: SwarmDefinition): SwarmDefInfo {
   };
 }
 
+/** Swift `AgentVariant.addedAgents`: the agents added in Settings › Agents. */
+const added = (app: AppState) => agentConfigStateFor(app).addedAgents;
+
 async function loadHub(hub: AgentsHubState, projectRoots: readonly string[]): Promise<void> {
   try {
     await hub.loadAll(projectRoots);
@@ -101,12 +95,13 @@ async function loadHub(hub: AgentsHubState, projectRoots: readonly string[]): Pr
 }
 
 function projectItems(
+  app: AppState,
   hub: AgentsHubState,
   includeWorktree: boolean,
   includeSwarms: boolean,
 ): CommandPaletteItem[] {
   return buildItems({
-    builtInVariants: includeWorktree ? variantsWithWorktree() : allVariants(),
+    builtInVariants: includeWorktree ? variantsWithWorktree(added(app)) : allVariants(added(app)),
     agents: hub.agents.map(agentDefInfo),
     swarms: includeSwarms ? hub.swarms.map(swarmDefInfo) : [],
     preferredOrder: palettePreferences().commandPaletteOrder,
@@ -149,7 +144,7 @@ function showForProject(
   void requestPaletteOpen(async () => {
     await loadHub(hub, app.libraryProjectRoots);
     showPalette({
-      items: projectItems(hub, includeWorktree, includeSwarms),
+      items: projectItems(app, hub, includeWorktree, includeSwarms),
       usePointGuardNames: palettePreferences().usePointGuardNames,
       onSelect: (result) => {
         project.handlePaletteResult(result, selection, async (root, name) => {
@@ -250,7 +245,7 @@ export function openEmptyTabPalette(app: AppState, workspaceId: string, surfaceI
     ]);
     showPalette({
       items: buildItems({
-        builtInVariants: allVariants(),
+        builtInVariants: allVariants(added(app)),
         agents: hub.agents.map(agentDefInfo),
         swarms: [],
         includeFiles: true,

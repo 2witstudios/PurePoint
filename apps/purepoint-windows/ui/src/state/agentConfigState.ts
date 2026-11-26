@@ -459,3 +459,15 @@ export class AgentConfigState {
     return this.agents.find((agent) => agentTypeOf(agent) === name) ?? null;
   }
 }
+
+const configs = new WeakMap<object, AgentConfigState>();
+
+/** The agent config of one app window (Swift `appState.agentConfigState`), made on first use. */
+export function agentConfigStateFor(owner: object): AgentConfigState {
+  let config = configs.get(owner);
+  if (config === undefined) {
+    config = new AgentConfigState();
+    configs.set(owner, config);
+  }
+  return config;
+}
