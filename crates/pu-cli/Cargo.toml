@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 pu-core = { path = "../pu-core" }
+pu-transport = { path = "../pu-transport" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -18,6 +19,12 @@ shell-words = "1"
 which = "8"
 libc = "0.2"
 qrcode = { version = "0.14", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
 
 [[bin]]
 name = "pu"

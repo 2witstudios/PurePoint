@@ -2,44 +2,16 @@ use std::path::Path;
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-#[cfg(unix)]
-use tokio::net::UnixStream;
-#[cfg(windows)]
-pub(crate) use windows_stream::UnixStream;
 
 use pu_core::protocol::{Request, Response};
 
 use crate::error::CliError;
 
-/// Error for a facility the Windows port does not implement yet. Every caller
-/// names the WIN leaf that replaces it.
-#[cfg(windows)]
-pub(crate) fn unsupported(what: &str) -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        format!("{what} is not supported on Windows yet"),
-    )
-}
-
-/// Stand-in for the daemon connection so the shared request code compiles.
-#[cfg(windows)]
-mod windows_stream {
-    use tokio::io::{DuplexStream, ReadHalf, WriteHalf};
-
-    // WIN-4.1: replace with a named-pipe client connection.
-    #[allow(dead_code)]
-    pub(crate) struct UnixStream(DuplexStream);
-
-    impl UnixStream {
-        pub(crate) async fn connect(_path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
-            // WIN-4.1: connect to the daemon's named pipe.
-            Err(super::unsupported("daemon connection"))
-        }
-
-        pub(crate) fn into_split(self) -> (ReadHalf<DuplexStream>, WriteHalf<DuplexStream>) {
-            tokio::io::split(self.0)
-        }
-    }
+/// Connect to the daemon behind `socket`: its Unix socket, or on Windows the
+/// private named pipe derived from that path (verified before any byte is
+/// sent). Never starts a daemon.
+pub(crate) async fn connect(socket: &Path) -> std::io::Result<pu_transport::Stream> {
+    pu_transport::connect(&pu_transport::Endpoint::for_socket(socket)?).await
 }
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -93,14 +65,12 @@ pub async fn send_request(socket: &Path, request: &Request) -> Result<Response, 
 async fn send_raw_request(socket: &Path, request: &Request) -> Result<Response, CliError> {
     let timeout = timeout_for(request);
     let result = tokio::time::timeout(timeout, async {
-        let stream = UnixStream::connect(socket)
-            .await
-            .map_err(|e| match e.kind() {
-                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound => {
-                    CliError::DaemonNotRunning
-                }
-                _ => CliError::Io(e),
-            })?;
+        let stream = connect(socket).await.map_err(|e| match e.kind() {
+            std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound => {
+                CliError::DaemonNotRunning
+            }
+            _ => CliError::Io(e),
+        })?;
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
 
