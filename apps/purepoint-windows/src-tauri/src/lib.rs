@@ -28,11 +28,24 @@ pub fn protocol_version() -> u32 {
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(git::commands::GitState::default())
         .invoke_handler(tauri::generate_handler![
             files::index::file_index,
             conversations::conversations_list,
             conversations::conversation_snippets,
             conversations::conversation_transcript,
+            git::commands::git_branch_review,
+            git::commands::git_local_review,
+            git::commands::git_review_summary,
+            git::commands::git_commit_diff,
+            git::commands::git_untracked_preview,
+            git::commands::git_review_page,
+            git::commands::git_unstaged_diff,
+            git::commands::git_working_tree_changes,
+            git::commands::git_working_tree_file_diff,
+            git::commands::git_pr_list,
+            git::commands::git_pr_diff,
+            git::commands::git_gh_available,
         ])
         .setup(|app| {
             #[cfg(windows)]

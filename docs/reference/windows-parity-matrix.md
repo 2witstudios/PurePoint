@@ -79,7 +79,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/FileIOService.swift` | 175 | `src-tauri/src/git/file_io.rs`, `ui/src/services/fileIO.ts` | WIN-8.5 | todo | — |
 | `Services/FileIndex.swift` | 52 | `src-tauri/src/files/index.rs`, `ui/src/services/fileIndex.ts` | WIN-6.6 | ported | — |
 | `Services/FileTreeWatcher.swift` | 96 | `src-tauri/src/watchers/file_tree.rs` | WIN-5.6 | todo | — |
-| `Services/GitService.swift` | 891 | `src-tauri/src/git/service.rs` | WIN-8.1 | todo | — |
+| `Services/GitService.swift` | 891 | `src-tauri/src/git/{service,review,pr,patch,runner,model,commands}.rs`, `ui/src/services/git.ts` | WIN-8.1 | ported | — |
 | `Services/HotkeyMonitor+iOS.swift` | 136 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/HotkeyMonitor.swift` | 49 | `ui/src/services/hotkeys.ts` (DOM key handling) | WIN-7.6 | todo | — |
 | `Services/MachineConnection+iOS.swift` | 380 | — | — | excluded | `+iOS` file (iPad build only) |
@@ -95,7 +95,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/PiPairingSecret.swift` | 41 | `src-tauri/src/secrets/pairing.rs` (Credential Manager) | WIN-9.7 | todo | — |
 | `Services/PointGuardApplicationDelegate.swift` | 51 | `src-tauri/src/pointguard/lifecycle.rs` | WIN-9.3 | todo | — |
 | `Services/PointGuardTailnet.swift` | 81 | `src-tauri/src/pointguard/tailnet.rs` | WIN-9.3 | todo | — |
-| `Services/ProjectHost.swift` | 719 | `src-tauri/src/git/project_host.rs` | WIN-8.1 | todo | — |
+| `Services/ProjectHost.swift` | 719 | `src-tauri/src/git/host.rs` (`GitExec` daemon client wired by WIN-5.3; directory watchers live with `watchers/` and `subscriptions/`) | WIN-8.1 | ported | — |
 | `Services/SSH/CitadelSSH.swift` | 257 | — | — | excluded | Whole-file `#if os(iOS)`; Citadel SSH, replaced by system `ssh.exe` (DEC-5, DEC-11) |
 | `Services/SSH/DebugLaunchArguments+iOS.swift` | 214 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/SSH/HostKeyPinStore.swift` | 142 | — | — | excluded | Whole-file `#if os(iOS)`; Citadel SSH, replaced by system `ssh.exe` (DEC-5, DEC-11) |
@@ -305,7 +305,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `FilePaneTests.swift` | all | `ui/src/views/filePane/FilePaneView.test.tsx` | WIN-8.5 | todo | Relevant cases only |
 | `FileTreeOutlineIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `FileTreeStateTests.swift` | all | `ui/src/state/fileTreeState.test.ts` | WIN-8.4 | todo | — |
-| `GitReviewTests.swift` | all | `src-tauri/src/git/service.rs` (#[cfg(test)]) | WIN-8.1 | todo | — |
+| `GitReviewTests.swift` | all | `src-tauri/src/git/tests/git_review.rs` | WIN-8.1 | ported | DiffState-only assertions go with WIN-6.0; WorktreeWatcher checks with WIN-5.6 |
 | `HexEncodingTests.swift` | all | `src-tauri/src/attach/session.rs` (#[cfg(test)]) | WIN-6.0 | todo | — |
 | `HotkeyKeyCommandTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `HotkeyRecorderTests.swift` | all | — | — | ios-only | Windows recorder gets new tests in WIN-8.11 |
@@ -341,7 +341,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `TabCloseConfirmationIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `TerminalOutputFilterTests.swift` | all | `ui/src/views/terminal/outputFilter.test.ts` | WIN-7.3 | todo | Only filters xterm.js still needs |
 | `TranscriptParserTests.swift` | all | `src-tauri/src/conversations/transcript.rs` (#[cfg(test)]) | WIN-8.12 | ported | — |
-| `WorkingTreeDiffTests.swift` | all | `src-tauri/src/git/service.rs` (#[cfg(test)]) | WIN-8.1 | todo | — |
+| `WorkingTreeDiffTests.swift` | all | `src-tauri/src/git/tests/working_tree_diff.rs` | WIN-8.1 | ported | — |
 | `WorkspaceFilesStateTests.swift` | all | `ui/src/state/workspaceFilesState.test.ts` | WIN-8.4 | todo | — |
 | `WorkspaceFixtureTests.swift` | all | `ui/src/model/workspacePersistence.test.ts` | WIN-6.3 | ported | Swift side of the shared `docs/reference/fixtures/workspaces/` golden files; run in Xcode by WIN-11.2 |
 | `WorkspaceModelTests.swift` | all | `ui/src/model/workspaceModel.test.ts` | WIN-6.1 | ported | — |
