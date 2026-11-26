@@ -23,7 +23,7 @@ fn plugin_hash() -> String {
 fn plugin_dir() -> Option<PathBuf> {
     let home = pu_core::paths::home_dir().ok()?;
     Some(
-        PathBuf::from(home)
+        home
             .join(".claude")
             .join("plugins")
             .join("purepoint"),
@@ -33,7 +33,7 @@ fn plugin_dir() -> Option<PathBuf> {
 fn old_skill_dir() -> Option<PathBuf> {
     let home = pu_core::paths::home_dir().ok()?;
     Some(
-        PathBuf::from(home)
+        home
             .join(".claude")
             .join("skills")
             .join("pu"),

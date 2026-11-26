@@ -7,6 +7,9 @@ ignore = [
   # unsafe-libyaml (via serde_yaml_ng) is archived; no fix exists. Unmaintained,
   # not a known vulnerability — drop once pu-core moves to a safe-Rust YAML parser.
   { id = "RUSTSEC-2024-0449", reason = "unmaintained, no safe upgrade; YAML parser migration pending" },
+  # chrono is flagged unmaintained; no maintained drop-in exists yet. Not a
+  # known vulnerability; revisit when the advisory names a successor.
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained, no safe upgrade available" },
 ]
 
 [licenses]
