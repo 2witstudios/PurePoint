@@ -35,6 +35,8 @@ The tarball has no links, nothing group/other-writable, root-owned entries and a
 
 The next step it prints is `pu phone install --now`. `pu phone` runs only the payload whose `puVersion` equals its own.
 
+! [DIST-009] Windows ships separately from the macOS and Linux decisions above, which are Unix-only: the app bundle and `lipo` (DIST-001), `install.sh` and the musl tarballs (DIST-004), Sparkle (DIST-006) and `SecStaticCodeCheckValidity` (DIST-007). On Windows, a Tauri NSIS per-user installer (no admin) bundles `pu.exe` and `pu-engine.exe` (x86_64 and aarch64) as sidecars, together with the Point Guard runtime and the WebView2 bootstrapper. On first launch the app copies the CLI into `%USERPROFILE%\.pu\bin`. It renames a running `pu-engine.exe` aside rather than overwriting it, because Windows locks running images. `scripts/install.ps1` mirrors `install.sh`: it verifies the minisign signature (the same release key), runs `Unblock-File` and installs by rename into `%USERPROFILE%\.pu\bin`. Updates come from `tauri-plugin-updater` and a signed `latest.json` in place of Sparkle. Autostart is an HKCU `Run` value, not launchd or systemd. Rationale: these keep the same `~/.pu/bin` layout and the same signature trust as Unix, with no elevation. Details: [windows-app.md](../product/windows-app.md) (WINAPP-010–012, REQ-WINAPP-036–038, 076, 077).
+
 ### Repository settings the owner maintains
 
 These are GitHub settings, not files, so the workflow can't enforce them. They're needed for DIST-005 to hold:
@@ -53,7 +55,7 @@ These are GitHub settings, not files, so the workflow can't enforce them. They'r
 
 ## Design Directions
 
-- macOS as primary platform
+- macOS as primary platform; Linux servers (CLI and daemon); Windows 11 22H2+ (app, CLI and daemon, DIST-009)
 - No external runtime dependencies in final product
 - Support for multiple CPU architectures
 - Signed and verified for distribution
