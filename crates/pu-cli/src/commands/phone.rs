@@ -1,6 +1,10 @@
+#[cfg(unix)]
 use pu_core::canon::CanonicalPath;
 use std::io::{BufRead, IsTerminal, Read, Write};
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -8,11 +12,13 @@ use clap::Subcommand;
 use serde_json::{Value, json};
 
 use crate::error::CliError;
-use crate::phone::{self, Admin, UnitPaths};
+#[cfg(unix)]
+use crate::phone::UnitPaths;
+use crate::phone::{self, Admin};
 
 #[derive(Subcommand)]
 pub enum PhoneAction {
-    /// Run Point Guard as a systemd user service so phones can pair with this host
+    /// Run Point Guard as a systemd user service (Windows: a logon Run entry) so phones can pair with this host
     Install {
         /// Also start it now
         #[arg(long)]
@@ -43,7 +49,7 @@ pub enum PhoneAction {
         #[arg(long)]
         json: bool,
     },
-    /// Run Point Guard in the foreground (for hosts without systemd)
+    /// Run Point Guard in the foreground (for hosts without systemd or autostart)
     Run {
         /// Tailnet TCP port phones connect to
         #[arg(long, default_value_t = phone::DEFAULT_PORT)]
@@ -107,14 +113,8 @@ pub enum PhoneAction {
     },
 }
 
-/// Shown for every `pu phone` subcommand on Windows until WIN-9.2.
-pub const WINDOWS_UNAVAILABLE: &str = "pu phone is not available on Windows yet";
-
 pub async fn run(action: PhoneAction) -> Result<(), CliError> {
-    if cfg!(windows) {
-        return Err(CliError::Other(WINDOWS_UNAVAILABLE.into()));
-    }
-    if !cfg!(target_os = "linux") {
+    if !cfg!(target_os = "linux") && !cfg!(windows) {
         return Err(CliError::Other(
             "`pu phone` runs Point Guard on headless Linux hosts. On a Mac, use the PurePoint app: Point Guard → Connect phone."
                 .into(),
@@ -128,13 +128,13 @@ pub async fn run(action: PhoneAction) -> Result<(), CliError> {
         PhoneAction::Restart { force } => restart(force),
         PhoneAction::Status { json } => status(json),
         PhoneAction::Run { port } => run_foreground(port),
-        PhoneAction::Pair { ttl, text } => pair(ttl, text).await,
-        PhoneAction::Devices { json } => devices(json),
+        PhoneAction::Pair { ttl, text } => pair(&admin()?, ttl, text).await,
+        PhoneAction::Devices { json } => devices(&admin()?, json),
         PhoneAction::Grant {
             device,
             terminals,
             workspace,
-        } => grant(&device, terminals, workspace),
+        } => grant(&admin()?, &device, terminals, workspace),
         PhoneAction::Rename { device, name } => {
             let admin = admin()?;
             let id = device_id(&admin, &device)?;
@@ -142,26 +142,17 @@ pub async fn run(action: PhoneAction) -> Result<(), CliError> {
             println!("renamed to {name:?}");
             Ok(())
         }
-        PhoneAction::Revoke { device } => {
-            let admin = admin()?;
-            let id = device_id(&admin, &device)?;
-            admin.call(json!({"operation": "devices.revoke", "deviceId": id}))?;
-            println!("revoked; its live connections are closed and it must pair again");
-            Ok(())
-        }
+        PhoneAction::Revoke { device } => revoke(&admin()?, &device),
         PhoneAction::Login {
             provider,
             api_key_stdin,
-        } => login(provider, api_key_stdin).await,
-        PhoneAction::Model { model: None } => list_models(),
+        } => login(&admin()?, provider, api_key_stdin).await,
+        PhoneAction::Model { model: None } => list_models(&admin()?),
         PhoneAction::Model { model: Some(model) } => {
             let (provider, id) = model
                 .split_once('/')
                 .ok_or_else(|| CliError::Other("use <provider>/<model>".into()))?;
-            admin()?
-                .call(json!({"operation": "model.select", "provider": provider, "model": id}))?;
-            println!("Point Guard now uses {model}");
-            Ok(())
+            select_model(&admin()?, provider, id)
         }
         PhoneAction::Cwd { path } => {
             let path = pu_core::canon::canonicalize(&path)?;
@@ -175,8 +166,21 @@ pub async fn run(action: PhoneAction) -> Result<(), CliError> {
     }
 }
 
-fn list_models() -> Result<(), CliError> {
-    let listed = admin()?.call(json!({"operation": "providers"}))?;
+fn revoke(admin: &Admin, device: &str) -> Result<(), CliError> {
+    let id = device_id(admin, device)?;
+    admin.call(json!({"operation": "devices.revoke", "deviceId": id}))?;
+    println!("revoked; its live connections are closed and it must pair again");
+    Ok(())
+}
+
+fn select_model(admin: &Admin, provider: &str, id: &str) -> Result<(), CliError> {
+    admin.call(json!({"operation": "model.select", "provider": provider, "model": id}))?;
+    println!("Point Guard now uses {provider}/{id}");
+    Ok(())
+}
+
+fn list_models(admin: &Admin) -> Result<(), CliError> {
+    let listed = admin.call(json!({"operation": "providers"}))?;
     let mut any = false;
     for p in listed["providers"].as_array().into_iter().flatten() {
         if p["configured"].as_bool() != Some(true) {
@@ -201,6 +205,7 @@ fn admin() -> Result<Admin, CliError> {
     Admin::connect(&phone::state_dir()?)
 }
 
+#[cfg(unix)]
 fn home() -> Result<PathBuf, CliError> {
     pu_core::paths::home_dir()
         .ok()
@@ -208,6 +213,7 @@ fn home() -> Result<PathBuf, CliError> {
         .ok_or_else(|| CliError::Other("HOME is not set to an absolute path".into()))
 }
 
+#[cfg(unix)]
 fn systemctl(args: &[&str]) -> Result<(), CliError> {
     let output = Command::new("systemctl")
         .arg("--user")
@@ -225,6 +231,7 @@ fn systemctl(args: &[&str]) -> Result<(), CliError> {
     )))
 }
 
+#[cfg(unix)]
 fn unit_state() -> String {
     Command::new("systemctl")
         .args(["--user", "is-active", phone::UNIT])
@@ -237,7 +244,7 @@ fn unit_state() -> String {
 }
 
 /// The payload this `pu` was released with, verified, and the `pu` beside it.
-#[cfg_attr(windows, allow(clippy::never_loop))]
+#[cfg(unix)]
 fn current_payload() -> Result<(PathBuf, PathBuf), CliError> {
     let payload = phone::payload_dir(phone::PU_VERSION)?;
     phone::read_manifest(&payload)?;
@@ -249,21 +256,9 @@ fn current_payload() -> Result<(PathBuf, PathBuf), CliError> {
                 path.display()
             ))
         })?;
-        // WIN-9.2: check the payload file's owner SID and DACL instead.
-        #[cfg(windows)]
-        {
-            let _ = meta;
-            return Err(CliError::Other(format!(
-                "cannot verify {} on Windows yet; refusing to run it",
-                path.display()
-            )));
-        }
-        #[cfg(unix)]
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         // SAFETY: geteuid has no preconditions.
-        #[cfg(unix)]
         let uid = unsafe { libc::geteuid() };
-        #[cfg(unix)]
         if meta.file_type().is_symlink()
             || (meta.uid() != uid && meta.uid() != 0)
             || meta.permissions().mode() & 0o022 != 0
@@ -280,6 +275,7 @@ fn current_payload() -> Result<(PathBuf, PathBuf), CliError> {
     Ok((payload, pu))
 }
 
+#[cfg(unix)]
 fn render_unit(port: u16) -> Result<(String, PathBuf), CliError> {
     let (payload, pu) = current_payload()?;
     let home = home()?;
@@ -294,6 +290,7 @@ fn render_unit(port: u16) -> Result<(String, PathBuf), CliError> {
     Ok((unit, payload))
 }
 
+#[cfg(unix)]
 fn installed_port() -> u16 {
     phone::unit_file()
         .ok()
@@ -306,6 +303,7 @@ fn installed_port() -> u16 {
         .unwrap_or(phone::DEFAULT_PORT)
 }
 
+#[cfg(unix)]
 fn write_unit(unit: &str) -> Result<PathBuf, CliError> {
     let file = phone::unit_file()?;
     phone::write_unit_file(&file, unit)?;
@@ -313,6 +311,7 @@ fn write_unit(unit: &str) -> Result<PathBuf, CliError> {
     Ok(file)
 }
 
+#[cfg(unix)]
 fn install(now: bool, port: u16) -> Result<(), CliError> {
     let (unit, payload) = render_unit(port)?;
     let file = write_unit(&unit)?;
@@ -339,13 +338,10 @@ fn install(now: bool, port: u16) -> Result<(), CliError> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn linger_enabled() -> bool {
     // SAFETY: getuid has no preconditions.
-    #[cfg(unix)]
     let uid = unsafe { libc::getuid() };
-    // WIN-9.2: loginctl linger has no Windows counterpart.
-    #[cfg(windows)]
-    let uid: u32 = 0;
     Command::new("loginctl")
         .args([
             "show-user",
@@ -358,6 +354,7 @@ fn linger_enabled() -> bool {
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "yes")
 }
 
+#[cfg(unix)]
 fn uninstall() -> Result<(), CliError> {
     let file = phone::unit_file()?;
     if !file.exists() {
@@ -377,6 +374,7 @@ fn uninstall() -> Result<(), CliError> {
 
 /// Ask the bridge to drain and exit while idle; it refuses during work.
 /// Fails closed when the unit runs but its admin channel can't be reached.
+#[cfg(unix)]
 fn stop_idle() -> Result<bool, CliError> {
     let admin = match admin() {
         Ok(admin) => admin,
@@ -401,6 +399,7 @@ fn stop_idle() -> Result<bool, CliError> {
     ))
 }
 
+#[cfg(unix)]
 fn start() -> Result<(), CliError> {
     let (unit, payload) = render_unit(installed_port())?;
     let installed = std::fs::read_to_string(phone::unit_file()?).ok();
@@ -410,6 +409,7 @@ fn start() -> Result<(), CliError> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn stop(force: bool) -> Result<(), CliError> {
     if !force {
         stop_idle()?;
@@ -419,6 +419,7 @@ fn stop(force: bool) -> Result<(), CliError> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn restart(force: bool) -> Result<(), CliError> {
     let port = installed_port();
     let (unit, payload) = render_unit(port)?;
@@ -439,6 +440,7 @@ fn restart(force: bool) -> Result<(), CliError> {
 /// Remove payload versions nothing runs any more: only plain `X.Y.Z`
 /// directories older than `keep`, never the unit's payload, never newer
 /// versions or `install.sh` staging directories.
+#[cfg(unix)]
 fn prune_payloads(keep: &Path) {
     let Ok(root) = phone::payload_root() else {
         return;
@@ -462,6 +464,7 @@ fn prune_payloads(keep: &Path) {
     }
 }
 
+#[cfg(unix)]
 fn status(as_json: bool) -> Result<(), CliError> {
     let service = unit_state();
     let state = admin().and_then(|a| a.call(json!({"operation": "status"})));
@@ -481,21 +484,31 @@ fn status(as_json: bool) -> Result<(), CliError> {
             return Ok(());
         }
     };
-    println!(
-        "host:      {} ({})",
-        s["hostLabel"].as_str().unwrap_or("?"),
-        s["hostKind"].as_str().unwrap_or("?")
-    );
-    println!("phase:     {}", s["phase"].as_str().unwrap_or("?"));
+    for line in bridge_status_lines(&s) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// The bridge's own status (`status` admin operation) as `pu phone status` lines.
+pub(crate) fn bridge_status_lines(s: &Value) -> Vec<String> {
+    let mut lines = vec![
+        format!(
+            "host:      {} ({})",
+            s["hostLabel"].as_str().unwrap_or("?"),
+            s["hostKind"].as_str().unwrap_or("?")
+        ),
+        format!("phase:     {}", s["phase"].as_str().unwrap_or("?")),
+    ];
     match s["chatURL"].as_str() {
-        Some(url) => println!("phones:    ready at {url}"),
+        Some(url) => lines.push(format!("phones:    ready at {url}")),
         None => {
-            println!("phones:    not reachable");
+            lines.push("phones:    not reachable".into());
             if let Some(m) = s["remote"]["message"].as_str() {
-                println!("           {m}");
+                lines.push(format!("           {m}"));
             }
             if let Some(r) = s["remote"]["recovery"].as_str() {
-                println!("           {r}");
+                lines.push(format!("           {r}"));
             }
         }
     }
@@ -503,14 +516,65 @@ fn status(as_json: bool) -> Result<(), CliError> {
         (Some(p), Some(m)) => format!("{p}/{m}"),
         _ => "none (sign in with `pu phone login`)".into(),
     };
-    println!("model:     {model}");
-    println!("folder:    {}", s["cwd"].as_str().unwrap_or("?"));
+    lines.push(format!("model:     {model}"));
+    lines.push(format!("folder:    {}", s["cwd"].as_str().unwrap_or("?")));
     if let Some(recovery) = s["recovery"].as_str() {
-        println!("recovery:  {recovery}");
+        lines.push(format!("recovery:  {recovery}"));
+    }
+    lines
+}
+
+/// Windows: the same subcommands over a logon Run entry (`phone_windows`).
+#[cfg(windows)]
+fn print_lines(lines: Vec<String>) -> Result<(), CliError> {
+    for line in lines {
+        println!("{line}");
     }
     Ok(())
 }
 
+#[cfg(windows)]
+fn install(now: bool, port: u16) -> Result<(), CliError> {
+    print_lines(crate::phone_windows::Host::real()?.install(now, port)?)
+}
+
+#[cfg(windows)]
+fn uninstall() -> Result<(), CliError> {
+    print_lines(crate::phone_windows::Host::real()?.uninstall()?)
+}
+
+#[cfg(windows)]
+fn start() -> Result<(), CliError> {
+    print_lines(crate::phone_windows::Host::real()?.start()?)
+}
+
+#[cfg(windows)]
+fn stop(force: bool) -> Result<(), CliError> {
+    print_lines(crate::phone_windows::Host::real()?.stop(force)?)
+}
+
+#[cfg(windows)]
+fn restart(force: bool) -> Result<(), CliError> {
+    print_lines(crate::phone_windows::Host::real()?.restart(force)?)
+}
+
+#[cfg(windows)]
+fn status(as_json: bool) -> Result<(), CliError> {
+    let host = crate::phone_windows::Host::real()?;
+    let value = host.status_value();
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+    print_lines(host.status_lines(&value))
+}
+
+#[cfg(windows)]
+fn run_foreground(port: u16) -> Result<(), CliError> {
+    crate::phone_windows::Host::real()?.run_foreground(port)
+}
+
+#[cfg(unix)]
 fn run_foreground(port: u16) -> Result<(), CliError> {
     let (payload, pu) = current_payload()?;
     let home = home()?;
@@ -539,8 +603,6 @@ fn run_foreground(port: u16) -> Result<(), CliError> {
         }
     }
     // SAFETY: umask has no preconditions; the bridge also sets modes explicitly.
-    // WIN-9.2: Windows has no umask; the bridge must set owner-only ACLs itself.
-    #[cfg(unix)]
     unsafe {
         libc::umask(0o077);
     }
@@ -578,8 +640,8 @@ fn describe(device: &Value) -> String {
     )
 }
 
-fn devices(as_json: bool) -> Result<(), CliError> {
-    let devices = devices_list(&admin()?)?;
+fn devices(admin: &Admin, as_json: bool) -> Result<(), CliError> {
+    let devices = devices_list(admin)?;
     if as_json {
         let list: Vec<Value> = devices
             .iter()
@@ -619,6 +681,7 @@ fn devices(as_json: bool) -> Result<(), CliError> {
 }
 
 fn grant(
+    admin: &Admin,
     device: &str,
     terminals: Option<String>,
     workspace: Option<String>,
@@ -628,8 +691,7 @@ fn grant(
             "pass --terminals off|view|control and/or --workspace on|off".into(),
         ));
     }
-    let admin = admin()?;
-    let id = device_id(&admin, device)?;
+    let id = device_id(admin, device)?;
     // Downgrades first, so a combined change never briefly widens access.
     let mut ops = Vec::new();
     if let Some(w) = &workspace {
@@ -650,7 +712,7 @@ fn grant(
     for (_, op) in ops {
         admin.call(op)?;
     }
-    let devices = devices_list(&admin)?;
+    let devices = devices_list(admin)?;
     if let Some(d) = devices
         .iter()
         .find(|d| d["deviceId"].as_str() == Some(id.as_str()))
@@ -660,11 +722,43 @@ fn grant(
     Ok(())
 }
 
-async fn pair(ttl: u32, text: bool) -> Result<(), CliError> {
+/// What `pu phone pair` shows for `payload`: the QR, or the paste code when
+/// asked for text, when stdout is not a terminal, or when the QR is too wide.
+fn pairing_output(
+    payload: &str,
+    ttl: u32,
+    text: bool,
+    terminal: bool,
+    columns: Option<usize>,
+) -> Result<String, CliError> {
+    let (qr, size) = phone::render_qr(payload)?;
+    let mut out = String::new();
+    if text || !terminal || columns.is_some_and(|c| c < size) {
+        if !text && columns.is_some_and(|c| c < size) {
+            out.push_str(&format!(
+                "Terminal is narrower than the QR ({size} columns); showing the paste code instead.\n"
+            ));
+        }
+        out.push_str(
+            "In the PurePoint app: Connections → Pair a computer → Paste code, then paste:\n\n",
+        );
+        out.push_str(&format!("purepoint-pair:{payload}\n\n"));
+    } else {
+        out.push_str(&qr);
+        out.push_str(
+            "Scan with the PurePoint app: Connections → Pair a computer → Scan pairing code.\n",
+        );
+    }
+    out.push_str(&format!(
+        "One phone can use this code within {ttl}s. Press Ctrl-C to cancel; the code is revoked when this command ends.\n"
+    ));
+    Ok(out)
+}
+
+async fn pair(admin: &Admin, ttl: u32, text: bool) -> Result<(), CliError> {
     if !(1..=300).contains(&ttl) {
         return Err(CliError::Other("--ttl must be 1-300 seconds".into()));
     }
-    let admin = admin()?;
     // Handlers exist before the enrollment does, so no signal can end this
     // process between creation and the revoke guard.
     let signals = Signals::new()?;
@@ -677,35 +771,28 @@ async fn pair(ttl: u32, text: bool) -> Result<(), CliError> {
     let expires = created["expiresAt"].as_i64().unwrap_or_default();
     // Revoke whatever happens next unless the enrollment was consumed.
     let guard = RevokeGuard {
-        admin: &admin,
+        admin,
         enrollment: &enrollment,
         expires,
         armed: true,
     };
-    let columns = terminal_columns();
-    let (qr, size) = phone::render_qr(&payload)?;
-    if text || !std::io::stdout().is_terminal() || columns.is_some_and(|c| c < size) {
-        if !text && columns.is_some_and(|c| c < size) {
-            println!(
-                "Terminal is narrower than the QR ({size} columns); showing the paste code instead."
-            );
-        }
-        println!("In the PurePoint app: Connections → Pair a computer → Paste code, then paste:\n");
-        println!("purepoint-pair:{payload}\n");
-    } else {
-        print!("{qr}");
-        println!("Scan with the PurePoint app: Connections → Pair a computer → Scan pairing code.");
-    }
-    println!(
-        "One phone can use this code within {ttl}s. Press Ctrl-C to cancel; the code is revoked when this command ends."
+    print!(
+        "{}",
+        pairing_output(
+            &payload,
+            ttl,
+            text,
+            std::io::stdout().is_terminal(),
+            terminal_columns()
+        )?
     );
     let _ = std::io::stdout().flush();
     let mut guard = guard;
     let mut signals = signals;
-    match wait_for_enrollment(&admin, &enrollment, &mut signals).await? {
+    match wait_for_enrollment(admin, &enrollment, &mut signals).await? {
         Enrolled::Device(id) => {
             guard.armed = false;
-            let devices = devices_list(&admin)?;
+            let devices = devices_list(admin)?;
             match devices
                 .iter()
                 .find(|d| d["deviceId"].as_str() == Some(id.as_str()))
@@ -725,19 +812,31 @@ async fn pair(ttl: u32, text: bool) -> Result<(), CliError> {
     }
 }
 
-/// Stand-in so the pairing wait compiles.
-// WIN-9.2: end the wait on Ctrl-C / console close.
+/// Ctrl-C, Ctrl-Break and closing the console window all end the wait.
 #[cfg(windows)]
-struct Signals;
+struct Signals {
+    c: tokio::signal::windows::CtrlC,
+    brk: tokio::signal::windows::CtrlBreak,
+    close: tokio::signal::windows::CtrlClose,
+}
 
 #[cfg(windows)]
 impl Signals {
     fn new() -> Result<Self, CliError> {
-        Ok(Signals)
+        use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close};
+        Ok(Signals {
+            c: ctrl_c()?,
+            brk: ctrl_break()?,
+            close: ctrl_close()?,
+        })
     }
 
     async fn any(&mut self) -> &'static str {
-        std::future::pending().await
+        tokio::select! {
+            _ = self.c.recv() => "canceled",
+            _ = self.brk.recv() => "canceled",
+            _ = self.close.recv() => "session ended",
+        }
     }
 }
 
@@ -833,8 +932,17 @@ impl Drop for RevokeGuard<'_> {
 
 #[cfg(windows)]
 fn terminal_columns() -> Option<usize> {
-    // WIN-9.2: GetConsoleScreenBufferInfo for the console width.
-    None
+    use windows_sys::Win32::System::Console::{
+        CONSOLE_SCREEN_BUFFER_INFO, GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE,
+    };
+    // SAFETY: the info struct is zeroed and filled by the call; a non-console
+    // handle just fails.
+    unsafe {
+        let mut info: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
+        let ok = GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &mut info) != 0;
+        let width = i32::from(info.srWindow.Right) - i32::from(info.srWindow.Left) + 1;
+        (ok && width > 0).then_some(width as usize)
+    }
 }
 
 #[cfg(unix)]
@@ -847,11 +955,31 @@ fn terminal_columns() -> Option<usize> {
     }
 }
 
-/// Read one line without echo when stdin is a terminal.
+/// Read one line without echo when stdin is a console.
 #[cfg(windows)]
 fn read_secret(prompt: &str) -> Result<String, CliError> {
-    // WIN-9.2: turn console echo off (SetConsoleMode) while reading.
-    read_line(prompt)
+    use windows_sys::Win32::System::Console::{
+        ENABLE_ECHO_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE, SetConsoleMode,
+    };
+    eprint!("{prompt}");
+    let _ = std::io::stderr().flush();
+    // SAFETY: console mode calls on the stdin handle; a pipe just fails.
+    let saved = unsafe {
+        let input = GetStdHandle(STD_INPUT_HANDLE);
+        let mut mode = 0u32;
+        (GetConsoleMode(input, &mut mode) != 0
+            && SetConsoleMode(input, mode & !ENABLE_ECHO_INPUT) != 0)
+            .then_some((input, mode))
+    };
+    let mut line = String::new();
+    let result = std::io::stdin().lock().read_line(&mut line);
+    if let Some((input, mode)) = saved {
+        // SAFETY: restores the mode read above.
+        unsafe { SetConsoleMode(input, mode) };
+        eprintln!();
+    }
+    result?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
 }
 
 /// Read one line without echo when stdin is a terminal.
@@ -894,8 +1022,11 @@ fn read_line(prompt: &str) -> Result<String, CliError> {
     Ok(line.trim().to_string())
 }
 
-async fn login(provider: Option<String>, api_key_stdin: bool) -> Result<(), CliError> {
-    let admin = admin()?;
+async fn login(
+    admin: &Admin,
+    provider: Option<String>,
+    api_key_stdin: bool,
+) -> Result<(), CliError> {
     let listed = admin.call(json!({"operation": "providers"}))?;
     let providers = listed["providers"].as_array().cloned().unwrap_or_default();
     let Some(provider) = provider else {
@@ -954,7 +1085,7 @@ async fn login(provider: Option<String>, api_key_stdin: bool) -> Result<(), CliE
         .to_string();
     // Cancel the attempt on any exit except success.
     let mut guard = CancelLogin {
-        admin: &admin,
+        admin,
         attempt: &attempt,
         armed: true,
     };
@@ -1054,5 +1185,167 @@ impl Drop for CancelLogin<'_> {
                 .admin
                 .call(json!({"operation": "auth.cancel", "attemptId": self.attempt}));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    pub(super) const PAYLOAD: &str =
+        r#"{"type":"pi-mobile-pairing","version":1,"endpoint":"wss://100.64.1.2:8787/v1"}"#;
+
+    #[test]
+    fn given_pairing_payload_should_print_qr_or_paste_code() {
+        let qr = pairing_output(PAYLOAD, 120, false, true, Some(200)).unwrap();
+        assert!(qr.contains("\x1b[30;107m") && qr.contains("Scan with the PurePoint app"));
+        assert!(!qr.contains("purepoint-pair:"));
+        let text = pairing_output(PAYLOAD, 120, true, true, Some(200)).unwrap();
+        assert!(
+            text.contains(&format!("purepoint-pair:{PAYLOAD}\n")),
+            "{text}"
+        );
+        let piped = pairing_output(PAYLOAD, 120, false, false, None).unwrap();
+        assert!(piped.contains("purepoint-pair:"));
+        let narrow = pairing_output(PAYLOAD, 120, false, true, Some(20)).unwrap();
+        assert!(narrow.contains("narrower than the QR") && narrow.contains("purepoint-pair:"));
+        assert!(narrow.contains("within 120s"));
+    }
+}
+
+/// The admin subcommands on Windows, against a fake bridge on the owner pipe.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::tests::PAYLOAD;
+    use super::*;
+    use crate::phone_windows::fakes::{bridge, operations};
+
+    fn device() -> Value {
+        json!({"deviceId": "aaaa1111-0000-4000-8000-000000000000", "name": "iPhone", "terminals": "control", "workspaceManagement": true})
+    }
+
+    fn connect(state: &std::path::Path) -> Admin {
+        Admin::connect(state).unwrap()
+    }
+
+    #[tokio::test]
+    async fn given_a_phone_scanning_the_code_should_pair_and_show_its_grants() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        let fake = bridge(&state, |r| match r["operation"].as_str() {
+            Some("pairing.create") => {
+                Ok(json!({"enrollmentId": "e1", "payload": PAYLOAD, "expiresAt": 1}))
+            }
+            Some("pairing.status") => {
+                Ok(json!({"status": "consumed", "deviceId": device()["deviceId"]}))
+            }
+            Some("devices.list") => Ok(json!({"devices": [device()]})),
+            _ => Err("unexpected".into()),
+        });
+        pair(&connect(&state), 30, true).await.unwrap();
+        assert_eq!(
+            operations(&fake),
+            ["pairing.create", "pairing.status", "devices.list"]
+        );
+        assert_eq!(fake.requests.lock().unwrap()[0]["ttlSeconds"], 30);
+    }
+
+    #[tokio::test]
+    async fn given_an_expired_code_should_fail_and_revoke_it() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        let fake = bridge(&state, |r| match r["operation"].as_str() {
+            Some("pairing.create") => {
+                Ok(json!({"enrollmentId": "e1", "payload": PAYLOAD, "expiresAt": 1}))
+            }
+            Some("pairing.status") => Ok(json!({"status": "expired"})),
+            Some("pairing.revoke") => Ok(json!({})),
+            _ => Err("unexpected".into()),
+        });
+        let err = pair(&connect(&state), 30, true)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("expired") && err.contains("pu phone pair"),
+            "{err}"
+        );
+        assert_eq!(
+            operations(&fake),
+            ["pairing.create", "pairing.status", "pairing.revoke"]
+        );
+        assert!(pair(&connect(&state), 0, true).await.is_err(), "ttl bounds");
+    }
+
+    #[test]
+    fn given_devices_grant_and_revoke_should_resolve_names_and_downgrade_first() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        let fake = bridge(&state, |r| match r["operation"].as_str() {
+            Some("devices.list") => Ok(json!({"devices": [device()]})),
+            Some(_) => Ok(json!({})),
+            None => Err("unexpected".into()),
+        });
+        let admin = connect(&state);
+        devices(&admin, true).unwrap();
+        grant(&admin, "iPhone", Some("control".into()), Some("off".into())).unwrap();
+        revoke(&admin, "aaaa1").unwrap();
+        assert!(grant(&admin, "iPhone", None, None).is_err());
+        assert!(revoke(&admin, "nobody").is_err());
+        assert_eq!(
+            operations(&fake),
+            [
+                "devices.list",
+                "devices.list",
+                "devices.workspaceManagement",
+                "devices.terminals",
+                "devices.list",
+                "devices.list",
+                "devices.revoke",
+                "devices.list",
+            ]
+        );
+        let requests = fake.requests.lock().unwrap();
+        assert_eq!(requests[2]["workspaceManagement"], false);
+        assert_eq!(requests[3]["terminals"], "control");
+        assert_eq!(requests[6]["deviceId"], device()["deviceId"]);
+    }
+
+    #[tokio::test]
+    async fn given_login_and_model_should_drive_the_providers_api() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        let fake = bridge(&state, |r| match r["operation"].as_str() {
+            Some("providers") => Ok(
+                json!({"providers": [{"id": "anthropic", "name": "Anthropic", "oauth": true, "configured": true, "models": [{"id": "claude"}]}]}),
+            ),
+            Some("auth.start") => Ok(json!({"attemptId": "a1"})),
+            Some("auth.status") => Ok(
+                json!({"status": "complete", "events": [{"url": "https://example.invalid/device"}]}),
+            ),
+            Some("model.select") => Ok(json!({})),
+            _ => Err("unexpected".into()),
+        });
+        let admin = connect(&state);
+        login(&admin, Some("anthropic".into()), false)
+            .await
+            .unwrap();
+        assert!(login(&admin, Some("nope".into()), false).await.is_err());
+        list_models(&admin).unwrap();
+        select_model(&admin, "anthropic", "claude").unwrap();
+        assert_eq!(
+            operations(&fake),
+            [
+                "providers",
+                "auth.start",
+                "auth.status",
+                "providers",
+                "providers",
+                "model.select"
+            ]
+        );
+        let requests = fake.requests.lock().unwrap();
+        assert_eq!(requests[1]["type"], "oauth");
+        assert_eq!(requests[5]["model"], "claude");
     }
 }

@@ -10,15 +10,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
-const unixOnly = {
-  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
-};
+import { privateTemp } from "./private-temp.js";
 async function trustedTransport(
   controller,
   { terminals = "control", workspaceManagement = true } = {},
 ) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-e2e-"));
+  const directory = await privateTemp("pg-e2e-");
   const trust = await openTrustStore({ directory });
   const remote = await serve(controller, {
     host: "127.0.0.1",
@@ -125,7 +122,7 @@ function phone(url, { clientId, credential }) {
     );
   });
 }
-test("full fixture flow reconnects without replay, recovers queue on Stop and answers dialogs", unixOnly, async () => {
+test("full fixture flow reconnects without replay, recovers queue on Stop and answers dialogs", async () => {
   const rpc = new Rpc(
     process.execPath,
     [fileURLToPath(new URL("./fixture.js", import.meta.url))],
@@ -199,7 +196,7 @@ test("full fixture flow reconnects without replay, recovers queue on Stop and an
     await rpc.close();
   }
 });
-test("given an image upload should reach the RPC child and survive reconnect without replay", unixOnly, async () => {
+test("given an image upload should reach the RPC child and survive reconnect without replay", async () => {
   const rpc = new Rpc(
     process.execPath,
     [fileURLToPath(new URL("./fixture.js", import.meta.url))],
@@ -249,7 +246,7 @@ const waitFor = async (predicate) => {
   assert.fail("Both clients did not receive the authoritative update");
 };
 
-test("phone and desktop share streaming, queue ownership, dialogs, session races and independent reconnect", unixOnly, async () => {
+test("phone and desktop share streaming, queue ownership, dialogs, session races and independent reconnect", async () => {
   const rpc = new Rpc(
     process.execPath,
     [fileURLToPath(new URL("./fixture.js", import.meta.url))],
@@ -397,7 +394,7 @@ test("phone and desktop share streaming, queue ownership, dialogs, session races
   }
 });
 
-test("View phones read chat and Off phones get none, end to end against the real controller", unixOnly, async () => {
+test("View phones read chat and Off phones get none, end to end against the real controller", async () => {
   const rpc = new Rpc(
     process.execPath,
     [fileURLToPath(new URL("./fixture.js", import.meta.url))],

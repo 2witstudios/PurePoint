@@ -3,6 +3,7 @@ import { access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { execFile } from "node:child_process";
 import { isIP } from "node:net";
+import path from "node:path";
 
 /** Fixed absolute locations only; PATH is never searched. */
 export const TAILSCALE_PATHS = [
@@ -11,6 +12,19 @@ export const TAILSCALE_PATHS = [
   "/usr/local/bin/tailscale",
   "/snap/bin/tailscale",
 ];
+
+/** The Windows installer's location (per-machine Program Files only). */
+export function windowsTailscalePaths(env = process.env) {
+  const paths = [];
+  if (env.ProgramFiles && path.win32.isAbsolute(env.ProgramFiles))
+    paths.push(path.win32.join(env.ProgramFiles, "Tailscale", "tailscale.exe"));
+  paths.push("C:\\Program Files\\Tailscale\\tailscale.exe");
+  return [...new Set(paths)];
+}
+
+export function tailscalePaths(platform = process.platform, env = process.env) {
+  return platform === "win32" ? windowsTailscalePaths(env) : TAILSCALE_PATHS;
+}
 
 export function tailnetIPv4(address) {
   if (isIP(address) !== 4) return false;
@@ -51,7 +65,13 @@ export function runTailscale(binary, args, { timeout = 3000 } = {}) {
       {
         timeout,
         maxBuffer: 65536,
-        env: { PATH: "/usr/bin:/bin", HOME: os.homedir(), TERM: "dumb" },
+        env:
+          process.platform === "win32"
+            ? {
+                SystemRoot: process.env.SystemRoot ?? "C:\\Windows",
+                USERPROFILE: os.homedir(),
+              }
+            : { PATH: "/usr/bin:/bin", HOME: os.homedir(), TERM: "dumb" },
         windowsHide: true,
       },
       (error, stdout) => resolve(error ? null : String(stdout)),
@@ -68,7 +88,7 @@ export function runTailscale(binary, args, { timeout = 3000 } = {}) {
  */
 export async function discoverTailnet({
   interfaces = os.networkInterfaces(),
-  paths = TAILSCALE_PATHS,
+  paths = tailscalePaths(),
   run = runTailscale,
 } = {}) {
   const binary = await executable(paths);
@@ -114,9 +134,10 @@ export async function serveConfigured(binary, port, run = runTailscale) {
   return output !== null && servePassthrough(output, port);
 }
 
-export function serveCommands(port) {
-  return [
-    `tailscale serve --bg --tcp ${port} tcp://127.0.0.1:${port}`,
-    "(if that is refused: sudo tailscale set --operator=$USER)",
-  ];
+export function serveCommands(port, platform = process.platform) {
+  const serve = `tailscale serve --bg --tcp ${port} tcp://127.0.0.1:${port}`;
+  // Windows has no operator setting; the Tailscale service serves any user.
+  return platform === "win32"
+    ? [serve]
+    : [serve, "(if that is refused: sudo tailscale set --operator=$USER)"];
 }

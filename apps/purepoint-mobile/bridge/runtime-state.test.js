@@ -11,12 +11,14 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { openRuntimeState } from "./runtime-state.js";
-// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
-const unixOnly = {
-  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
+import { privateTemp } from "./private-temp.js";
+import { assertPrivate } from "./acl.js";
+// Skipped on Windows: symlinks need Developer Mode on Windows (Unix only); the rest run there with the lock helper.
+const posixOnly = {
+  skip: process.platform === "win32" && "symlinks need Developer Mode on Windows (Unix only)",
 };
-test("given two owned starts should reject collision and preserve durable selection after replacement", unixOnly, async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "pointguard-state-"));
+test("given two owned starts should reject collision and preserve durable selection after replacement", async () => {
+  const dir = await privateTemp("pointguard-state-");
   try {
     const first = await openRuntimeState(dir);
     await first.save({
@@ -36,17 +38,20 @@ test("given two owned starts should reject collision and preserve durable select
       replacement.value.selectedSessionPath,
       "/native/session.jsonl",
     );
-    assert.equal(
-      (await stat(path.join(dir, "runtime.json"))).mode & 0o777,
-      0o600,
-    );
+    if (process.platform === "win32")
+      await assertPrivate(path.join(dir, "runtime.json"));
+    else
+      assert.equal(
+        (await stat(path.join(dir, "runtime.json"))).mode & 0o777,
+        0o600,
+      );
     await replacement.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 test("given corrupt or public state should fail closed without replacing contents", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "pointguard-corrupt-"));
+  const dir = await privateTemp("pointguard-corrupt-");
   try {
     const file = path.join(dir, "runtime.json");
     const contents = '{"schemaVersion":999}';
@@ -57,8 +62,8 @@ test("given corrupt or public state should fail closed without replacing content
     await rm(dir, { recursive: true, force: true });
   }
 });
-test("given symlink state should reject rather than read or overwrite target", unixOnly, async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "pointguard-link-"));
+test("given symlink state should reject rather than read or overwrite target", posixOnly, async () => {
+  const dir = await privateTemp("pointguard-link-");
   try {
     const target = path.join(dir, "target");
     await writeFile(target, "{}", { mode: 0o600 });
@@ -70,12 +75,10 @@ test("given symlink state should reject rather than read or overwrite target", u
   }
 });
 
-test("given exact owned runtime crash should reopen permanent inode and restore selection", unixOnly, async () => {
+test("given exact owned runtime crash should reopen permanent inode and restore selection", async () => {
   const { spawn } = await import("node:child_process");
   const { once } = await import("node:events");
-  const directory = await mkdtemp(
-    path.join(os.tmpdir(), "pointguard-state-crash-"),
-  );
+  const directory = await privateTemp("pointguard-state-crash-");
   let child;
   try {
     const moduleURL = new URL("./runtime-state.js", import.meta.url).href;
@@ -146,8 +149,8 @@ test("given exact owned runtime crash should reopen permanent inode and restore 
   }
 });
 
-test("unchanged serialized selections preserve the durable file inode", unixOnly, async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "pointguard-unchanged-"));
+test("unchanged serialized selections preserve the durable file inode", async () => {
+  const dir = await privateTemp("pointguard-unchanged-");
   const state = await openRuntimeState(dir);
   try {
     await state.save({ provider: "anthropic", model: "selected" });

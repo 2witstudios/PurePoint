@@ -13,13 +13,10 @@ import { terminalConnection } from "./terminals.js";
 import { openTrustStore } from "./trust.js";
 import { serve } from "./network.js";
 import { daemonEndpoint } from "./pipe-name.js";
-// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
-const unixOnly = {
-  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
-};
+import { privateTemp } from "./private-temp.js";
 
 async function fixture(t) {
-  const home = await mkdtemp(path.join(os.tmpdir(), "mw-"));
+  const home = await privateTemp("mw-");
   const events = new EventEmitter();
   const sockets = new Set(),
     requests = [],
@@ -652,7 +649,7 @@ test("spawn instructions are optional; blank launches bare and plan mode needs i
   assert.match(f.requests.at(-1).prompt, /\S/);
 });
 
-test("real authenticated TLS WS old grants deny management, off leaks no fleet, downgrade events fence and reconnect reconciles", unixOnly, async (t) => {
+test("real authenticated TLS WS old grants deny management, off leaks no fleet, downgrade events fence and reconnect reconciles", async (t) => {
   const f = await fixture(t),
     directory = path.join(f.home, "trust");
   const trust = await openTrustStore({ directory });
@@ -749,6 +746,8 @@ test("real authenticated TLS WS old grants deny management, off leaks no fleet, 
   );
   assert.equal(f.requests.filter((r) => r.type === "spawn").length, 2);
   assert.equal((await c.request({ op: "sync" })).data.chatReady, true);
+  // Windows cannot remove a held lock file: release it before the fixture cleanup.
+  await trust.close();
 });
 
 test("opaque bounded config keys preserve dotted, spaced and Unicode agent types in catalog, presets and fixed launches", async (t) => {

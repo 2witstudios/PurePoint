@@ -105,6 +105,19 @@ impl PeerIdentity {
     }
 }
 
+/// Who serves the client end `pipe` of a named pipe: its process id and
+/// whether it runs as this user. Pipe names are global, so a client checks
+/// this before sending a credential to a pipe it did not create.
+#[cfg(windows)]
+pub fn pipe_server_identity(pipe: std::os::windows::io::RawHandle) -> io::Result<PeerIdentity> {
+    let pid = win_sys::pipe_server_pid(pipe)?;
+    let same_user = win_sys::process_user_sid(pid)? == win_sys::current_user_sid()?;
+    Ok(PeerIdentity {
+        pid: Some(pid),
+        same_user,
+    })
+}
+
 /// A connected duplex byte stream to or from a daemon.
 pub struct Stream(imp::Stream);
 

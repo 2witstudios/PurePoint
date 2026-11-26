@@ -4,17 +4,19 @@ import { mkdtemp, rm, readFile, writeFile, stat, open, chmod, symlink } from "no
 import path from "node:path";
 import os from "node:os";
 import { openTrustStore } from "./trust.js";
+import { assertPrivate } from "./acl.js";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
-// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
-const unixOnly = {
-  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
+import { privateTemp } from "./private-temp.js";
+// Skipped on Windows: POSIX modes and symlinks (Unix only); the rest run there with the lock helper.
+const posixOnly = {
+  skip: process.platform === "win32" && "POSIX modes and symlinks (Unix only)",
 };
 const endpoint = "wss://100.100.1.2:8787/v1";
 async function fixture(fn) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-"));
+  const directory = await privateTemp("pg-trust-");
   let now = Date.now();
   let store;
   try {
@@ -27,7 +29,7 @@ async function fixture(fn) {
     await rm(directory, { recursive: true, force: true });
   }
 }
-test("short-lived enrollment is single use under concurrent attempts; credential stays out of durable state", unixOnly, async () =>
+test("short-lived enrollment is single use under concurrent attempts; credential stays out of durable state", async () =>
   fixture(async (store, directory) => {
     const enrollment = store.createEnrollment({ endpoint });
     const code = JSON.parse(enrollment.payload);
@@ -49,12 +51,15 @@ test("short-lived enrollment is single use under concurrent attempts; credential
     assert.ok(
       !disk.includes(device.credential) && !disk.includes(code.enrollmentToken),
     );
-    assert.equal(
-      (await stat(path.join(directory, "trust.json"))).mode & 0o777,
-      0o600,
-    );
+    if (process.platform === "win32")
+      await assertPrivate(path.join(directory, "trust.json"));
+    else
+      assert.equal(
+        (await stat(path.join(directory, "trust.json"))).mode & 0o777,
+        0o600,
+      );
   }));
-test("expiry and explicit enrollment revocation reject without creating devices", unixOnly, async () =>
+test("expiry and explicit enrollment revocation reject without creating devices", async () =>
   fixture(async (store, _directory, advance) => {
     const expired = store.createEnrollment({ endpoint, ttlSeconds: 1 });
     advance(1001);
@@ -78,7 +83,7 @@ test("expiry and explicit enrollment revocation reject without creating devices"
     );
     assert.equal(store.listDevices().length, 0);
   }));
-test("trust survives restart while pending enrollments do not; rotating one device preserves another", unixOnly, async () =>
+test("trust survives restart while pending enrollments do not; rotating one device preserves another", async () =>
   fixture(async (store, directory) => {
     const enroll = async (name) =>
       store.enroll({
@@ -124,7 +129,7 @@ test("trust survives restart while pending enrollments do not; rotating one devi
       await restarted.close();
     }
   }));
-test("unknown schema, identity mismatch and partial identity fail closed without overwriting state", unixOnly, async () =>
+test("unknown schema, identity mismatch and partial identity fail closed without overwriting state", async () =>
   fixture(async (store, directory) => {
     await assert.rejects(openTrustStore({ directory }), { code: "lock_busy" });
     await store.close();
@@ -144,7 +149,7 @@ test("unknown schema, identity mismatch and partial identity fail closed without
     await assert.rejects(openTrustStore({ directory }));
   }));
 
-test("lost durable host ID never regenerates from surviving certificate files", unixOnly, async () =>
+test("lost durable host ID never regenerates from surviving certificate files", async () =>
   fixture(async (store, directory) => {
     await store.close();
     const cert = await readFile(path.join(directory, "identity-cert.pem"));
@@ -155,7 +160,7 @@ test("lost durable host ID never regenerates from surviving certificate files", 
       cert,
     );
   }));
-test("insecure existing files and public/legacy endpoints never downgrade trust", unixOnly, async () =>
+test("insecure existing files and public/legacy endpoints never downgrade trust", posixOnly, async () =>
   fixture(async (store, directory) => {
     assert.throws(() =>
       store.createEnrollment({ endpoint: "wss://example.com/v1" }),
@@ -169,8 +174,8 @@ test("insecure existing files and public/legacy endpoints never downgrade trust"
     await assert.rejects(openTrustStore({ directory }), /private|owner/i);
   }));
 
-test("helper crash fences trust while retained kernel ownership excludes writers until submitted IO drains", unixOnly, async (t) => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-holder-crash-"));
+test("helper crash fences trust while retained kernel ownership excludes writers until submitted IO drains", async (t) => {
+  const directory = await privateTemp("pg-trust-holder-crash-");
   let store;
   let resume;
   let heldChild;
@@ -233,8 +238,8 @@ test("helper crash fences trust while retained kernel ownership excludes writers
   }
 });
 
-test("isolated bridge crash releases inherited helper ownership and preserves same inode and durable phone trust", unixOnly, async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-bridge-crash-"));
+test("isolated bridge crash releases inherited helper ownership and preserves same inode and durable phone trust", async () => {
+  const directory = await privateTemp("pg-trust-bridge-crash-");
   const source = `import { openTrustStore } from ${JSON.stringify(new URL("./trust.js", import.meta.url).href)};
     const store = await openTrustStore({directory:process.env.TRUST_FIXTURE_DIRECTORY});
     const phone = await store.enroll({enrollmentToken:JSON.parse(store.createEnrollment({endpoint:${JSON.stringify(endpoint)}}).payload).enrollmentToken,name:"Phone"});
@@ -270,8 +275,8 @@ test("isolated bridge crash releases inherited helper ownership and preserves sa
   }
 });
 
-test("permanent private old PID marker is inert; public or symlink lock refuses without repair", unixOnly, async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-lock-migration-"));
+test("permanent private old PID marker is inert; public or symlink lock refuses without repair", posixOnly, async () => {
+  const directory = await privateTemp("pg-trust-lock-migration-");
   const file = path.join(directory, "writer.lock");
   let store;
   try {
@@ -292,7 +297,7 @@ test("permanent private old PID marker is inert; public or symlink lock refuses 
   } finally { await store?.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("terminal access defaults off for existing devices and explicit grants persist across restart", unixOnly, async () =>
+test("terminal access defaults off for existing devices and explicit grants persist across restart", async () =>
   fixture(async (store, directory) => {
     const phone = await store.enroll({
       enrollmentToken: JSON.parse(store.createEnrollment({ endpoint }).payload)
@@ -332,7 +337,7 @@ test("terminal access defaults off for existing devices and explicit grants pers
     }
   }));
 
-test("newer downgrade fences queued upgrades before durable IO completes", unixOnly, async (t) =>
+test("newer downgrade fences queued upgrades before durable IO completes", async (t) =>
   fixture(async (store, directory) => {
     const phone = await store.enroll({
       enrollmentToken: JSON.parse(store.createEnrollment({ endpoint }).payload)
@@ -379,7 +384,7 @@ test("newer downgrade fences queued upgrades before durable IO completes", unixO
     );
   }));
 
-test("workspace management is default-off for old control grants, persists explicitly and fences queued upgrade", unixOnly, async () =>
+test("workspace management is default-off for old control grants, persists explicitly and fences queued upgrade", async () =>
   fixture(async (store, directory) => {
     const device = await store.enroll({
       enrollmentToken: JSON.parse(store.createEnrollment({ endpoint }).payload)
@@ -418,7 +423,7 @@ test("workspace management is default-off for old control grants, persists expli
     }
   }));
 
-test("new devices pair with full access", unixOnly, async () =>
+test("new devices pair with full access", async () =>
   fixture(async (store, directory) => {
     const phone = await store.enroll({
       enrollmentToken: JSON.parse(store.createEnrollment({ endpoint }).payload)
@@ -434,7 +439,7 @@ test("new devices pair with full access", unixOnly, async () =>
     assert.equal(disk.workspaceManagement, true);
   }));
 
-test("revoked devices are forgotten, including legacy revokedAt entries", unixOnly, async () =>
+test("revoked devices are forgotten, including legacy revokedAt entries", async () =>
   fixture(async (store, directory) => {
     const pair = async (name) =>
       store.enroll({

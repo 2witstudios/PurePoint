@@ -14,6 +14,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   currentUserSid,
+  grantsWrite,
+  writableByOthers,
   isPrivateAcl,
   makePrivate,
   parseSavedAcl,
@@ -29,6 +31,13 @@ import {
 } from "./platform.js";
 import { pipeNameForSocket } from "./pipe-name.js";
 import { privateDirectory, privatePath } from "./runtime-state.js";
+import { startRemote } from "./remote.js";
+import {
+  discoverTailnet,
+  serveCommands,
+  tailscalePaths,
+  windowsTailscalePaths,
+} from "./tailnet.js";
 
 const windows = { skip: process.platform !== "win32" && "Windows host only" };
 const USER = "S-1-5-21-1-2-3-1001";
@@ -50,7 +59,16 @@ test("platform defaults: LocalAppData state and an owner pipe on Windows", () =>
   );
   assert.equal(win.adminTransport, "pipe");
   assert.equal(win.hostKind, "windows");
+  // The app passes PI_MOBILE_HOST; only headless `pu phone` asks to discover.
   assert.equal(win.discoverTailnet, false);
+  assert.equal(
+    platformDefaults({
+      platform: "win32",
+      env: { POINT_GUARD_DISCOVER_TAILNET: "1" },
+      home: "C:\\Users\\u",
+    }).discoverTailnet,
+    true,
+  );
   // A missing or relative LOCALAPPDATA falls back under the profile, never cwd.
   for (const env of [{}, { LOCALAPPDATA: "Local" }])
     assert.equal(
@@ -304,3 +322,110 @@ test(
     }
   },
 );
+
+test("Tailscale on Windows: fixed Program Files paths, never PATH, and no Unix operator hint", () => {
+  assert.deepEqual(windowsTailscalePaths({ ProgramFiles: "D:\\Apps" }), [
+    "D:\\Apps\\Tailscale\\tailscale.exe",
+    "C:\\Program Files\\Tailscale\\tailscale.exe",
+  ]);
+  assert.deepEqual(
+    windowsTailscalePaths({ ProgramFiles: "relative", PATH: "C:\\evil" }),
+    ["C:\\Program Files\\Tailscale\\tailscale.exe"],
+  );
+  assert.deepEqual(tailscalePaths("win32", {}), windowsTailscalePaths({}));
+  assert.ok(tailscalePaths("linux").every((p) => p.startsWith("/")));
+  assert.deepEqual(serveCommands(8787, "win32"), [
+    "tailscale serve --bg --tcp 8787 tcp://127.0.0.1:8787",
+  ]);
+  assert.equal(serveCommands(8787, "linux").length, 2);
+});
+
+test("headless Windows discovery binds only the address Tailscale and an interface agree on", async () => {
+  const run = (output) => async () => output;
+  const paths = [process.execPath];
+  const tailscale = (address) => ({
+    Tailscale: [
+      { address: "fd7a:115c:a1e0::1", family: "IPv6", internal: false },
+      { address, family: "IPv4", internal: false },
+    ],
+    "Wi-Fi": [{ address: "192.168.4.32", family: "IPv4", internal: false }],
+  });
+  assert.deepEqual(
+    await discoverTailnet({
+      paths: ["C:\\nonexistent\\tailscale.exe"],
+      interfaces: tailscale("100.65.1.2"),
+      run: run("100.65.1.2\r\n"),
+    }),
+    { mode: "unavailable", reason: "tailscale_missing" },
+  );
+  const agree = await discoverTailnet({
+    paths,
+    interfaces: tailscale("100.65.1.2"),
+    run: run("100.65.1.2\r\n"),
+  });
+  assert.equal(agree.mode, "interface");
+  assert.equal(agree.address, "100.65.1.2");
+  assert.equal(
+    (
+      await discoverTailnet({
+        paths,
+        interfaces: tailscale("100.65.1.3"),
+        run: run("100.65.1.2\r\n"),
+      })
+    ).reason,
+    "tailnet_mismatch",
+  );
+});
+
+test("without Tailscale the headless Windows bridge never listens and reports why", async () => {
+  const pending = [];
+  const binds = [];
+  const remote = await startRemote({
+    port: 8787,
+    peerAllowed: (mode) => mode,
+    discover: () =>
+      discoverTailnet({
+        paths: ["C:\\nonexistent\\tailscale.exe"],
+        interfaces: {},
+        run: async () => "100.65.1.2\n",
+      }),
+    listen: async (host) => {
+      binds.push(host);
+      return { shutdown: async () => {} };
+    },
+    setTimer: (fn, ms) => {
+      const timer = { fn, ms };
+      pending.push(timer);
+      return timer;
+    },
+    clearTimer: (timer) => pending.splice(pending.indexOf(timer), 1),
+  });
+  assert.deepEqual(binds, []);
+  assert.equal(remote.chatURL(), null);
+  const status = remote.status();
+  assert.equal(status.state, "unavailable");
+  assert.equal(status.code, "tailscale_missing");
+  assert.match(status.message, /not installed/);
+  await remote.shutdown();
+});
+
+test("not writable by others: read grants to anyone pass, any write grant to another principal fails", () => {
+  const acl = (aces) => ({ protected: false, aces });
+  const ace = (sid, rights, flags = "") => ({ type: "A", flags, rights, sid });
+  const profile = acl([
+    ace(USER, "FA", "OICIID"),
+    ace("S-1-5-18", "FA", "OICIID"),
+    ace("S-1-5-32-544", "FA", "OICIID"),
+    ace("BU", "0x1200a9", "OICIID"), // Users: read and execute
+    ace("WD", "FR"),
+    ace("CO", "FA", "OICIIO"), // inherit-only: never applies to the entry
+  ]);
+  assert.equal(writableByOthers(profile, USER), false);
+  for (const rights of ["FA", "FW", "0x1301bf", "0x2", "WD", "FRFW", "zz"])
+    assert.equal(
+      writableByOthers(acl([ace("BU", rights)]), USER),
+      true,
+      rights,
+    );
+  assert.equal(grantsWrite("FRFX"), false);
+});

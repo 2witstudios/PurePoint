@@ -7,13 +7,14 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { openTrustStore } from "./trust.js";
 import { ensureHostTLS } from "./trust-tls.js";
-// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
-const unixOnly = {
-  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
+import { privateTemp } from "./private-temp.js";
+// Skipped on Windows: runs /usr/bin/openssl (Unix only); the rest run there with the lock helper.
+const posixOnly = {
+  skip: process.platform === "win32" && "runs /usr/bin/openssl (Unix only)",
 };
 const execute = promisify(execFile);
-test("expired persisted TLS identity fails actionably without rotating certificate or host trust", unixOnly, async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-tls-expiry-"));
+test("expired persisted TLS identity fails actionably without rotating certificate or host trust", posixOnly, async () => {
+  const directory = await privateTemp("pg-tls-expiry-");
   let store;
   try {
     store = await openTrustStore({ directory });
@@ -70,8 +71,8 @@ test("expired persisted TLS identity fails actionably without rotating certifica
 });
 
 for (const fence of [1, 4, 5]) {
-  test(`TLS provisioning fences lost ownership at boundary ${fence} without repairing identity`, unixOnly, async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "pg-tls-lock-loss-"));
+  test(`TLS provisioning fences lost ownership at boundary ${fence} without repairing identity`, async () => {
+    const directory = await privateTemp("pg-tls-lock-loss-");
     let checks = 0;
     try {
       await assert.rejects(ensureHostTLS(directory, () => {

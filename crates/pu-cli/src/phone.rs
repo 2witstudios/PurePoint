@@ -5,21 +5,26 @@
 //! ownership and modes before sending the owner token, never reads a token
 //! from a group/other-accessible file, and talks only to the exact socket the
 //! bridge creates under the private state directory.
+//!
+//! Windows: the admin channel is the bridge's token-guarded named pipe
+//! (`\\.\pipe\purepoint-<hash16>-pointguard-owner`, hashed over
+//! `<state>\admin.sock`). The state directory and token must pass
+//! `pu_core::private_fs::check_private` (owner SID, owner-only DACL), and the
+//! pipe's server must run as this user before the token is sent.
 
-#[cfg(unix)]
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use crate::error::CliError;
 
+#[cfg_attr(windows, allow(dead_code))]
 pub const UNIT: &str = "pu-pointguard.service";
 /// The version this `pu` was released as. Release builds set
 /// `PU_RELEASE_VERSION` to the tag; the phone payload records the same value,
@@ -29,10 +34,10 @@ pub const PU_VERSION: &str = match option_env!("PU_RELEASE_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 pub const DEFAULT_PORT: u16 = 8787;
-#[cfg(unix)]
 const ADMIN_TIMEOUT: Duration = Duration::from_secs(15);
-#[cfg(unix)]
 const MAX_RESPONSE: usize = 1024 * 1024;
+/// The payload layout this `pu` runs (`runtime-manifest.json` `layout`).
+pub const LAYOUT: &str = if cfg!(windows) { "windows" } else { "linux" };
 
 fn home() -> Result<PathBuf, CliError> {
     pu_core::paths::home_dir()
@@ -43,6 +48,7 @@ fn home() -> Result<PathBuf, CliError> {
 
 /// `${XDG_STATE_HOME:-~/.local/state}/purepoint/point-guard`, matching the
 /// bridge's own default. A relative XDG value is ignored, never resolved.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn state_dir_from(xdg_state: Option<&str>, home: &Path) -> PathBuf {
     xdg_state
         .map(PathBuf::from)
@@ -51,9 +57,30 @@ pub fn state_dir_from(xdg_state: Option<&str>, home: &Path) -> PathBuf {
         .join("purepoint/point-guard")
 }
 
+/// `%LOCALAPPDATA%\PurePoint\point-guard`, matching the bridge's Windows
+/// default (`platform.js`). A relative value is ignored, never resolved.
+#[cfg(windows)]
+pub fn windows_state_dir_from(local_app_data: Option<&str>, home: &Path) -> PathBuf {
+    local_app_data
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join("AppData").join("Local"))
+        .join("PurePoint")
+        .join("point-guard")
+}
+
+#[cfg(unix)]
 pub fn state_dir() -> Result<PathBuf, CliError> {
     Ok(state_dir_from(
         std::env::var("XDG_STATE_HOME").ok().as_deref(),
+        &home()?,
+    ))
+}
+
+#[cfg(windows)]
+pub fn state_dir() -> Result<PathBuf, CliError> {
+    Ok(windows_state_dir_from(
+        std::env::var("LOCALAPPDATA").ok().as_deref(),
         &home()?,
     ))
 }
@@ -63,6 +90,7 @@ pub fn payload_root() -> Result<PathBuf, CliError> {
     Ok(home()?.join(".pu/pointguard"))
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub fn payload_dir(version: &str) -> Result<PathBuf, CliError> {
     Ok(payload_root()?.join(version))
 }
@@ -72,10 +100,13 @@ pub fn admin_socket(state: &Path) -> PathBuf {
     state.join("admin/admin.sock")
 }
 
+/// The bridge's owner pipe for `state` (`ownerPipeName` in `platform.js`).
 #[cfg(windows)]
-fn euid() -> u32 {
-    // WIN-9.2: compare owner SIDs instead of uids.
-    0
+pub fn admin_pipe(state: &Path) -> Result<String, CliError> {
+    use pu_transport::naming::{normalize_socket_path, pipe_name};
+    let normalized = normalize_socket_path(&state.join("admin.sock"))
+        .map_err(|e| CliError::Other(format!("cannot name the admin pipe: {e}")))?;
+    Ok(pipe_name(&normalized, "pointguard-owner"))
 }
 
 #[cfg(unix)]
@@ -84,11 +115,13 @@ fn euid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-/// Owner-only check on an entry's metadata (never follows symlinks).
+/// Owner-only check on an entry (never a symlink or junction): the owner SID
+/// is this user's and the DACL grants no one else access.
 #[cfg(windows)]
-pub fn private_entry(_meta: &std::fs::Metadata, _expect_dir: bool, _uid: u32) -> bool {
-    // WIN-9.2: owner SID + owner-only DACL check; until then nothing is private.
-    false
+pub fn private_entry(path: &Path, meta: &std::fs::Metadata, expect_dir: bool) -> bool {
+    !meta.file_type().is_symlink()
+        && (if expect_dir { meta.is_dir() } else { true })
+        && pu_core::private_fs::check_private(path).is_ok()
 }
 
 /// Owner-only check on an entry's metadata (never follows symlinks).
@@ -100,7 +133,6 @@ pub fn private_entry(meta: &std::fs::Metadata, expect_dir: bool, uid: u32) -> bo
         && meta.permissions().mode() & 0o077 == 0
 }
 
-#[cfg_attr(windows, allow(dead_code))]
 fn require_private(path: &Path, expect_dir: bool, what: &str) -> Result<(), CliError> {
     let meta = std::fs::symlink_metadata(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -111,7 +143,11 @@ fn require_private(path: &Path, expect_dir: bool, what: &str) -> Result<(), CliE
             CliError::Other(format!("cannot inspect {}: {e}", path.display()))
         }
     })?;
-    if !private_entry(&meta, expect_dir, euid()) {
+    #[cfg(unix)]
+    let private = private_entry(&meta, expect_dir, euid());
+    #[cfg(windows)]
+    let private = private_entry(path, &meta, expect_dir);
+    if !private {
         return Err(CliError::Other(format!(
             "{} is not private to this user; refusing to use it",
             path.display()
@@ -121,11 +157,14 @@ fn require_private(path: &Path, expect_dir: bool, what: &str) -> Result<(), CliE
 }
 
 /// Read the owner admin token, only from a private regular file.
-#[cfg_attr(windows, allow(dead_code))]
 pub fn read_token(file: &Path) -> Result<String, CliError> {
     let meta = std::fs::symlink_metadata(file)
         .map_err(|e| CliError::Other(format!("cannot read owner token: {e}")))?;
-    if !meta.is_file() || !private_entry(&meta, false, euid()) || meta.len() > 4096 {
+    #[cfg(unix)]
+    let private = private_entry(&meta, false, euid());
+    #[cfg(windows)]
+    let private = private_entry(file, &meta, false);
+    if !meta.is_file() || !private || meta.len() > 4096 {
         return Err(CliError::Other(
             "owner token is not a private regular file; refusing to use it".into(),
         ));
@@ -138,7 +177,6 @@ pub fn read_token(file: &Path) -> Result<String, CliError> {
 }
 
 /// Parse an HTTP/1.1 response read to EOF (the server sends `Connection: close`).
-#[cfg_attr(windows, allow(dead_code))]
 pub fn parse_http_response(raw: &[u8]) -> Result<(u16, Value), CliError> {
     let split = raw
         .windows(4)
@@ -186,28 +224,108 @@ fn dechunk(mut data: &[u8]) -> Result<Vec<u8>, CliError> {
     }
 }
 
+/// One admin request as HTTP/1.1 bytes.
+fn admin_request(token: &str, request: &Value) -> Result<Vec<u8>, CliError> {
+    let body = serde_json::to_vec(request)?;
+    let mut out = format!(
+        "POST /admin/v1 HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        token,
+        body.len()
+    )
+    .into_bytes();
+    out.extend_from_slice(&body);
+    Ok(out)
+}
+
+/// Read a whole response (bounded) and turn it into the result or the
+/// bridge's sanitized error message.
+fn admin_response(stream: impl Read) -> Result<Value, CliError> {
+    let mut raw = Vec::new();
+    stream.take(MAX_RESPONSE as u64 + 1).read_to_end(&mut raw)?;
+    if raw.len() > MAX_RESPONSE {
+        return Err(CliError::Other("admin response too large".into()));
+    }
+    let (status, value) = parse_http_response(&raw)?;
+    if status == 200 && value["ok"] == json!(true) {
+        return Ok(value["result"].clone());
+    }
+    let message = value["error"]["message"]
+        .as_str()
+        .unwrap_or("Point Guard rejected the request")
+        .to_string();
+    Err(CliError::Other(message))
+}
+
 /// The owner admin channel of a running bridge.
-#[cfg_attr(windows, allow(dead_code))]
 pub struct Admin {
+    /// Unix: the admin socket path. Windows: the owner pipe name.
     socket: PathBuf,
     token: String,
 }
 
 impl Admin {
+    /// Verify the private state and token before trusting the owner pipe.
     #[cfg(windows)]
-    pub fn connect(_state: &Path) -> Result<Self, CliError> {
-        // WIN-9.2: verify and connect to the bridge's Windows admin endpoint.
-        Err(CliError::Other(
-            "Point Guard phone hosting is not available on Windows yet".into(),
-        ))
+    pub fn connect(state: &Path) -> Result<Self, CliError> {
+        require_private(state, true, "state directory")?;
+        let token = read_token(&state.join("admin-token"))?;
+        Ok(Admin {
+            socket: PathBuf::from(admin_pipe(state)?),
+            token,
+        })
     }
 
+    /// Run one admin operation over the owner pipe. The token is sent only
+    /// after the pipe's server is confirmed to run as this user.
     #[cfg(windows)]
-    pub fn call(&self, _request: Value) -> Result<Value, CliError> {
-        // WIN-9.2: HTTP over the bridge's Windows admin endpoint.
-        Err(CliError::Other(
-            "Point Guard phone hosting is not available on Windows yet".into(),
-        ))
+    pub fn call(&self, request: Value) -> Result<Value, CliError> {
+        use std::os::windows::io::AsRawHandle;
+        const ERROR_PIPE_BUSY: i32 = 231;
+        let unreachable = |e: std::io::Error| {
+            CliError::Other(format!(
+                "cannot reach Point Guard admin ({e}). Is it running? Try `pu phone status`."
+            ))
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut pipe = loop {
+            match std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&self.socket)
+            {
+                Ok(pipe) => break pipe,
+                Err(e)
+                    if e.raw_os_error() == Some(ERROR_PIPE_BUSY)
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => return Err(unreachable(e)),
+            }
+        };
+        let server =
+            pu_transport::pipe_server_identity(pipe.as_raw_handle()).map_err(unreachable)?;
+        if !server.is_same_user() {
+            return Err(CliError::Other(format!(
+                "{} is served by another user; refusing to send the owner token",
+                self.socket.display()
+            )));
+        }
+        let bytes = admin_request(&self.token, &request)?;
+        // Synchronous pipes have no timeouts: bound the exchange on a thread.
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = pipe
+                .write_all(&bytes)
+                .map_err(CliError::from)
+                .and_then(|()| admin_response(&mut pipe));
+            let _ = send.send(result);
+        });
+        receive.recv_timeout(ADMIN_TIMEOUT).unwrap_or_else(|_| {
+            Err(CliError::Other(
+                "Point Guard admin did not answer in time".into(),
+            ))
+        })
     }
 
     /// Verify the private state, socket directory and socket before trusting them.
@@ -236,7 +354,6 @@ impl Admin {
     /// Run one admin operation. Errors carry the bridge's sanitized message.
     #[cfg(unix)]
     pub fn call(&self, request: Value) -> Result<Value, CliError> {
-        let body = serde_json::to_vec(&request)?;
         let mut stream = UnixStream::connect(&self.socket).map_err(|e| {
             CliError::Other(format!(
                 "cannot reach Point Guard admin ({e}). Is it running? Try `pu phone status`."
@@ -244,47 +361,40 @@ impl Admin {
         })?;
         stream.set_read_timeout(Some(ADMIN_TIMEOUT))?;
         stream.set_write_timeout(Some(ADMIN_TIMEOUT))?;
-        let head = format!(
-            "POST /admin/v1 HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            self.token,
-            body.len()
-        );
-        stream.write_all(head.as_bytes())?;
-        stream.write_all(&body)?;
-        let mut raw = Vec::new();
-        stream.take(MAX_RESPONSE as u64 + 1).read_to_end(&mut raw)?;
-        if raw.len() > MAX_RESPONSE {
-            return Err(CliError::Other("admin response too large".into()));
-        }
-        let (status, value) = parse_http_response(&raw)?;
-        if status == 200 && value["ok"] == json!(true) {
-            return Ok(value["result"].clone());
-        }
-        let message = value["error"]["message"]
-            .as_str()
-            .unwrap_or("Point Guard rejected the request")
-            .to_string();
-        Err(CliError::Other(message))
+        stream.write_all(&admin_request(&self.token, &request)?)?;
+        admin_response(stream)
     }
 }
 
 /// The payload's `runtime-manifest.json`, checked against this `pu`.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn read_manifest(payload: &Path) -> Result<Value, CliError> {
+    read_manifest_for(payload, PU_VERSION)
+}
+
+pub fn read_manifest_for(payload: &Path, pu_version: &str) -> Result<Value, CliError> {
     let file = payload.join("runtime-manifest.json");
     let text = std::fs::read_to_string(&file).map_err(|_| {
-        CliError::Other(format!(
-            "phone access is not installed for pu {} ({} missing). Install it with:\n  curl -fsSL https://raw.githubusercontent.com/2witstudios/PurePoint/main/scripts/install.sh | PU_WITH_PHONE=1 sh",
-            PU_VERSION,
-            file.display()
-        ))
+        CliError::Other(if cfg!(windows) {
+            format!(
+                "phone access is not installed for pu {pu_version} ({} missing). Unpack the Windows phone access payload for this pu into {}",
+                file.display(),
+                payload.display()
+            )
+        } else {
+            format!(
+                "phone access is not installed for pu {pu_version} ({} missing). Install it with:\n  curl -fsSL https://raw.githubusercontent.com/2witstudios/PurePoint/main/scripts/install.sh | PU_WITH_PHONE=1 sh",
+                file.display()
+            )
+        })
     })?;
     let manifest: Value = serde_json::from_str(&text)?;
-    check_manifest(&manifest, PU_VERSION)?;
+    check_manifest(&manifest, pu_version)?;
     Ok(manifest)
 }
 
 pub fn check_manifest(manifest: &Value, pu_version: &str) -> Result<(), CliError> {
-    if manifest["schemaVersion"] != json!(1) || manifest["layout"] != json!("linux") {
+    if manifest["schemaVersion"] != json!(1) || manifest["layout"] != json!(LAYOUT) {
         return Err(CliError::Other("unsupported phone access payload".into()));
     }
     let built_for = manifest["puVersion"].as_str().unwrap_or("");
@@ -297,6 +407,7 @@ pub fn check_manifest(manifest: &Value, pu_version: &str) -> Result<(), CliError
 }
 
 /// systemd quoting for one ExecStart/Environment word.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn systemd_quote(value: &str) -> String {
     let escaped = value
         .replace('\\', "\\\\")
@@ -307,6 +418,7 @@ pub fn systemd_quote(value: &str) -> String {
 
 /// Variables a user manager may have imported that must never reach the
 /// bridge or the Pi child it launches.
+#[cfg_attr(windows, allow(dead_code))]
 pub const UNSET_ENVIRONMENT: &[&str] = &[
     "NODE_OPTIONS",
     "NODE_PATH",
@@ -329,6 +441,7 @@ pub const UNSET_ENVIRONMENT: &[&str] = &[
     "LD_LIBRARY_PATH",
 ];
 
+#[cfg_attr(windows, allow(dead_code))]
 pub struct UnitPaths<'a> {
     pub payload: &'a Path,
     pub state: &'a Path,
@@ -338,6 +451,7 @@ pub struct UnitPaths<'a> {
 }
 
 /// The explicit environment the bridge runs with (unit and `pu phone run`).
+#[cfg_attr(windows, allow(dead_code))]
 pub fn bridge_environment(p: &UnitPaths) -> Vec<(String, String)> {
     let pu_home = p.home.join(".pu");
     vec![
@@ -364,6 +478,7 @@ pub fn bridge_environment(p: &UnitPaths) -> Vec<(String, String)> {
 /// A path that can go into a unit file verbatim: absolute UTF-8 with no
 /// control characters (a newline would inject directives) and no backslash
 /// (line continuation and escapes). Anything else is refused, not escaped.
+#[cfg_attr(windows, allow(dead_code))]
 fn unit_path(path: &Path) -> Result<&str, CliError> {
     path.to_str()
         .filter(|text| {
@@ -379,6 +494,7 @@ fn unit_path(path: &Path) -> Result<&str, CliError> {
 
 /// `Restart=on-failure`: an idle `runtime.stop` (exit 0) stays stopped.
 /// `KillMode=mixed`: SIGTERM reaches the bridge, which drains its Pi child.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn systemd_unit(p: &UnitPaths) -> Result<String, CliError> {
     for path in [p.payload, p.state, p.home, p.pu] {
         unit_path(path)?;
@@ -426,6 +542,7 @@ WantedBy=default.target
     ))
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub fn unit_file() -> Result<PathBuf, CliError> {
     Ok(std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -433,16 +550,6 @@ pub fn unit_file() -> Result<PathBuf, CliError> {
         .unwrap_or(home()?.join(".config"))
         .join("systemd/user")
         .join(UNIT))
-}
-
-/// Write the unit atomically as 0644, whatever the umask, into a directory
-/// no other user can write: the unit runs as the owner on its next start.
-#[cfg(windows)]
-pub fn write_unit_file(_file: &Path, _unit: &str) -> Result<(), CliError> {
-    // WIN-9.2: Windows has no systemd unit; replace with the Windows service story.
-    Err(CliError::Other(
-        "Point Guard phone hosting is not available on Windows yet".into(),
-    ))
 }
 
 /// Write the unit atomically as 0644, whatever the umask, into a directory
@@ -495,11 +602,13 @@ pub fn write_unit_file(file: &Path, unit: &str) -> Result<(), CliError> {
 
 /// Whether `systemctl is-active` reports a unit that may still be running.
 /// Anything but a clear stop (including an unreadable state) counts.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn unit_running(state: &str) -> bool {
     !matches!(state, "inactive" | "failed")
 }
 
 /// Payload directory an installed unit points at, if any.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn unit_payload(unit: &str) -> Option<PathBuf> {
     let line = unit.lines().find(|l| l.starts_with("ExecStart="))?;
     let rest = line.strip_prefix("ExecStart=\"")?;
@@ -509,6 +618,7 @@ pub fn unit_payload(unit: &str) -> Option<PathBuf> {
 
 /// `start` runs only the unit this `pu` would write: an older payload left
 /// in place after upgrading `pu` would break the version lockstep.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn check_startable(
     installed: Option<&str>,
     expected: &str,
@@ -644,7 +754,7 @@ pub fn chat_level(device: &Value) -> &'static str {
 mod tests {
     use super::*;
 
-    // POSIX paths and systemd units: Linux-only (Windows: WIN-9.2).
+    // POSIX paths and systemd units: Linux-only (Windows: phone_windows.rs).
     #[cfg(unix)]
     #[test]
     fn given_xdg_state_should_use_it_only_when_absolute() {
@@ -678,14 +788,22 @@ mod tests {
     }
 
     #[test]
-    fn given_manifest_should_require_linux_layout_and_matching_version() {
-        let ok = json!({"schemaVersion": 1, "layout": "linux", "puVersion": "1.2.3"});
+    fn given_manifest_should_require_this_platforms_layout_and_matching_version() {
+        let ok = json!({"schemaVersion": 1, "layout": LAYOUT, "puVersion": "1.2.3"});
         assert!(check_manifest(&ok, "1.2.3").is_ok());
         let err = check_manifest(&ok, "1.2.4").unwrap_err().to_string();
         assert!(err.contains("1.2.3") && err.contains("1.2.4"), "{err}");
         assert!(
             check_manifest(
                 &json!({"schemaVersion": 1, "layout": "mac", "puVersion": "1.2.3"}),
+                "1.2.3"
+            )
+            .is_err()
+        );
+        let other = if cfg!(windows) { "linux" } else { "windows" };
+        assert!(
+            check_manifest(
+                &json!({"schemaVersion": 1, "layout": other, "puVersion": "1.2.3"}),
                 "1.2.3"
             )
             .is_err()
@@ -710,7 +828,7 @@ mod tests {
         })
     }
 
-    // POSIX paths and systemd units: Linux-only (Windows: WIN-9.2).
+    // POSIX paths and systemd units: Linux-only (Windows: phone_windows.rs).
     #[cfg(unix)]
     #[test]
     fn given_home_should_write_an_unquoted_working_directory_and_refuse_injection() {
@@ -730,7 +848,7 @@ mod tests {
         }
     }
 
-    // POSIX paths and systemd units: Linux-only (Windows: WIN-9.2).
+    // POSIX paths and systemd units: Linux-only (Windows: phone_windows.rs).
     #[cfg(unix)]
     #[test]
     fn given_paths_should_render_hardened_unit_with_explicit_environment() {
@@ -753,7 +871,7 @@ mod tests {
         assert!(!unit.contains("PI_MOBILE_HOST="));
     }
 
-    // POSIX paths and systemd units: Linux-only (Windows: WIN-9.2).
+    // POSIX paths and systemd units: Linux-only (Windows: phone_windows.rs).
     #[cfg(unix)]
     #[test]
     fn given_unit_should_recover_the_payload_it_runs() {
@@ -817,7 +935,7 @@ mod tests {
         assert_eq!(mode(fresh.parent().unwrap()) & 0o022, 0);
     }
 
-    // POSIX paths and systemd units: Linux-only (Windows: WIN-9.2).
+    // POSIX paths and systemd units: Linux-only (Windows: phone_windows.rs).
     #[cfg(unix)]
     #[test]
     fn given_installed_unit_should_start_only_the_one_this_pu_writes() {

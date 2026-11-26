@@ -16,6 +16,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { Projection, boundedRows } from "./core.js";
+import { assertPrivate } from "./acl.js";
 export const root = fileURLToPath(new URL("../", import.meta.url));
 export const defaultTokenFile = path.join(
   os.homedir(),
@@ -183,7 +184,21 @@ export async function loadToken(file) {
       "Set PI_MOBILE_TOKEN_FILE to an owner-created secret file (at least 32 characters, chmod 600).",
     );
   const info = await lstat(file);
-  if (info.isSymbolicLink() || !info.isFile() || (typeof process.getuid === "function" && info.uid !== process.getuid()) || (info.mode & 0o077) !== 0 || info.size > 4096)
+  const unixPrivate = () =>
+    (typeof process.getuid !== "function" || info.uid === process.getuid()) &&
+    (info.mode & 0o077) === 0;
+  // Windows has no mode bits or uids: an owner-only ACL instead (acl.js).
+  const windowsPrivate = () =>
+    assertPrivate(file).then(
+      () => true,
+      () => false,
+    );
+  if (
+    info.isSymbolicLink() ||
+    !info.isFile() ||
+    info.size > 4096 ||
+    !(process.platform === "win32" ? await windowsPrivate() : unixPrivate())
+  )
     throw new Error(
       "Pairing secret must be a private file (chmod 600), at most 4 KiB.",
     );

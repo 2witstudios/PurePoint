@@ -12,10 +12,7 @@ import { terminalConnection } from "./terminals.js";
 import { serve } from "./network.js";
 import { openTrustStore } from "./trust.js";
 import { daemonEndpoint } from "./pipe-name.js";
-// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
-const unixOnly = {
-  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
-};
+import { privateTemp } from "./private-temp.js";
 
 async function until(fn) {
   for (let i = 0; i < 300; i++) {
@@ -25,7 +22,7 @@ async function until(fn) {
   throw new Error("Timed out waiting for requirement");
 }
 async function fixture(t) {
-  const home = await mkdtemp(path.join(os.tmpdir(), "pt-"));
+  const home = await privateTemp("pt-");
   const sockets = new Set();
   const attached = [];
   const inputs = [];
@@ -523,7 +520,7 @@ test("incremental UTF-8 preserves split bytes and resync discards old partial se
 });
 
 // Real TLS/WebSocket + Unix socket boundary, including durable trust changes.
-test("authenticated WebSocket fences inventory/input on immediate trust downgrade and revocation", unixOnly, async (t) => {
+test("authenticated WebSocket fences inventory/input on immediate trust downgrade and revocation", async (t) => {
   const f = await fixture(t);
   const trust = await openTrustStore({ directory: path.join(f.home, "trust") });
   t.after(() => trust.close());
@@ -665,6 +662,8 @@ test("authenticated WebSocket fences inventory/input on immediate trust downgrad
   assert.equal(trust.authorize(enrolled.credential), null);
   await revoke;
   assert.equal((await close)[0], 4001);
+  // Windows cannot remove a held lock file: release it before the fixture cleanup.
+  await trust.close();
 });
 
 test("isolated output bursts recover repeatedly after stable drained progress and own close is idempotent", async (t) => {

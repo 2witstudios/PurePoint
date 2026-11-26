@@ -31,8 +31,9 @@ export function platformDefaults({
       stateDirectory: path.win32.join(local, "PurePoint", "point-guard"),
       // Token-guarded named pipe; see ownerPipeName.
       adminTransport: "pipe",
-      // Like the Mac, the app discovers the address and passes PI_MOBILE_HOST.
-      discoverTailnet: false,
+      // Like the Mac, the app discovers the address and passes PI_MOBILE_HOST;
+      // headless `pu phone` asks the bridge to discover it, as on Linux.
+      discoverTailnet: env.POINT_GUARD_DISCOVER_TAILNET === "1",
     };
   }
   return {

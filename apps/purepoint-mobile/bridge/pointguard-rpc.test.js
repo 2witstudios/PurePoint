@@ -6,11 +6,9 @@ import path from "node:path";
 import { once } from "node:events";
 import { Rpc } from "./rpc.js";
 import { root, launchArguments } from "./setup.js";
-// Skipped on Windows (WIN-9.1): the relocated package does not yet register
-// `/pointguard info` there, and the proof runs a POSIX shell tool (`df -k .`).
-const unixOnly =
-  process.platform === "win32" &&
-  "relocated Pi package proof does not pass on Windows yet (Unix only)";
+// Windows: the bash tool step (`df -k .`) needs a POSIX shell, so only it is
+// skipped there; personal files are checked by ACL (support/pointguard/lib).
+const win32 = process.platform === "win32";
 
 const provider = `
 import { createAssistantMessageEventStream, fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
@@ -52,7 +50,7 @@ export default function(pi) {
 
 test(
   "exact Pi 1.1.0 relocated RPC loads packages, refreshes sections across reload/resume/compaction and preserves native tools/UI/cancel",
-  { timeout: 120000, skip: unixOnly },
+  { timeout: win32 ? 240000 : 120000 },
   async (t) => {
     const folder = await mkdtemp(
       path.join(os.tmpdir(), "pointguard-rpc-proof-"),
@@ -108,6 +106,8 @@ test(
     const launch = () => {
       const child = new Rpc(process.execPath, args, cwd, {
         HOME: home,
+        USERPROFILE: home, // Windows os.homedir()
+        ...(win32 ? { SystemRoot: process.env.SystemRoot } : {}),
         PATH: "/usr/bin:/bin",
         PI_CODING_AGENT_DIR: path.join(home, ".pi/agent"),
         PI_SKIP_VERSION_CHECK: "1",
@@ -202,15 +202,17 @@ test(
       await readFile(path.join(cwd, "artifact.txt"), "utf8"),
       "verified artifact",
     );
-    await run("storage evidence");
-    assert.ok(
-      events.some(
-        (e) =>
-          e.type === "tool_execution_end" &&
-          e.toolName === "bash" &&
-          !e.isError,
-      ),
-    );
+    if (!win32) {
+      await run("storage evidence");
+      assert.ok(
+        events.some(
+          (e) =>
+            e.type === "tool_execution_end" &&
+            e.toolName === "bash" &&
+            !e.isError,
+        ),
+      );
+    }
     const first = await report();
     assert.deepEqual(first.tools, ["read", "bash", "edit", "write"]);
     // /pointguard info is display-only; it must never reach the model.

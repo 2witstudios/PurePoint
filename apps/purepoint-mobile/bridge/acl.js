@@ -104,6 +104,58 @@ export function isPrivateAcl(acl, userSid, { directory = false } = {}) {
   );
 }
 
+/** SDDL rights that only read, list or execute; anything else may write. */
+const READ_RIGHTS = new Set(["FR", "FX", "GR", "GX", "RC", "LC", "RP", "LO"]);
+/**
+ * Write, append, extended-attribute, delete-child, attribute, delete,
+ * WRITE_DAC, WRITE_OWNER, GENERIC_WRITE and GENERIC_ALL bits.
+ */
+const WRITE_MASK =
+  0x2 |
+  0x4 |
+  0x10 |
+  0x40 |
+  0x100 |
+  0x10000 |
+  0x40000 |
+  0x80000 |
+  0x40000000 |
+  0x10000000;
+
+/** Whether an ACE's rights string (alias list or hex mask) grants any write. */
+export function grantsWrite(rights) {
+  if (/^0x[0-9a-f]+$/i.test(rights))
+    return (Number.parseInt(rights, 16) & WRITE_MASK) !== 0;
+  const parts = String(rights).match(/[A-Z]{2}/g);
+  return (
+    !parts ||
+    parts.join("") !== rights ||
+    parts.some((r) => !READ_RIGHTS.has(r))
+  );
+}
+
+/**
+ * The Windows meaning of "no group or other write" (`mode & 0o022 === 0`):
+ * only the user, SYSTEM or Administrators may change the entry; anyone may
+ * still be allowed to read it. Inherit-only entries do not apply to it.
+ */
+export function writableByOthers(acl, userSid) {
+  return acl.aces.some(
+    (a) =>
+      a.type === "A" &&
+      !a.flags.includes("IO") &&
+      grantsWrite(a.rights) &&
+      ![userSid, SYSTEM_SID, "S-1-5-32-544"].includes(a.sid),
+  );
+}
+
+export async function assertNotWritableByOthers(target) {
+  const [acl, sid] = await Promise.all([readAcl(target), currentUserSid()]);
+  if (writableByOthers(acl, sid))
+    throw new AclError("Point Guard data must not be writable by other users.");
+  return acl;
+}
+
 export async function assertPrivate(target, { directory = false } = {}) {
   const [acl, sid] = await Promise.all([readAcl(target), currentUserSid()]);
   if (!isPrivateAcl(acl, sid, { directory }))

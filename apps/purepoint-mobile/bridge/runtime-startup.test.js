@@ -15,15 +15,14 @@ import path from "node:path";
 import { acquirePrivateLock } from "./lock-helper.js";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
-const unixOnly = {
-  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
+import { privateTemp } from "./private-temp.js";
+// Skipped on Windows: POSIX signals, /usr/bin/true and file modes (Unix only).
+const posixOnly = {
+  skip: process.platform === "win32" && "POSIX signals, /usr/bin/true and file modes (Unix only)",
 };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-test("given cancel during fresh owned startup should release lock and attribute sanitized failure", unixOnly, async () => {
-  const folder = await mkdtemp(
-    path.join(os.tmpdir(), "pointguard-start-cancel-"),
-  );
+test("given cancel during fresh owned startup should release lock and attribute sanitized failure", posixOnly, async () => {
+  const folder = await privateTemp("pointguard-start-cancel-");
   let child;
   try {
     const home = path.join(folder, "home");
@@ -114,10 +113,8 @@ test("given cancel during fresh owned startup should release lock and attribute 
   }
 });
 
-test("given nonprivate owner capability should identify credential recovery rather than cwd", unixOnly, async () => {
-  const folder = await mkdtemp(
-    path.join(os.tmpdir(), "pointguard-capability-"),
-  );
+test("given nonprivate owner capability should identify credential recovery rather than cwd", posixOnly, async () => {
+  const folder = await privateTemp("pointguard-capability-");
   try {
     const state = path.join(folder, "state");
     await mkdir(state, { mode: 0o700 });
