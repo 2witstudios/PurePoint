@@ -704,7 +704,10 @@ fn command_line(program: &Path, args: &[String], env: &[(String, String)]) -> io
             inner.push(' ');
             inner.push_str(&quote_cmd_arg(arg)?);
         }
-        return Ok(format!("\"{}\" /d /s /c \"{inner}\"", comspec.display()));
+        return Ok(format!(
+            "\"{}\" /d /v:off /s /c \"{inner}\"",
+            comspec.display()
+        ));
     }
     // A script for cmd.exe itself (`shell_command_args`): cmd parses its own
     // command line, so the script goes inside one pair of quotes as written
@@ -719,7 +722,10 @@ fn command_line(program: &Path, args: &[String], env: &[(String, String)]) -> io
         if script.contains(['\r', '\n', '\0']) {
             return Err(invalid_arg("a cmd.exe script contains a newline or NUL"));
         }
-        return Ok(format!("\"{}\" /d /s /c \"{script}\"", program.display()));
+        return Ok(format!(
+            "\"{}\" /d /v:off /s /c \"{script}\"",
+            program.display()
+        ));
     }
     msvc_command_line(program, args)
 }
@@ -768,7 +774,7 @@ fn quote_msvc_arg(arg: &str) -> io::Result<String> {
     Ok(out)
 }
 
-/// One argument on a `cmd.exe /d /s /c "…"` line (WIN-1.1 section 3). `"`
+/// One argument on a `cmd.exe /d /v:off /s /c "…"` line (WIN-1.1 section 3). `"`
 /// becomes `""` (never CRT-style `\"`, which is injectable) and `%` becomes
 /// `%%cd:~,%`, which expands to nothing, so `%PATH%` arrives literally.
 fn quote_cmd_arg(arg: &str) -> io::Result<String> {
@@ -918,7 +924,7 @@ mod tests {
         assert_eq!(
             line,
             format!(
-                "\"C:\\Windows\\system32\\cmd.exe\" /d /s /c \"\"{}\" \"a b\" \"x&y\"\"",
+                "\"C:\\Windows\\system32\\cmd.exe\" /d /v:off /s /c \"\"{}\" \"a b\" \"x&y\"\"",
                 shim.display()
             )
         );
@@ -932,7 +938,7 @@ mod tests {
         let args: Vec<String> = ["/d", "/s", "/c", script].map(String::from).into();
         assert_eq!(
             command_line(cmd, &args, &[]).unwrap(),
-            format!("\"{}\" /d /s /c \"{script}\"", cmd.display())
+            format!("\"{}\" /d /v:off /s /c \"{script}\"", cmd.display())
         );
         let two = ["/d", "/s", "/c", "a\r\nb"].map(String::from);
         assert!(command_line(cmd, &two, &[]).is_err());
@@ -1235,6 +1241,31 @@ mod tests {
             "{text}"
         );
         assert!(!text.lines().any(|l| l.trim() == "INJECTED"), "{text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn given_bang_variable_argument_should_reach_cmd_shim_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("bang.cmd");
+        std::fs::write(
+            &shim,
+            "@echo bang-ran [%1] [%2]
+",
+        )
+        .unwrap();
+        let line = command_line(&shim, &["!PATH!".into()], &[]).unwrap();
+        assert!(line.contains(" /d /v:off /s /c "), "{line}");
+        let handle = NativePtyHost::new()
+            .spawn(config(
+                &shim.display().to_string(),
+                &["!PATH!", "x!y!z"],
+                dir.path(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(wait_exit(&handle).await, Some(0));
+        let text = screen_text(&handle);
+        assert!(text.contains(r#"bang-ran ["!PATH!"] ["x!y!z"]"#), "{text}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
