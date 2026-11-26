@@ -1,11 +1,11 @@
 # PurePoint
 
-An agent-first coding workspace for macOS.
+An agent-first coding workspace for macOS and Windows.
 
 [![CI](https://github.com/2witstudios/purepoint/actions/workflows/rust.yml/badge.svg)](https://github.com/2witstudios/purepoint/actions/workflows/rust.yml)
 [![macOS](https://github.com/2witstudios/purepoint/actions/workflows/macos.yml/badge.svg)](https://github.com/2witstudios/purepoint/actions/workflows/macos.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
+![Platform: macOS | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 
 ![PurePoint — 10 agents streaming across 10 worktrees](docs/images/single-terminal-with-many-worktrees-in-sidebar.jpg)
 
@@ -53,8 +53,8 @@ Diffs update live as agents work — file by file, worktree by worktree. You alw
 
 Three steps. That's it.
 
-1. **Download** the latest `.dmg` from [Releases](https://github.com/2witstudios/purepoint/releases). Drag to Applications.
-2. **Add to PATH** — the app installs the `pu` CLI to `~/.pu/bin/` on first launch:
+1. **Download** the latest `.dmg` from [Releases](https://github.com/2witstudios/purepoint/releases) and drag it to Applications. On Windows, run `PurePoint_<version>_x64-setup.exe` instead (see [PurePoint on Windows](docs/guide/windows.md)).
+2. **Add to PATH** — the app installs the `pu` CLI to `~/.pu/bin/` on first launch (on Windows it adds `%USERPROFILE%\.pu\bin` to your user PATH for you):
    ```sh
    export PATH="$HOME/.pu/bin:$PATH"
    ```
@@ -67,7 +67,7 @@ Three steps. That's it.
 <details>
 <summary>Build from source</summary>
 
-Prerequisites: macOS, Rust 1.89+, Xcode, [just](https://github.com/casey/just)
+Prerequisites: macOS, Rust 1.89+, Xcode, [just](https://github.com/casey/just). For Windows, see [Build from source on Windows](docs/guide/windows.md#install).
 
 ```sh
 git clone https://github.com/2witstudios/purepoint.git
@@ -134,12 +134,13 @@ Run `pu --help` for full usage.
 | [Templates & Definitions](https://purepoint.dev/docs/guide/workflows/templates-and-definitions) | Prompts, agent defs, swarm defs |
 | [Scheduling & Triggers](https://purepoint.dev/docs/guide/workflows/scheduling-and-triggers) | Schedules, triggers, git hooks |
 | [Linux Server](https://purepoint.dev/docs/guide/linux-server) | Run the daemon on a headless Linux server |
+| [Windows](docs/guide/windows.md) | Install, daemon autostart, agents and troubleshooting on Windows |
 | [Troubleshooting](https://purepoint.dev/docs/guide/troubleshooting) | Common issues and solutions |
 | [Contributing](https://purepoint.dev/docs/contributing/overview) | Build, test, code style, architecture |
 
 ## Current Status
 
-The desktop app is macOS only, with a companion iPhone/iPad app for watching and steering agents remotely. The daemon and CLI also run on Linux servers; see [Run PurePoint on a Linux server](docs/guide/linux-server.md).
+The desktop app runs on macOS and Windows 11, with a companion iPhone/iPad app for watching and steering agents remotely. On Windows the daemon and CLI run natively, with no WSL needed; see [PurePoint on Windows](docs/guide/windows.md). The daemon and CLI also run on Linux servers; see [Run PurePoint on a Linux server](docs/guide/linux-server.md).
 
 PurePoint is early and under active development — the core works, but some features are still in design. See [`docs/`](docs/) for specs and architecture.
 
