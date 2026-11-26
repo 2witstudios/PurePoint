@@ -16,15 +16,115 @@ use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{self, ForkResult, Pid};
 use tokio::sync::watch;
 
-/// Stand-in for the PTY master handle so signatures shared with Unix compile.
-// WIN-3.2: replace with the ConPTY handle pair (input/output pipes + HPCON).
-#[cfg(windows)]
-#[derive(Debug)]
-pub struct OwnedFd {
-    _private: (),
+use crate::output_buffer::OutputBuffer;
+
+/// The agent's terminal: a Unix PTY master or a Windows pseudoconsole.
+///
+/// Every method blocks, so async callers run them on the blocking pool. No
+/// code outside this module touches the underlying fd or handle.
+pub trait PtyHandle: Send + Sync {
+    /// Write all of `data` to the terminal's input.
+    fn write(&self, data: &[u8]) -> std::io::Result<()>;
+    /// Set the terminal size.
+    fn resize(&self, cols: u16, rows: u16) -> std::io::Result<()>;
+    /// The current `(cols, rows)`, if it can be read.
+    fn size(&self) -> Option<(u16, u16)>;
+    /// A reader over the terminal's output. It returns `Ok(0)` at EOF.
+    fn reader(&self) -> std::io::Result<Box<dyn std::io::Read + Send>>;
+    /// Process id of the terminal's root process.
+    fn pid(&self) -> u32;
 }
 
-use crate::output_buffer::OutputBuffer;
+/// Shared handle to an agent's terminal, cheap to clone out of the session lock.
+pub type Pty = Arc<dyn PtyHandle>;
+
+/// Unix PTY master.
+#[cfg(unix)]
+struct UnixPty {
+    master: Arc<OwnedFd>,
+    pid: u32,
+}
+
+#[cfg(unix)]
+impl PtyHandle for UnixPty {
+    fn write(&self, data: &[u8]) -> std::io::Result<()> {
+        let fd = self.master.as_raw_fd();
+        let mut offset = 0;
+        while offset < data.len() {
+            let n = unsafe {
+                libc::write(fd, data[offset..].as_ptr() as *const _, data.len() - offset)
+            };
+            if n < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::Interrupted {
+                    continue; // EINTR — retry
+                }
+                return Err(err);
+            }
+            offset += n as usize;
+        }
+        Ok(())
+    }
+
+    fn resize(&self, cols: u16, rows: u16) -> std::io::Result<()> {
+        let winsize = nix::pty::Winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let ret = unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &winsize) };
+        if ret < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn size(&self) -> Option<(u16, u16)> {
+        let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+        let ok = unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) } == 0;
+        ok.then_some((ws.ws_col, ws.ws_row))
+    }
+
+    fn reader(&self) -> std::io::Result<Box<dyn std::io::Read + Send>> {
+        // Holding the Arc keeps the master open for the reader's lifetime.
+        Ok(Box::new(FdReader(self.master.clone())))
+    }
+
+    fn pid(&self) -> u32 {
+        self.pid
+    }
+}
+
+#[cfg(unix)]
+struct FdReader(Arc<OwnedFd>);
+
+#[cfg(unix)]
+impl std::io::Read for FdReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = unsafe { libc::read(self.0.as_raw_fd(), buf.as_mut_ptr() as *mut _, buf.len()) };
+        if n < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(n as usize)
+        }
+    }
+}
+
+/// Drain `reader` into `buffer` until EOF or a read error (EINTR is retried).
+#[cfg_attr(windows, allow(dead_code))]
+fn pump_output(mut reader: Box<dyn std::io::Read + Send>, buffer: &OutputBuffer) {
+    let mut tmp = [0u8; 4096];
+    loop {
+        match reader.read(&mut tmp) {
+            Ok(0) => break, // EOF
+            Ok(n) => buffer.write(&tmp[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue, // EINTR — retry
+            Err(_) => break,                                                   // Real error
+        }
+    }
+}
 
 /// Snapshot the system process tree as a parent→children map by running
 /// `ps -ax -o pid,ppid`. Returns an empty map on failure (graceful
@@ -126,13 +226,13 @@ pub struct AgentHandle {
     /// The agent draws a Claude-style input box, so text sent to it goes
     /// through screen-confirmed delivery (`crate::delivery`).
     pub screen_aware: bool,
-    master_fd: Arc<OwnedFd>,
+    pty: Pty,
 }
 
 impl AgentHandle {
-    /// Clone the master fd Arc for use outside the session lock.
-    pub fn master_fd(&self) -> Arc<OwnedFd> {
-        self.master_fd.clone()
+    /// Clone the terminal handle for use outside the session lock.
+    pub fn pty(&self) -> Pty {
+        self.pty.clone()
     }
 }
 
@@ -277,31 +377,15 @@ impl NativePtyHost {
                 let pid = child.as_raw() as u32;
                 let buffer = Arc::new(OutputBuffer::new());
                 buffer.resize_terminal(config.rows, config.cols);
-                let master_fd = Arc::new(pty.master);
+                let master: Pty = Arc::new(UnixPty {
+                    master: Arc::new(pty.master),
+                    pid,
+                });
 
                 // Spawn reader task: master fd → output buffer
-                // Clone Arc to keep OwnedFd alive for the task's lifetime
                 let read_buf = buffer.clone();
-                let fd_holder = master_fd.clone();
-                tokio::task::spawn_blocking(move || {
-                    let read_fd = fd_holder.as_raw_fd();
-                    let mut tmp = [0u8; 4096];
-                    loop {
-                        let n =
-                            unsafe { libc::read(read_fd, tmp.as_mut_ptr() as *mut _, tmp.len()) };
-                        if n > 0 {
-                            read_buf.write(&tmp[..n as usize]);
-                        } else if n == 0 {
-                            break; // EOF
-                        } else {
-                            let err = std::io::Error::last_os_error();
-                            if err.kind() == std::io::ErrorKind::Interrupted {
-                                continue; // EINTR — retry
-                            }
-                            break; // Real error
-                        }
-                    }
-                });
+                let reader = master.reader()?;
+                tokio::task::spawn_blocking(move || pump_output(reader, &read_buf));
 
                 // Spawn wait task: waitpid → exit channel
                 let child_pid = child;
@@ -333,7 +417,7 @@ impl NativePtyHost {
                     started_at: chrono::Utc::now(),
                     pid,
                     output_buffer: buffer,
-                    master_fd,
+                    pty: master,
                     exit_rx,
                     screen_aware: false,
                 })
@@ -418,60 +502,23 @@ impl NativePtyHost {
         handle: &AgentHandle,
         data: &[u8],
     ) -> Result<(), std::io::Error> {
-        self.write_to_fd(&handle.master_fd, data).await
+        self.write_to_pty(&handle.pty, data).await
     }
 
-    /// Write to a PTY fd directly (for use without holding a session lock).
-    #[cfg(windows)]
-    pub async fn write_to_fd(
-        &self,
-        _fd_holder: &Arc<OwnedFd>,
-        _data: &[u8],
-    ) -> Result<(), std::io::Error> {
-        // WIN-3.2: write to the ConPTY input pipe.
-        Err(crate::os::unsupported("PTY write"))
-    }
-
-    /// Write to a PTY fd directly (for use without holding a session lock).
-    #[cfg(unix)]
-    pub async fn write_to_fd(
-        &self,
-        fd_holder: &Arc<OwnedFd>,
-        data: &[u8],
-    ) -> Result<(), std::io::Error> {
-        let fd_holder = fd_holder.clone();
+    /// Write to a PTY directly (for use without holding a session lock).
+    pub async fn write_to_pty(&self, pty: &Pty, data: &[u8]) -> Result<(), std::io::Error> {
+        let pty = pty.clone();
         let data = data.to_vec();
-        tokio::task::spawn_blocking(move || {
-            let fd = fd_holder.as_raw_fd();
-            let mut offset = 0;
-            while offset < data.len() {
-                let n = unsafe {
-                    libc::write(fd, data[offset..].as_ptr() as *const _, data.len() - offset)
-                };
-                if n < 0 {
-                    let err = std::io::Error::last_os_error();
-                    if err.kind() == std::io::ErrorKind::Interrupted {
-                        continue; // EINTR — retry
-                    }
-                    return Err(err);
-                }
-                offset += n as usize;
-            }
-            Ok(())
-        })
-        .await
-        .map_err(std::io::Error::other)?
+        tokio::task::spawn_blocking(move || pty.write(&data))
+            .await
+            .map_err(std::io::Error::other)?
     }
 
-    /// Write data to a PTY fd in small chunks (simulating typing), without
+    /// Write data to a PTY in small chunks (simulating typing), without
     /// pressing Enter. Chunking avoids triggering TUI paste-mode detection.
-    pub async fn write_chunked(
-        &self,
-        fd_holder: &Arc<OwnedFd>,
-        data: &[u8],
-    ) -> Result<(), std::io::Error> {
+    pub async fn write_chunked(&self, pty: &Pty, data: &[u8]) -> Result<(), std::io::Error> {
         for chunk in data.chunks(CHUNK_SIZE) {
-            self.write_to_fd(fd_holder, chunk).await?;
+            self.write_to_pty(pty, chunk).await?;
             tokio::time::sleep(Duration::from_millis(CHUNK_DELAY_MS)).await;
         }
         Ok(())
@@ -480,15 +527,11 @@ impl NativePtyHost {
     /// Write data in small chunks then submit with Enter (`\r`) after a fixed
     /// delay. Unconfirmed: it never checks what the TUI did with the bytes, so
     /// agents with a readable input box use `crate::delivery::deliver_prompt`.
-    pub async fn write_chunked_submit(
-        &self,
-        fd_holder: &Arc<OwnedFd>,
-        data: &[u8],
-    ) -> Result<(), std::io::Error> {
-        self.write_chunked(fd_holder, data).await?;
+    pub async fn write_chunked_submit(&self, pty: &Pty, data: &[u8]) -> Result<(), std::io::Error> {
+        self.write_chunked(pty, data).await?;
         // Give the input widget time to process buffered bytes before submit.
         tokio::time::sleep(Duration::from_millis(PRE_SUBMIT_DELAY_MS)).await;
-        self.write_to_fd(fd_holder, b"\r").await
+        self.write_to_pty(pty, b"\r").await
     }
 
     pub async fn resize(
@@ -497,47 +540,15 @@ impl NativePtyHost {
         cols: u16,
         rows: u16,
     ) -> Result<(), std::io::Error> {
-        self.resize_fd(&handle.master_fd, cols, rows).await
+        self.resize_pty(&handle.pty, cols, rows).await
     }
 
-    /// Resize a PTY fd directly (for use without holding a session lock).
-    #[cfg(windows)]
-    pub async fn resize_fd(
-        &self,
-        _fd_holder: &Arc<OwnedFd>,
-        _cols: u16,
-        _rows: u16,
-    ) -> Result<(), std::io::Error> {
-        // WIN-3.2: ResizePseudoConsole.
-        Err(crate::os::unsupported("PTY resize"))
-    }
-
-    /// Resize a PTY fd directly (for use without holding a session lock).
-    #[cfg(unix)]
-    pub async fn resize_fd(
-        &self,
-        fd_holder: &Arc<OwnedFd>,
-        cols: u16,
-        rows: u16,
-    ) -> Result<(), std::io::Error> {
-        let fd_holder = fd_holder.clone();
-        let winsize = nix::pty::Winsize {
-            ws_row: rows,
-            ws_col: cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        tokio::task::spawn_blocking(move || {
-            let fd = fd_holder.as_raw_fd();
-            let ret = unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &winsize) };
-            if ret < 0 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
-        })
-        .await
-        .map_err(std::io::Error::other)?
+    /// Resize a PTY directly (for use without holding a session lock).
+    pub async fn resize_pty(&self, pty: &Pty, cols: u16, rows: u16) -> Result<(), std::io::Error> {
+        let pty = pty.clone();
+        tokio::task::spawn_blocking(move || pty.resize(cols, rows))
+            .await
+            .map_err(std::io::Error::other)?
     }
 }
 
@@ -746,7 +757,7 @@ mod tests {
             .unwrap();
 
         // when — send text via chunked submit (simulates `pu send agent "text"`)
-        host.write_chunked_submit(&handle.master_fd, b"hello_chunked")
+        host.write_chunked_submit(&handle.pty, b"hello_chunked")
             .await
             .unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -785,9 +796,7 @@ mod tests {
             .unwrap();
 
         // when — chunked submit with empty data (just Enter)
-        host.write_chunked_submit(&handle.master_fd, b"")
-            .await
-            .unwrap();
+        host.write_chunked_submit(&handle.pty, b"").await.unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // then — should not error (Enter is still sent)

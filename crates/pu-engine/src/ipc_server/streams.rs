@@ -20,7 +20,7 @@ pub(super) async fn handle_attach_stream(
     replay: Option<pu_core::protocol::Replay>,
     client_id: Option<String>,
 ) -> bool {
-    let (buffer, master_fd, mut exit_rx) = match engine.get_attach_handles(agent_id).await {
+    let (buffer, pty, mut exit_rx) = match engine.get_attach_handles(agent_id).await {
         Some(handles) => handles,
         None => {
             let _ = write_response(
@@ -50,7 +50,7 @@ pub(super) async fn handle_attach_stream(
         attachment,
         &mut size_rx,
         buffer,
-        master_fd,
+        pty,
         &mut exit_rx,
     )
     .await;
@@ -70,9 +70,7 @@ async fn run_attachment(
     attachment: u64,
     size_rx: &mut tokio::sync::broadcast::Receiver<crate::engine::PtySize>,
     buffer: std::sync::Arc<crate::output_buffer::OutputBuffer>,
-    #[cfg(unix)] master_fd: std::sync::Arc<std::os::fd::OwnedFd>,
-    // WIN-3.2: the ConPTY handle replaces the stand-in.
-    #[cfg(windows)] master_fd: std::sync::Arc<crate::pty_manager::OwnedFd>,
+    pty: crate::pty_manager::Pty,
     exit_rx: &mut tokio::sync::watch::Receiver<Option<i32>>,
 ) -> bool {
     let mut watcher = buffer.subscribe();
@@ -136,7 +134,7 @@ async fn run_attachment(
                 };
                 match parse_stream_request(&line) {
                     Some(Request::Input { data, .. }) => {
-                        engine.write_to_pty(&master_fd, &data).await.ok();
+                        engine.write_to_pty(&pty, &data).await.ok();
                     }
                     Some(Request::Resize { cols, rows, .. }) => {
                         engine.attachment_resize(agent_id, attachment, cols, rows, false).await;

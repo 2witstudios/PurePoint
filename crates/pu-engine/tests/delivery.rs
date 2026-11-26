@@ -75,7 +75,7 @@ async fn deliver(f: &Fake, text: &str) -> Result<(), String> {
     };
     deliver_prompt(
         &f.host,
-        &f.handle.master_fd(),
+        &f.handle.pty(),
         &f.handle.output_buffer,
         text,
         &opts,
@@ -147,7 +147,7 @@ async fn given_input_box_that_never_appears_should_fail_loudly() {
     // when
     let r = deliver_prompt(
         &f.host,
-        &f.handle.master_fd(),
+        &f.handle.pty(),
         &f.handle.output_buffer,
         LONG_PROMPT,
         &opts,

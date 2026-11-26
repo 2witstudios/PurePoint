@@ -388,7 +388,7 @@ impl Engine {
                 .insert(agent_id.clone(), prompt_bytes.clone());
 
             let output_buffer = handle.output_buffer.clone();
-            let master_fd = handle.master_fd();
+            let pty = handle.pty();
             let mut exit_rx = handle.exit_rx.clone();
             let pty_host = NativePtyHost::new();
             let aid = agent_id.clone();
@@ -420,7 +420,7 @@ impl Engine {
                 }
 
                 // Inject the prompt
-                if inject_initial_prompt(&pty_host, &master_fd, &aid, &prompt_bytes).await {
+                if inject_initial_prompt(&pty_host, &pty, &aid, &prompt_bytes).await {
                     tracing::debug!(agent_id = %aid, "prompt injected at spawn time");
                 } else {
                     tracing::warn!(agent_id = %aid, "failed to inject prompt at spawn time");
