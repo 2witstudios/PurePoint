@@ -28,7 +28,12 @@ pub fn protocol_version() -> u32 {
 
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![files::index::file_index])
+        .invoke_handler(tauri::generate_handler![
+            files::index::file_index,
+            conversations::conversations_list,
+            conversations::conversation_snippets,
+            conversations::conversation_transcript,
+        ])
         .setup(|app| {
             #[cfg(windows)]
             {

@@ -28,7 +28,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/ChatMessage.swift` | 56 | `ui/src/model/content.ts` | WIN-8.16 | todo | — |
 | `Models/CommandPaletteItem.swift` | 180 | `ui/src/model/commandPalette.ts` | WIN-6.6 | ported | — |
 | `Models/ContentBlockSplitter.swift` | 81 | `ui/src/model/content.ts` | WIN-8.16 | todo | — |
-| `Models/Conversation.swift` | 47 | `src-tauri/src/conversations/model.rs` | WIN-8.12 | todo | — |
+| `Models/Conversation.swift` | 47 | `src-tauri/src/conversations/model.rs` | WIN-8.12 | ported | — |
 | `Models/DiffModel.swift` | 180 | `ui/src/model/diff.ts` | WIN-6.0 | todo | — |
 | `Models/EditorTab.swift` | 142 | `ui/src/model/editorTab.ts` | WIN-8.5 | todo | — |
 | `Models/FileNode.swift` | 38 | `ui/src/model/fileNode.ts` | WIN-8.4 | todo | — |
@@ -44,7 +44,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/ProjectOrder.swift` | 67 | `ui/src/model/projectOrder.ts` | WIN-6.5 | ported | — |
 | `Models/ScheduleEvent.swift` | 231 | `ui/src/model/scheduleEvent.ts` | WIN-8.8 | todo | — |
 | `Models/SidebarItem.swift` | 136 | `ui/src/model/sidebarItem.ts` | WIN-6.5 | ported | — |
-| `Models/StreamEvent.swift` | 122 | `src-tauri/src/conversations/stream_event.rs` | WIN-8.12 | todo | — |
+| `Models/StreamEvent.swift` | 122 | `src-tauri/src/conversations/stream_event.rs` | WIN-8.12 | ported | — |
 | `Models/TriggerItem.swift` | 59 | `ui/src/model/triggerItem.ts` | WIN-8.9 | todo | — |
 | `Models/Workspace.swift` | 594 | `ui/src/model/workspace.ts`, `ui/src/model/paneSplit.ts` (the tree operations it uses) | WIN-6.1 | ported | — |
 | `Models/WorkspaceModel.swift` | 73 | `ui/src/model/workspaceModel.ts` | WIN-6.1 | ported | — |
@@ -63,9 +63,9 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/BundleSeal.swift` | 52 | `src-tauri/src/pointguard/seal.rs` | WIN-9.3 | todo | — |
 | `Services/CLIInstaller.swift` | 215 | `src-tauri/src/installer/cli.rs` | WIN-10.1 | todo | — |
 | `Services/CheckForUpdatesViewModel.swift` | 25 | `ui/src/services/updater.ts` (tauri-plugin-updater) | WIN-10.3 | todo | — |
-| `Services/ClaudeConversationIndex.swift` | 497 | `src-tauri/src/conversations/claude.rs` | WIN-8.12 | todo | — |
-| `Services/ClaudeProcess.swift` | 168 | `src-tauri/src/conversations/claude_process.rs` (only if WIN-8.12 finds a caller) | WIN-8.12 | todo | — |
-| `Services/CodexConversationIndex.swift` | 160 | `src-tauri/src/conversations/codex.rs` | WIN-8.12 | todo | — |
+| `Services/ClaudeConversationIndex.swift` | 497 | `src-tauri/src/conversations/claude.rs`, `src-tauri/src/conversations/util.rs`, `ui/src/services/conversations.ts` | WIN-8.12 | ported | — |
+| `Services/ClaudeProcess.swift` | 168 | — | — | excluded | DEC-11: legacy chat; WIN-8.12 grep found no caller outside `State/ChatState.swift` (which declares `ClaudeProcessProvider`) and `ClaudeProcessTests`, and nothing constructs it |
+| `Services/CodexConversationIndex.swift` | 160 | `src-tauri/src/conversations/codex.rs` | WIN-8.12 | ported | — |
 | `Services/DaemonAttachSession.swift` | 354 | `src-tauri/src/attach/session.rs` | WIN-5.4 | todo | — |
 | `Services/DaemonClient.swift` | 138 | `src-tauri/src/daemon/client.rs`, `ui/src/services/daemon.ts` | WIN-5.3 | todo | — |
 | `Services/DaemonConnection.swift` | 80 | `ui/src/services/daemonConnection.ts` | WIN-6.0 | todo | — |
@@ -89,7 +89,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/MarkdownHTMLRenderer.swift` | 245 | `ui/src/services/markdownHtml.ts` | WIN-8.6 | todo | — |
 | `Services/NSView+Constraints+iOS.swift` | 18 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/NSView+Constraints.swift` | 18 | `ui/src/views/shell/layout.css` (CSS layout replaces Auto Layout pinning) | WIN-7.1 | todo | — |
-| `Services/OpenCodeConversationIndex.swift` | 116 | `src-tauri/src/conversations/opencode.rs` | WIN-8.12 | todo | — |
+| `Services/OpenCodeConversationIndex.swift` | 116 | `src-tauri/src/conversations/opencode.rs` | WIN-8.12 | ported | — |
 | `Services/PiAttachmentImport.swift` | 72 | `ui/src/services/attachmentImport.ts` | WIN-9.7 | todo | — |
 | `Services/PiPairedMac+iOS.swift` | 225 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/PiPairingSecret.swift` | 41 | `src-tauri/src/secrets/pairing.rs` (Credential Manager) | WIN-9.7 | todo | — |
@@ -106,7 +106,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/SSH/SSHMachineSupport.swift` | 35 | — | — | excluded | Whole-file `#if os(iOS)`; Citadel SSH, replaced by system `ssh.exe` (DEC-5, DEC-11) |
 | `Services/ShellUtilities.swift` | 15 | `src-tauri/src/daemon/process.rs` (std::process) | WIN-6.0 | todo | — |
 | `Services/SyntaxHighlightManager.swift` | 513 | `ui/src/services/syntaxHighlight.ts` | WIN-8.5 | todo | — |
-| `Services/TranscriptParser.swift` | 222 | `src-tauri/src/conversations/transcript.rs` | WIN-8.12 | todo | — |
+| `Services/TranscriptParser.swift` | 222 | `src-tauri/src/conversations/transcript.rs` | WIN-8.12 | ported | — |
 | `Services/UnixSocketTransport.swift` | 204 | `src-tauri/src/daemon/client.rs` (pu-transport named pipe) | WIN-6.0 | todo | — |
 | `Services/WorkspaceService.swift` | 13 | `ui/src/services/workspaceService.ts` | WIN-6.0 | todo | — |
 | `Services/WorktreeWatcher.swift` | 69 | `src-tauri/src/watchers/worktree.rs` | WIN-5.6 | todo | — |
@@ -288,8 +288,8 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `ChannelComposerIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `ChatStateTests.swift` | all | — | — | excluded | Tests `ChatState` (DEC-11 legacy chat) |
 | `CitadelSSHLiveTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `ClaudeConversationIndexTests.swift` | all | `src-tauri/src/conversations/claude.rs` (#[cfg(test)]) | WIN-8.12 | todo | — |
-| `ClaudeProcessTests.swift` | all | `src-tauri/src/conversations/claude_process.rs` (#[cfg(test)]) | WIN-8.12 | todo | Dropped with `ClaudeProcess.swift` if WIN-8.12 confirms it is unused |
+| `ClaudeConversationIndexTests.swift` | all | `src-tauri/src/conversations/claude.rs` (#[cfg(test)]) | WIN-8.12 | ported | — |
+| `ClaudeProcessTests.swift` | all | — | — | excluded | Tests `ClaudeProcess` (DEC-11 legacy chat, no caller; WIN-8.12) |
 | `CommandPaletteNamingTests.swift` | all | `ui/src/model/commandPaletteNaming.test.ts` | WIN-6.6 | ported | — |
 | `CommandPaletteOpenCoordinatorTests.swift` | all | `ui/src/state/commandPaletteOpenCoordinator.test.ts` | WIN-6.6 | ported | — |
 | `CommandPaletteOrderTests.swift` | all | `ui/src/model/commandPaletteOrder.test.ts` | WIN-6.6 | ported | — |
@@ -337,10 +337,10 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `SidebarVisibilityTests.swift` | all | `ui/src/state/sidebarVisibilityStore.test.ts` | WIN-6.5 | ported | — |
 | `SpawnTargetResolverTests.swift` | all | `ui/src/state/spawnTargetResolver.test.ts` | WIN-6.6 | ported | — |
 | `StreamAccumulatorTests.swift` | all | `ui/src/state/streamAccumulator.test.ts` | WIN-8.16 | todo | — |
-| `StreamEventTests.swift` | all | `src-tauri/src/conversations/stream_event.rs` (#[cfg(test)]) | WIN-8.12 | todo | — |
+| `StreamEventTests.swift` | all | `src-tauri/src/conversations/stream_event.rs` (#[cfg(test)]) | WIN-8.12 | ported | — |
 | `TabCloseConfirmationIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `TerminalOutputFilterTests.swift` | all | `ui/src/views/terminal/outputFilter.test.ts` | WIN-7.3 | todo | Only filters xterm.js still needs |
-| `TranscriptParserTests.swift` | all | `src-tauri/src/conversations/transcript.rs` (#[cfg(test)]) | WIN-8.12 | todo | — |
+| `TranscriptParserTests.swift` | all | `src-tauri/src/conversations/transcript.rs` (#[cfg(test)]) | WIN-8.12 | ported | — |
 | `WorkingTreeDiffTests.swift` | all | `src-tauri/src/git/service.rs` (#[cfg(test)]) | WIN-8.1 | todo | — |
 | `WorkspaceFilesStateTests.swift` | all | `ui/src/state/workspaceFilesState.test.ts` | WIN-8.4 | todo | — |
 | `WorkspaceFixtureTests.swift` | all | `ui/src/model/workspacePersistence.test.ts` | WIN-6.3 | ported | Swift side of the shared `docs/reference/fixtures/workspaces/` golden files; run in Xcode by WIN-11.2 |
