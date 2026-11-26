@@ -390,7 +390,11 @@ pub(super) fn spawn(
     buffer: Arc<OutputBuffer>,
     exit_tx: watch::Sender<Option<i32>>,
 ) -> io::Result<Arc<ConPty>> {
-    let env = agent_environment(std::env::vars(), &config.env_remove, &config.env);
+    let env = agent_environment(
+        crate::win_env::daemon_env(),
+        &config.env_remove,
+        &config.env,
+    );
     let cwd = (!config.cwd.is_empty()).then(|| PathBuf::from(&config.cwd));
     let program = resolve_program(&config.command, &env, cwd.as_deref())?;
     let cmdline = command_line(&program, &config.args, &env)?;
@@ -591,7 +595,13 @@ fn env_get<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
 fn env_block(env: &[(String, String)]) -> io::Result<Vec<u16>> {
     let mut block = Vec::new();
     for (k, v) in env {
-        if k.is_empty() || k[1..].contains('=') || k.contains('\0') || v.contains('\0') {
+        // A leading `=` is legal (`=C:` drive cwds); one after it is not.
+        // `char_indices` keeps a multi-byte first character from splitting.
+        if k.is_empty()
+            || k.char_indices().skip(1).any(|(_, c)| c == '=')
+            || k.contains('\0')
+            || v.contains('\0')
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("invalid environment variable {k:?}"),
@@ -1035,6 +1045,15 @@ mod tests {
         let block = env_block(&out).unwrap();
         assert_eq!(&block[block.len() - 2..], &[0, 0]);
         assert_eq!(env_block(&[]).unwrap(), vec![0, 0]);
+    }
+
+    #[test]
+    fn given_multibyte_first_char_in_env_name_should_build_block_without_panicking() {
+        let block = env_block(&env(&[("ÄRGER", "ü"), ("=C:", r"C:\x")])).unwrap();
+        let text = String::from_utf16(&block).unwrap();
+        assert_eq!(text, "ÄRGER=ü\0=C:=C:\\x\0\0");
+        assert!(env_block(&env(&[("Ä=B", "x")])).is_err());
+        assert!(env_block(&env(&[("Ä", "a\0b")])).is_err());
     }
 
     #[test]
