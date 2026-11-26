@@ -8,6 +8,7 @@ use fs4::FileExt;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ChannelAuthor {
     pub id: String,
     pub name: String,
@@ -17,17 +18,21 @@ pub struct ChannelAuthor {
     pub branch: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ChannelReference {
     pub kind: String,
     pub value: String,
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
     pub label: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ChannelReaction {
     pub emoji: String,
     pub author_ids: Vec<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ChannelMessage {
     pub id: String,
     pub sequence: u64,

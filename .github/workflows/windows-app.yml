@@ -47,9 +47,21 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: apps/purepoint-windows/src-tauri -> target
+          workspaces: |
+            apps/purepoint-windows/src-tauri -> target
+            . -> target
           key: windows-app
       - run: npm ci --ignore-scripts
+      - name: Protocol TypeScript types are up to date
+        run: |
+          npm run gen:protocol
+          git diff --exit-code -- ui/src/protocol/generated
+          untracked="$(git status --porcelain --untracked-files=all -- ui/src/protocol/generated)"
+          if [ -n "$untracked" ]; then
+            echo "$untracked"
+            echo "::error::ui/src/protocol/generated is stale: run 'npm run gen:protocol' and commit the result."
+            exit 1
+          fi
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test

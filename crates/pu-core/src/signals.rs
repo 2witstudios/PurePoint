@@ -6,6 +6,7 @@ pub const SIGNAL_SCHEMA_VERSION: u32 = 1;
 macro_rules! signal_enum {
     ($name:ident { $($variant:ident),* $(,)? }) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
         #[serde(rename_all = "snake_case")]
         pub enum $name { $($variant,)* #[serde(other)] Unknown }
     };
@@ -36,6 +37,7 @@ signal_enum!(ObservationState {
 
 /// Bound by the owner at launch; cwd is deliberately absent as an identity key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SignalIdentity {
     pub agent_id: String,
     pub worktree_id: Option<String>,
@@ -46,6 +48,7 @@ pub struct SignalIdentity {
 
 /// True only after exact-request discovery/response/resolution is qualified on that platform.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AttentionActionability {
     #[serde(default)]
     pub macos: bool,
@@ -54,6 +57,7 @@ pub struct AttentionActionability {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PendingAttention {
     pub request_id: String,
     pub kind: AttentionKind,
@@ -65,6 +69,7 @@ pub struct PendingAttention {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SignalOutcome {
     pub kind: OutcomeKind,
     pub event_id: String,
@@ -73,6 +78,7 @@ pub struct SignalOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SignalEvidence {
     pub tool: String,
     pub tool_version: String,
@@ -82,6 +88,7 @@ pub struct SignalEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SignalObservation {
     pub state: ObservationState,
     pub last_received_at_ms: Option<i64>,
@@ -90,6 +97,7 @@ pub struct SignalObservation {
 
 /// Retained facts are diagnostic when observation is not current; clients must gate them first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SignalSnapshot {
     pub schema_version: u32,
     pub identity: SignalIdentity,

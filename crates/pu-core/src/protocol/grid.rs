@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 /// the workspace on screen in the app. `None` leaf ids mean "the focused pane", `None` tab ids
 /// mean "the target pane's active tab".
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "action", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", ts(optional_fields = nullable))]
 pub enum GridCommand {
     Split {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -16,6 +18,7 @@ pub enum GridCommand {
         #[serde(default)]
         leaf_id: Option<u32>,
         #[serde(default = "default_axis")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         axis: String,
     },
     Close {
@@ -85,6 +88,7 @@ pub enum GridCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_id: Option<u32>,
         #[serde(default = "default_axis")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         axis: String,
     },
 }

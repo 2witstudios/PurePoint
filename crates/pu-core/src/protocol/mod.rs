@@ -22,7 +22,10 @@ use indexmap::IndexMap;
 pub const PROTOCOL_VERSION: u32 = 14;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
+// Every `Option` field may be left out of a request (serde reads it as `None`).
+#[cfg_attr(feature = "ts", ts(optional_fields = nullable))]
 pub enum Request {
     Read {
         project_root: String,
@@ -42,6 +45,7 @@ pub enum Request {
         #[serde(default)]
         before: Option<u64>,
         #[serde(default = "default_channel_limit")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         limit: usize,
         #[serde(default)]
         query: Option<String>,
@@ -58,6 +62,7 @@ pub enum Request {
         #[serde(default)]
         parent_id: Option<String>,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         references: Vec<ChannelReference>,
     },
     ChannelEdit {
@@ -73,6 +78,7 @@ pub enum Request {
         agent_id: Option<String>,
         message_id: String,
         #[serde(default = "default_channel_emoji")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         emoji: String,
         active: bool,
     },
@@ -105,6 +111,7 @@ pub enum Request {
         project_root: String,
         /// Suspend the project's live agents instead of refusing the removal.
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         suspend_agents: bool,
     },
     /// Stream the registered project roots: once now, then on every change.
@@ -113,12 +120,14 @@ pub enum Request {
         project_root: String,
         prompt: String,
         #[serde(default = "crate::serde_defaults::default_agent_type")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         agent: String,
         #[serde(default)]
         name: Option<String>,
         #[serde(default)]
         base: Option<String>,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         root: bool,
         #[serde(default)]
         worktree: Option<String>,
@@ -126,13 +135,17 @@ pub enum Request {
         command: Option<String>,
         /// Launch the bare agent command, ignoring configured launch args (project and machine).
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         no_auto: bool,
         /// Additional CLI args appended after launch args (from --agent-args)
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         extra_args: Vec<String>,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         plan_mode: bool,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         no_trigger: bool,
         #[serde(default)]
         trigger: Option<String>,
@@ -149,6 +162,7 @@ pub enum Request {
         project_root: String,
         target: KillTarget,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         exclude: Vec<String>,
     },
     Suspend {
@@ -162,6 +176,7 @@ pub enum Request {
     Logs {
         agent_id: String,
         #[serde(default = "default_tail")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         tail: usize,
     },
     SpawnShell {
@@ -181,15 +196,18 @@ pub enum Request {
     Input {
         agent_id: String,
         #[serde(with = "encoding")]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         data: Vec<u8>,
         /// When true, the engine types data and submits it with Enter (\r).
         /// For agents with a readable input box (Claude) delivery is confirmed
         /// against the screen and failure returns `DELIVERY_FAILED`; other
         /// agents get chunked typing plus a delayed Enter.
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         submit: bool,
         #[serde(default)]
         // A dedicated operation socket: EOF cancels any remaining delivery steps.
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         cancel_on_disconnect: bool,
     },
     Resize {
@@ -268,9 +286,11 @@ pub enum Request {
         #[serde(default)]
         inline_prompt: Option<String>,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         tags: Vec<String>,
         scope: String,
         #[serde(default = "crate::serde_defaults::default_true")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         available_in_command_dialog: bool,
         #[serde(default)]
         icon: Option<String>,
@@ -294,12 +314,16 @@ pub enum Request {
         project_root: String,
         name: String,
         #[serde(default = "crate::serde_defaults::default_worktree_count")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         worktree_count: u32,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         worktree_template: String,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         roster: Vec<SwarmRosterEntryPayload>,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         include_terminal: bool,
         scope: String,
     },
@@ -313,6 +337,7 @@ pub enum Request {
         project_root: String,
         swarm_name: String,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         vars: std::collections::HashMap<String, String>,
     },
     // Schedule CRUD
@@ -327,14 +352,17 @@ pub enum Request {
         project_root: String,
         name: String,
         #[serde(default = "default_enabled")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         enabled: bool,
         recurrence: String,
         start_at: DateTime<Utc>,
         trigger: ScheduleTriggerPayload,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         target: String,
         scope: String,
         #[serde(default = "crate::serde_defaults::default_true")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         root: bool,
         #[serde(default)]
         agent_name: Option<String>,
@@ -381,12 +409,14 @@ pub enum Request {
             default,
             deserialize_with = "crate::types::launch_args_serde::deserialize"
         )]
+        #[cfg_attr(feature = "ts", ts(optional = nullable, type = "string | Array<string> | null"))]
         launch_args: Option<Vec<String>>,
         /// The project's command; left out keeps it, a blank string clears it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         command: Option<String>,
         /// Drop the agent from the project config.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         remove: bool,
     },
     // Trigger CRUD
@@ -405,6 +435,7 @@ pub enum Request {
         on: String,
         sequence: Vec<TriggerActionPayload>,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         variables: std::collections::HashMap<String, String>,
         scope: String,
     },
@@ -424,6 +455,7 @@ pub enum Request {
         #[serde(default)]
         worktree_id: Option<String>,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         stat: bool,
     },
     Pulse {
@@ -433,15 +465,19 @@ pub enum Request {
     FsList {
         path: String,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         recursive: bool,
         #[serde(default = "crate::serde_defaults::default_true")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         include_hidden: bool,
         #[serde(default = "default_fs_list_max_entries")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         max_entries: usize,
         /// Folder browsing for choosing a project root (the iPad's Open Project): lists
         /// only the subdirectories of any directory the daemon user can read, never
         /// files, non-recursively. `~` names the daemon user's home.
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         directories_only: bool,
     },
     FsStat {
@@ -450,6 +486,7 @@ pub enum Request {
     FsRead {
         path: String,
         #[serde(default = "default_fs_read_max_bytes")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         max_bytes: u64,
     },
     FsWrite {
@@ -458,6 +495,7 @@ pub enum Request {
         #[serde(default)]
         expected_modified_ms: Option<i64>,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         create_dirs: bool,
     },
     FsDelete {
@@ -466,6 +504,7 @@ pub enum Request {
     SubscribeFs {
         root: String,
         #[serde(default = "crate::serde_defaults::default_true")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         recursive: bool,
     },
     /// One chunk of a file sent to the daemon's machine, so an agent there can
@@ -475,19 +514,23 @@ pub enum Request {
         upload_id: String,
         name: String,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         offset: u64,
         data_base64: String,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         done: bool,
     },
     GitExec {
         cwd: String,
         program: String,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         args: Vec<String>,
         #[serde(default)]
         stdin_base64: Option<String>,
         #[serde(default = "default_git_exec_timeout_ms")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         timeout_ms: u64,
     },
 }
@@ -508,6 +551,7 @@ fn default_enabled() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     ChannelHistory {
@@ -598,6 +642,7 @@ pub enum Response {
     Output {
         agent_id: String,
         #[serde(with = "encoding")]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         data: Vec<u8>,
     },
     GridSubscribed,
@@ -843,6 +888,7 @@ impl Request {
 
 /// Replay strategy. Omission preserves retained raw replay for legacy clients.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Replay {
     #[default]

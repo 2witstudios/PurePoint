@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::agent::AgentEntry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum WorktreeStatus {
     Active,
@@ -15,6 +16,7 @@ pub enum WorktreeStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeEntry {
     pub id: String,
@@ -26,6 +28,7 @@ pub struct WorktreeEntry {
     pub agents: IndexMap<String, AgentEntry>,
     pub created_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub merged_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

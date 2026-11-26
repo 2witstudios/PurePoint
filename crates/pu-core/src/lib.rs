@@ -20,5 +20,8 @@ pub mod read;
 
 pub mod signals;
 
+#[cfg(all(test, feature = "ts"))]
+mod ts_export;
+
 #[cfg(windows)]
 pub mod win_security;
