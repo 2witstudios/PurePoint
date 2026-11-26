@@ -1,0 +1,445 @@
+/*
+ * The window shell's layout (WIN-7.1). CSS replaces the Mac's Auto Layout pinning helper
+ * (Services/NSView+Constraints.swift `pinToEdges`): `inset: 0` and flex tracks pin views to
+ * their parents. Colors and metrics come from theme/tokens.css.
+ */
+:root {
+  --title-bar-height: 32px;
+  --caption-button-width: 46px;
+  --control-hover: rgba(0, 0, 0, 0.06);
+  --control-pressed: rgba(0, 0, 0, 0.1);
+  --close-hover: #c42b1c;
+  --close-pressed: rgba(196, 43, 28, 0.9);
+  --column-divider: rgba(0, 0, 0, 0.06);
+  --menu-background: #f9f9f9;
+  --menu-border: rgba(0, 0, 0, 0.1);
+  --menu-shadow: 0 8px 16px rgba(0, 0, 0, 0.14);
+  --secondary-text: rgba(0, 0, 0, 0.55);
+  --banner-background: rgba(255, 255, 255, 0.92);
+  --banner-icon: #d13438;
+  --inline-banner-background: rgba(255, 59, 48, 0.1);
+  --inline-banner-icon: #c19c00;
+}
+
+:root[data-theme='dark'] {
+  --control-hover: rgba(255, 255, 255, 0.08);
+  --control-pressed: rgba(255, 255, 255, 0.05);
+  --column-divider: rgba(255, 255, 255, 0.06);
+  --menu-background: #2c2c2c;
+  --menu-border: rgba(255, 255, 255, 0.08);
+  --menu-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+  --secondary-text: rgba(255, 255, 255, 0.55);
+  --banner-background: rgba(44, 44, 44, 0.92);
+  --banner-icon: #ff99a4;
+  --inline-banner-icon: #fce100;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --control-hover: rgba(255, 255, 255, 0.08);
+    --control-pressed: rgba(255, 255, 255, 0.05);
+    --column-divider: rgba(255, 255, 255, 0.06);
+    --menu-background: #2c2c2c;
+    --menu-border: rgba(255, 255, 255, 0.08);
+    --menu-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+    --secondary-text: rgba(255, 255, 255, 0.55);
+    --banner-background: rgba(44, 44, 44, 0.92);
+    --banner-icon: #ff99a4;
+    --inline-banner-icon: #fce100;
+  }
+}
+
+/* Shell: a flush sidebar column, its resize handle, and the detail, all full height. */
+.shell {
+  position: relative;
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.sidebar-column {
+  flex: none;
+  width: var(--sidebar-width, var(--pp-sidebar-ideal-width));
+  height: 100%;
+  padding-top: var(--title-bar-height);
+  background: var(--pp-sidebar-background);
+  overflow: hidden;
+  outline: none;
+}
+
+.sidebar-resizer {
+  flex: none;
+  position: relative;
+  width: 1px;
+  background: var(--column-divider);
+  cursor: col-resize;
+  outline: none;
+  z-index: 2;
+}
+
+/* A wider grab area than the 1px divider it draws. */
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 -3px;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer:focus-visible {
+  background: var(--pp-system-tertiary-label);
+}
+
+.detail-column {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+  outline: none;
+}
+
+.detail-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--secondary-text);
+}
+
+.detail-placeholder-icon {
+  opacity: 0.6;
+}
+
+.detail-placeholder-title {
+  font-size: 20px;
+  color: var(--pp-app-text);
+}
+
+.detail-placeholder-view {
+  font: var(--pp-small-font);
+  font-family: var(--pp-font-mono);
+}
+
+/* Sidebar placeholder rows (the outline is WIN-7.2). */
+.sidebar-placeholder {
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  gap: 2px;
+}
+
+.sidebar-nav-row {
+  height: var(--pp-nav-row-height);
+  border: 0;
+  border-radius: 6px;
+  padding: 0 8px;
+  background: transparent;
+  color: inherit;
+  font: var(--pp-nav-font);
+  text-align: left;
+}
+
+.sidebar-nav-row:hover {
+  background: var(--control-hover);
+}
+
+.sidebar-nav-row[aria-current='page'] {
+  background: var(--control-pressed);
+}
+
+.sidebar-placeholder-view {
+  margin-top: 12px;
+  padding: 0 8px;
+  font: var(--pp-small-font);
+  font-family: var(--pp-font-mono);
+  color: var(--secondary-text);
+}
+
+/* Title bar: a transparent band over both columns. */
+.title-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: stretch;
+  height: var(--title-bar-height);
+}
+
+.title-bar-leading {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 4px;
+}
+
+.title-bar-drag {
+  flex: 1;
+}
+
+.title-bar-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+
+.title-bar-button:hover {
+  background: var(--control-hover);
+}
+
+.caption-buttons {
+  display: flex;
+  height: 100%;
+}
+
+.caption-button {
+  width: var(--caption-button-width);
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', sans-serif;
+  font-size: 10px;
+}
+
+.caption-button:hover,
+.caption-button.is-hover {
+  background: var(--control-hover);
+}
+
+.caption-button:active,
+.caption-button.is-pressed {
+  background: var(--control-pressed);
+}
+
+.caption-button-close:hover {
+  background: var(--close-hover);
+  color: #ffffff;
+}
+
+.caption-button-close:active {
+  background: var(--close-pressed);
+  color: #ffffff;
+}
+
+/* Menu bar. */
+.menu-bar {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.menu-bar-menu {
+  position: relative;
+}
+
+.menu-bar-title {
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: 12px var(--pp-font-ui);
+}
+
+.menu-bar-title:hover,
+.menu-bar-title[aria-expanded='true'] {
+  background: var(--control-hover);
+}
+
+.menu-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 20;
+  min-width: 260px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--menu-background);
+  border: 1px solid var(--menu-border);
+  border-radius: 8px;
+  box-shadow: var(--menu-shadow);
+}
+
+.menu-dropdown [role='menuitem'] {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 24px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: 12px var(--pp-font-ui);
+  text-align: left;
+}
+
+.menu-dropdown [role='menuitem']:hover,
+.menu-dropdown [role='menuitem']:focus-visible {
+  background: var(--control-hover);
+  outline: none;
+}
+
+.menu-item-label {
+  flex: 1;
+}
+
+.menu-item-accelerator {
+  color: var(--secondary-text);
+}
+
+.menu-dropdown [role='separator'] {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--menu-border);
+}
+
+/* Banners (DaemonErrorBanner.swift). */
+.shell-banners {
+  position: absolute;
+  top: calc(var(--title-bar-height) + 8px);
+  left: 16px;
+  right: 16px;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.daemon-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--banner-background);
+  border: 1px solid var(--menu-border);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: blur(20px);
+  pointer-events: auto;
+  animation: banner-in 0.25s ease-in-out;
+}
+
+@keyframes banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+.daemon-error-banner-icon {
+  flex: none;
+  color: var(--banner-icon);
+}
+
+.daemon-error-banner-message,
+.inline-error-banner-message {
+  flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  user-select: text;
+}
+
+.daemon-error-banner-message {
+  font-size: 13px;
+}
+
+.inline-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--inline-banner-background);
+  font-size: 12px;
+}
+
+.inline-error-banner-icon {
+  flex: none;
+  color: var(--inline-banner-icon);
+}
+
+.banner-text-button {
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 8px;
+  background: var(--control-hover);
+  color: inherit;
+  font: 11px var(--pp-font-ui);
+}
+
+.banner-icon-button,
+.overlay-button {
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--secondary-text);
+}
+
+.overlay-button {
+  width: 20px;
+  height: 20px;
+}
+
+.gh-unavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  color: var(--secondary-text);
+}
+
+.gh-unavailable-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--pp-app-text);
+}
+
+.gh-unavailable-command {
+  font: 12px var(--pp-font-mono);
+}
+
+/* Settings overlay. */
+.settings-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.settings-panel {
+  display: flex;
+  width: var(--pp-settings-width);
+  height: var(--pp-settings-height);
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 32px);
+  border-radius: 12px;
+  background: var(--pp-app-background);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+  outline: none;
+}

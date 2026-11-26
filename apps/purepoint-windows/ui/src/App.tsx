@@ -1,13 +1,12 @@
-import { TitleBar } from './views/TitleBar.tsx';
+import { AppStateContext } from './views/shell/appContext.ts';
+import { ContentView } from './views/shell/ContentView.tsx';
+import type { AppState } from './state/appState.ts';
 
-/** Minimal shell; the real window content arrives with WIN-7.1. */
-export function App() {
+/** The main window (WIN-7.1): the shell, given the app's state. */
+export function App({ app }: { app: AppState }) {
   return (
-    <div className="app">
-      <TitleBar />
-      <main className="app-content">
-        <h1>PurePoint</h1>
-      </main>
-    </div>
+    <AppStateContext.Provider value={app}>
+      <ContentView />
+    </AppStateContext.Provider>
   );
 }

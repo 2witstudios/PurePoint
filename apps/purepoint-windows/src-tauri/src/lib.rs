@@ -1,6 +1,7 @@
 //! Tauri backend for the PurePoint Windows app (DEC-7).
 
 pub mod attach;
+pub mod chrome;
 pub mod conversations;
 pub mod daemon;
 pub mod files;
@@ -9,6 +10,7 @@ pub mod installer;
 pub mod secrets;
 pub mod subscriptions;
 pub mod watchers;
+pub mod window_state;
 
 #[cfg(windows)]
 mod webview;
@@ -74,7 +76,17 @@ pub fn run() {
             watchers::commands::watchers_release,
             watchers::commands::watchers_restore,
             watchers::commands::watchers_discard,
+            chrome::chrome_set_layout,
         ])
+        .on_window_event(|window, event| {
+            if window.label() == MAIN_WINDOW
+                && let tauri::WindowEvent::CloseRequested { .. } = event
+            {
+                use tauri::Manager;
+                let dir = window.app_handle().path().app_data_dir().ok();
+                window_state::persist(window, dir.as_deref());
+            }
+        })
         .setup(|app| {
             use tauri::Manager;
             {
@@ -90,7 +102,15 @@ pub fn run() {
             {
                 if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
                     webview::configure(&window, LOCK_DOWN_WEBVIEW)?;
+                    if let Err(error) = chrome::install(&window) {
+                        eprintln!("PurePoint: could not install the window chrome: {error}");
+                    }
                 }
+            }
+            // The window starts hidden; it is shown where it was last closed.
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                let dir = app.path().app_data_dir().ok();
+                window_state::restore(&window, dir.as_deref());
             }
             Ok(())
         })
