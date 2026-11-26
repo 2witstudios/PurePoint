@@ -1,0 +1,1 @@
+\e[?9001h\e[?1004h\e[?25l\e[2J\e[m\e[HPS C:\Users\<user>\Dev\pp-wt\win-1.1>\e[1C\e]0;C:\Program Files\WindowsApps\Microsoft.PowerShell_7.7.0.0_x64__8wekyb3d8bbwe\pwsh.exe\a\e[?25h

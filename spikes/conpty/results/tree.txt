@@ -1,0 +1,89 @@
+# Windows build: Microsoft Windows [Version 10.0.26300.9974]
+### A. default: CREATE_BREAKAWAY_FROM_JOB + DESKTOP_APP_POLICY=DISABLE_PROCESS_TREE (pwsh = MSIX Store build)
+spike job: in_job=1 query_ok=1 limit_flags=0x1800
+== process tree: pwsh -> cmd -> ping -t, pwsh -> ping -t (Start-Process)
+  root cmdline: pwsh.exe -NoLogo -NoProfile -Command "Start-Process -NoNewWindow ping.exe -ArgumentList '-t','localhost'; cmd.exe /c ping -t 127.0.0.1"
+  root pid 2556 descendants before: [(15324, 2556, "PING.EXE"), (2896, 2556, "cmd.exe"), (3272, 2896, "PING.EXE")]
+  pseudoconsole host processes under spike: [(14052, 3900, "conhost.exe")]
+  job ActiveProcesses before: 4
+    pid 2556 root in our job: Some(true)
+    pid 15324 PING.EXE in our job: Some(true)
+    pid 2896 cmd.exe in our job: Some(true)
+    pid 3272 PING.EXE in our job: Some(true)
+  TerminateJobObject ok=true root exit=Some(1) in 14.8991ms
+  job ActiveProcesses after: 0
+  survivors among former descendants: []
+  any PING.EXE still running system-wide: []
+  ClosePseudoConsole took 20.5µs; conhost survivors: []
+  [KILL_ON_JOB_CLOSE] descendants before=3 survivors after CloseHandle(job)=[] root alive=false
+
+### B. SPIKE_DESKTOP_POLICY=0: no desktop-app policy (Store pwsh grandchildren escape the job)
+spike job: in_job=1 query_ok=1 limit_flags=0x1800
+== process tree: pwsh -> cmd -> ping -t, pwsh -> ping -t (Start-Process)
+  root cmdline: pwsh.exe -NoLogo -NoProfile -Command "Start-Process -NoNewWindow ping.exe -ArgumentList '-t','localhost'; cmd.exe /c ping -t 127.0.0.1"
+  root pid 15364 descendants before: [(15132, 15364, "PING.EXE"), (14984, 15364, "cmd.exe"), (2988, 14984, "PING.EXE")]
+  pseudoconsole host processes under spike: [(11968, 11012, "conhost.exe")]
+  job ActiveProcesses before: 1
+    pid 15364 root in our job: Some(true)
+    pid 15132 PING.EXE in our job: Some(false)
+    pid 14984 cmd.exe in our job: Some(false)
+    pid 2988 PING.EXE in our job: Some(false)
+  TerminateJobObject ok=true root exit=Some(1) in 26.1609ms
+  job ActiveProcesses after: 0
+  survivors among former descendants: [(15132, 15364, "PING.EXE"), (14984, 15364, "cmd.exe"), (2988, 14984, "PING.EXE")]
+  any PING.EXE still running system-wide: [(15132, 15364, "PING.EXE"), (2988, 14984, "PING.EXE")]
+  ClosePseudoConsole took 17.7µs; conhost survivors: []
+  [KILL_ON_JOB_CLOSE] descendants before=3 survivors after CloseHandle(job)=[(1260, 3104, "PING.EXE"), (14456, 3104, "cmd.exe"), (2840, 14456, "PING.EXE")] root alive=false
+
+### C. cmd root, no policy
+spike job: in_job=1 query_ok=1 limit_flags=0x1800
+== process tree: pwsh -> cmd -> ping -t, pwsh -> ping -t (Start-Process)
+  root cmdline: cmd.exe /d /c "cmd.exe /d /c ping -t 127.0.0.1"
+  root pid 16044 descendants before: [(14896, 16044, "cmd.exe"), (13716, 14896, "PING.EXE")]
+  pseudoconsole host processes under spike: [(13628, 13248, "conhost.exe")]
+  job ActiveProcesses before: 3
+    pid 16044 root in our job: Some(true)
+    pid 14896 cmd.exe in our job: Some(true)
+    pid 13716 PING.EXE in our job: Some(true)
+  TerminateJobObject ok=true root exit=Some(1) in 1.806ms
+  job ActiveProcesses after: 0
+  survivors among former descendants: []
+  any PING.EXE still running system-wide: []
+  ClosePseudoConsole took 22µs; conhost survivors: []
+  [KILL_ON_JOB_CLOSE] descendants before=2 survivors after CloseHandle(job)=[] root alive=false
+
+### D. Windows PowerShell 5.1 root, no policy
+spike job: in_job=1 query_ok=1 limit_flags=0x1800
+== process tree: pwsh -> cmd -> ping -t, pwsh -> ping -t (Start-Process)
+  root cmdline: powershell.exe -NoLogo -NoProfile -Command "Start-Process -NoNewWindow ping.exe -ArgumentList '-t','localhost'; cmd.exe /c ping -t 127.0.0.1"
+  root pid 11068 descendants before: [(11756, 11068, "PING.EXE"), (2516, 11068, "cmd.exe"), (16364, 2516, "PING.EXE")]
+  pseudoconsole host processes under spike: [(1660, 10032, "conhost.exe")]
+  job ActiveProcesses before: 4
+    pid 11068 root in our job: Some(true)
+    pid 11756 PING.EXE in our job: Some(true)
+    pid 2516 cmd.exe in our job: Some(true)
+    pid 16364 PING.EXE in our job: Some(true)
+  TerminateJobObject ok=true root exit=Some(1) in 10.3303ms
+  job ActiveProcesses after: 0
+  survivors among former descendants: []
+  any PING.EXE still running system-wide: []
+  ClosePseudoConsole took 22µs; conhost survivors: []
+  [KILL_ON_JOB_CLOSE] descendants before=3 survivors after CloseHandle(job)=[] root alive=false
+
+### E. SPIKE_NO_BREAKAWAY=1 + default DESKTOP_APP_POLICY (our job nested under the inherited 0x1800 job)
+spike job: in_job=1 query_ok=1 limit_flags=0x1800
+== process tree: pwsh -> cmd -> ping -t, pwsh -> ping -t (Start-Process)
+  root cmdline: pwsh.exe -NoLogo -NoProfile -Command "Start-Process -NoNewWindow ping.exe -ArgumentList '-t','localhost'; cmd.exe /c ping -t 127.0.0.1"
+  root pid 5188 descendants before: [(8312, 5188, "PING.EXE"), (15440, 5188, "cmd.exe"), (11736, 15440, "PING.EXE")]
+  pseudoconsole host processes under spike: [(1512, 12420, "conhost.exe")]
+  job ActiveProcesses before: 4
+    pid 5188 root in our job: Some(true)
+    pid 8312 PING.EXE in our job: Some(true)
+    pid 15440 cmd.exe in our job: Some(true)
+    pid 11736 PING.EXE in our job: Some(true)
+  TerminateJobObject ok=true root exit=Some(1) in 22.1043ms
+  job ActiveProcesses after: 0
+  survivors among former descendants: []
+  any PING.EXE still running system-wide: []
+  ClosePseudoConsole took 29.1µs; conhost survivors: []
+  [KILL_ON_JOB_CLOSE] descendants before=3 survivors after CloseHandle(job)=[] root alive=false

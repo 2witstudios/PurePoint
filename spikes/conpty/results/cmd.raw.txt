@@ -1,0 +1,2 @@
+\e[?9001h\e[?1004h\e[?25l\e[2J\e[m\e[HMicrosoft Windows [Version 10.0.26300.9974]\r\n
+(c) Microsoft Corporation. All rights reserved.\e]0;C:\WINDOWS\SYSTEM32\cmd.exe\a\e[?25h\e[?25l\e[4;1HC:\Users\<user>\Dev\pp-wt\win-1.1>\e[?25h
