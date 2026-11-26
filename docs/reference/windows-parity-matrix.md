@@ -259,12 +259,12 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Sidebar/SidebarView.swift` | 108 | `ui/src/views/sidebar/SidebarView.tsx` | WIN-7.2 | todo | — |
 | `Views/Terminal/ScrollableTerminal+iOS.swift` | 648 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Terminal/ScrollableTerminal+iOSSupport.swift` | 380 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Terminal/ScrollableTerminal.swift` | 564 | `ui/src/views/terminal/ScrollableTerminal.tsx` | WIN-7.3 | todo | — |
+| `Views/Terminal/ScrollableTerminal.swift` | 564 | `ui/src/views/terminal/scrollableTerminal.ts`, `ui/src/views/terminal/terminalTheme.ts`, `ui/src/views/terminal/terminalFontStore.ts` (xterm.js + WebGL with DOM fallback; wheel, SGR mouse, hover and autoscroll are xterm.js built-ins; Shift forces selection; remote-host uploads and file drops are WIN-8.14/WIN-7.4) | WIN-7.3 | ported | — |
 | `Views/Terminal/TerminalContainerView+iOS.swift` | 112 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Terminal/TerminalContainerView.swift` | 116 | `ui/src/views/terminal/TerminalContainerView.tsx` | WIN-7.3 | todo | — |
+| `Views/Terminal/TerminalContainerView.swift` | 116 | `ui/src/views/terminal/TerminalPane.tsx`, `ui/src/views/terminal/AgentTerminals.tsx` (interim agent list and detail terminals until WIN-7.2/WIN-7.4) | WIN-7.3 | ported | — |
 | `Views/Terminal/TerminalPaneView+iOS.swift` | 247 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Terminal/TerminalPaneView.swift` | 251 | `ui/src/views/terminal/TerminalPaneView.tsx` | WIN-7.3 | todo | — |
-| `Views/Terminal/TerminalViewCache.swift` | 152 | `ui/src/views/terminal/terminalViewCache.ts` | WIN-7.3 | todo | — |
+| `Views/Terminal/TerminalPaneView.swift` | 251 | `ui/src/views/terminal/terminalPaneView.ts` | WIN-7.3 | ported | — |
+| `Views/Terminal/TerminalViewCache.swift` | 152 | `ui/src/views/terminal/terminalViewCache.ts`, `ui/src/views/terminal/terminals.ts` (evicts every hidden terminal 30 s after hiding, REQ-WINAPP-061) | WIN-7.3 | ported | — |
 | `Views/TitlebarClearance.swift` | 25 | `ui/src/views/shell/TitlebarClearance.tsx` | WIN-7.1 | ported | — |
 | `Views/Triggers/TriggerCreationSheet.swift` | 220 | `ui/src/views/triggers/TriggerCreationSheet.tsx` | WIN-8.9 | todo | — |
 | `Views/Triggers/TriggerDetailView.swift` | 170 | `ui/src/views/triggers/TriggerDetailView.tsx` | WIN-8.9 | todo | — |
@@ -339,7 +339,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `StreamAccumulatorTests.swift` | all | `ui/src/state/streamAccumulator.test.ts` | WIN-8.16 | todo | — |
 | `StreamEventTests.swift` | all | `src-tauri/src/conversations/stream_event.rs` (#[cfg(test)]) | WIN-8.12 | ported | — |
 | `TabCloseConfirmationIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `TerminalOutputFilterTests.swift` | all | `ui/src/views/terminal/outputFilter.test.ts` | WIN-7.3 | todo | Only filters xterm.js still needs |
+| `TerminalOutputFilterTests.swift` | all | `ui/src/views/terminal/outputFilter.test.ts` | WIN-7.3 | ported | No filter ported: xterm.js implements DEC 2026 synchronized output and clamps cursor-up itself; the test runs the Swift inputs through `@xterm/headless` |
 | `TranscriptParserTests.swift` | all | `src-tauri/src/conversations/transcript.rs` (#[cfg(test)]) | WIN-8.12 | ported | — |
 | `WorkingTreeDiffTests.swift` | all | `src-tauri/src/git/tests/working_tree_diff.rs` | WIN-8.1 | ported | — |
 | `WorkspaceFilesStateTests.swift` | all | `ui/src/state/workspaceFilesState.test.ts` | WIN-8.4 | todo | — |

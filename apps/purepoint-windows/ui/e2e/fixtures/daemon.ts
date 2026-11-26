@@ -60,6 +60,15 @@ export class DaemonFixture {
     return fixture;
   }
 
+  /**
+   * The fixture this spec's session made (`PU_E2E_ROOT`), for specs that spawn their own agents.
+   * The session owns its daemon; this handle never stops it.
+   */
+  static existing(root = process.env.PU_E2E_ROOT): DaemonFixture {
+    if (root === undefined) throw new Error('PU_E2E_ROOT is not set');
+    return new DaemonFixture(root, 'e2e-project');
+  }
+
   /** The environment for anything that should use this fixture's HOME (the app included). */
   get env(): NodeJS.ProcessEnv {
     // Drop inherited PurePoint overrides so nothing points back at the real install.
@@ -141,9 +150,19 @@ export class DaemonFixture {
     await this.pu(['init']);
   }
 
-  /** Spawn a `terminal` agent in the project root; resolves its agent ID. */
-  async spawnTerminal(): Promise<string> {
-    const { stdout } = await this.pu(['spawn', '--root', '--agent', 'terminal', '--json']);
+  /**
+   * Spawn a `terminal` agent in the project root; resolves its agent ID. `command` replaces the
+   * shell (the daemon splits it on whitespace, so no paths with spaces).
+   */
+  async spawnTerminal(command?: string): Promise<string> {
+    const { stdout } = await this.pu([
+      'spawn',
+      '--root',
+      '--agent',
+      'terminal',
+      ...(command === undefined ? [] : ['--command', command]),
+      '--json',
+    ]);
     const match = /"(?:agent_id|id)"\s*:\s*"([^"]+)"/.exec(stdout);
     if (!match?.[1]) throw new Error(`pu spawn printed no agent id: ${stdout}`);
     return match[1];

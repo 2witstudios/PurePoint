@@ -9,6 +9,8 @@ import { Icon } from '../../theme/Icon.tsx';
 import type { SfSymbolName } from '../../theme/icons.ts';
 import { useAppState } from '../shell/appContext.ts';
 import { useTitlebarClearance } from '../shell/TitlebarClearance.tsx';
+import { useAgentSelection } from '../terminal/agentSelection.ts';
+import { AgentTerminalsView } from '../terminal/AgentTerminals.tsx';
 
 export interface DetailViewProps {
   selection: SidebarSelection | null;
@@ -118,11 +120,15 @@ function SelectedContent({ selection }: { selection: SidebarSelection }) {
 
 export function DetailView({ selection }: DetailViewProps) {
   const clearance = useTitlebarClearance();
+  // Selected agents show their terminals (WIN-7.3) until the pane grid (WIN-7.4) takes over.
+  const agentIds = useAgentSelection((state) => state.agentIds);
   return (
     // The title bar is a band across the whole window on Windows, so every screen starts below
     // it (the Mac's dashboard and workspaces draw their tab strip in the band instead).
     <div className="detail-view" style={{ paddingTop: clearance.height }}>
-      {selection === null ? (
+      {agentIds.length > 0 ? (
+        <AgentTerminalsView agentIds={agentIds} />
+      ) : selection === null ? (
         <ScreenPlaceholder icon="sidebar.left" title="Select an item" />
       ) : (
         <SelectedContent selection={selection} />

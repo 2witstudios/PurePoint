@@ -36,6 +36,8 @@ which = "8"
 notify = "8.2"
 # Attach `client_id`s are `win:<uuid>` (WIN-5.4); the version Tauri already locks.
 uuid = { version = "1", features = ["v4"] }
+# Ctrl+click on a terminal link opens it outside the app (WIN-7.3).
+tauri-plugin-opener = "~2.5"
 
 # Same versions Tauri 2.11's WebView2 runtime links, so the COM types match.
 [target.'cfg(windows)'.dependencies]

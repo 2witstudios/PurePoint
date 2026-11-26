@@ -80,6 +80,7 @@ export const config: WebdriverIO.Config = {
       await fixture.startDaemon();
       await fixture.init();
       await fixture.spawnTerminal();
+      process.env.PU_E2E_ROOT = fixture.root;
       process.env.PU_E2E_HOME = fixture.home;
       process.env.PU_E2E_PROJECT_ROOT = fixture.projectRoot;
       driver = await TauriDriver.start(fixture.env, join(specArtifacts(), 'tauri-driver.log'));
