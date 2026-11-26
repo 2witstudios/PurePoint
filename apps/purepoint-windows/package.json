@@ -17,7 +17,8 @@
     "test": "vitest run",
     "gen:protocol": "node scripts/gen-protocol.mjs",
     "e2e": "node ui/e2e/run.mjs",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bundle": "node scripts/build-release.mjs"
   },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",

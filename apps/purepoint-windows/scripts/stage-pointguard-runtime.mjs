@@ -14,8 +14,8 @@
 //
 // The app refuses to launch a runtime whose files differ from seal.files (src-tauri/src/
 // pointguard/seal.rs). The manifest's own SHA-256 is printed last; a release build pins it
-// with PUREPOINT_POINTGUARD_MANIFEST_SHA256 at compile time (WIN-10.2 wires both into the
-// installer).
+// with PUREPOINT_POINTGUARD_MANIFEST_SHA256 at compile time. scripts/build-release.mjs
+// (WIN-10.2) imports `stage` and wires both into the installer.
 //
 // Usage:
 //   node scripts/stage-pointguard-runtime.mjs --out <dir> --lock-helper <exe>
@@ -169,7 +169,8 @@ function run(command, args, options = {}) {
   execFileSync(command, args, { stdio: 'inherit', ...options });
 }
 
-async function stage(args) {
+/** Stage `<args.out>/PointGuard`; returns its path and the manifest's SHA-256. */
+export async function stage(args) {
   if (process.platform !== 'win32') throw new Error('Stage the Windows payload on Windows.');
   if (!args.out || !args.lockHelper) throw new Error('--out and --lock-helper are required');
   if (!['x64', 'arm64'].includes(args.arch)) throw new Error(`Unknown --arch ${args.arch}`);
@@ -235,8 +236,7 @@ async function stage(args) {
       sourceSHA,
     }),
   );
-  console.log(`Staged ${target}`);
-  console.log(`PUREPOINT_POINTGUARD_MANIFEST_SHA256=${digest}`);
+  return { target, digest };
 }
 
 function reseal(dir) {
@@ -251,7 +251,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   try {
     const args = parseArgs(process.argv.slice(2));
     if (args.seal) reseal(args.seal);
-    else await stage(args);
+    else {
+      const { target, digest } = await stage(args);
+      console.log(`Staged ${target}`);
+      console.log(`PUREPOINT_POINTGUARD_MANIFEST_SHA256=${digest}`);
+    }
   } catch (error) {
     console.error(
       `stage-pointguard-runtime: ${error instanceof Error ? error.message : String(error)}`,

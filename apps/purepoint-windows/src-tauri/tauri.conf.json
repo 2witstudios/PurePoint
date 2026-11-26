@@ -30,9 +30,16 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": ["nsis"],
     "resources": {
       "../../../crates/pu-cli/assets/plugin/": "pu-plugin/"
+    },
+    "windows": {
+      "webviewInstallMode": { "type": "embedBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "windows/installer-hooks.nsh"
+      }
     },
     "icon": [
       "icons/32x32.png",

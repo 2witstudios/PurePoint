@@ -377,6 +377,24 @@ Owner: the current user. `check_private` accepts the user, SYSTEM or Administrat
 | `%USERPROFILE%\.pu\pointguard\<version>\` | `pu phone` payload: `runtime-manifest.json` (`layout: "windows"`), `bin\node.exe`, `bin\point-guard-lock.exe`, `bridge\main.js`; `phone-host.json` (port, pid and creation time) and `phone-host.log` beside the versions |
 | app install dir (NSIS per-user) | app exe, `pu.exe`/`pu-engine.exe` sidecars, Point Guard runtime in the resource dir's `PointGuard\` (WIN-9.3) |
 
+### Installer (WIN-10.2)
+
+`npm run bundle` (`apps/purepoint-windows/scripts/build-release.mjs [--jobs N]`) builds the release installer in one step: `cargo build --release` of `pu-cli` and `pu-engine` at the repository root, the Point Guard runtime staged and sealed from that build's `pu-point-guard-lock.exe`, then `tauri build --bundles nsis` with the staged manifest's digest as `PUREPOINT_POINTGUARD_MANIFEST_SHA256` and a generated `--config` (`src-tauri/target/bundle-inputs/tauri.bundle.conf.json`) that adds the binaries and runtime as resources. They are resources, not `externalBin` sidecars, so they keep their names and land at the resource root, which in an NSIS install is the install dir beside the app exe: the installer, the daemon lifecycle and the Point Guard `pu.exe` search all look beside the exe, then in the resource dir, so a build-output exe (`src-tauri/target/release/`, where tauri-build copies resources) and an installed one resolve the same files. Tauri returns the resource dir as a verbatim `\\?\` path, from which `node.exe` cannot resolve its entry script, so the app normalizes it (`pu_core::canon::normalize`) before building any runtime or sidecar path. `tauri.conf.json` keeps only `pu-plugin` (in the repository), because tauri-build copies every configured resource on each cargo build, and `cargo clippy`/`cargo test` must not need a staged runtime.
+
+| Install dir (`%LOCALAPPDATA%\PurePoint`, `installMode: currentUser`, no admin) | |
+|---|---|
+| `purepoint-windows.exe` | the app (Start menu and desktop shortcuts are named PurePoint) |
+| `pu.exe`, `pu-engine.exe` | CLI and daemon, copied into `%USERPROFILE%\.pu\bin` at first launch (REQ-WINAPP-036) |
+| `PointGuard\` | the sealed runtime above; `pu-point-guard-lock.exe` ships as its `bin\point-guard-lock.exe` |
+| `pu-plugin\` | the Claude Code plugin |
+| `uninstall.exe` | |
+
+WebView2: `webviewInstallMode` is `embedBootstrapper` (silent), so the installer carries the ~2 MB Evergreen bootstrapper and runs it only when no WebView2 runtime is found (Windows 11 ships one); an offline installer would add ~180 MB for a case Windows 11 does not have. The installer is unsigned until signing is provisioned.
+
+`src-tauri/windows/installer-hooks.nsh` (`NSIS_HOOK_PREINSTALL`, `NSIS_HOOK_PREUNINSTALL`) stops what runs from the install dir before files are replaced or deleted: the app, then the daemon through `pu.exe daemon stop`, then any process whose image is still under the install dir (Point Guard's `node.exe` and lock helper). A real uninstall (not the one an update runs, `/UPDATE`) also deletes the HKCU Run values `PurePoint Engine` and `PurePoint Point Guard` and their `StartupApproved` entries; Tauri's template removes the app's own `PurePoint` value. `%USERPROFILE%\.pu` and `%LOCALAPPDATA%\PurePoint\point-guard` are left in place (the uninstaller removes only the files it installed and then the install dir if empty).
+
+CI: the `installer` job in `windows-app.yml` runs `npm run bundle` on pushes to `main` and `pu/windows` and on `workflow_dispatch`, not on pull requests (two release builds, one with LTO), and uploads the setup exe as the `purepoint-windows-installer` artifact.
+
 ### Point Guard runtime (app, WIN-9.3)
 
 `src-tauri/src/pointguard/` (front end `ui/src/services/pointguard.ts`, `ui/src/state/pointGuardService.ts`). The staged payload is the `pu phone` layout, so one staging serves both:
@@ -388,7 +406,7 @@ Owner: the current user. `check_private` accepts the user, SYSTEM or Administrat
 | `bin\point-guard-lock.exe` | `pu-point-guard-lock.exe` |
 | `bridge\`, `node_modules\`, `docs\`, `support\`, `package.json` | the bridge without tests, production dependencies (`npm ci --omit=dev --ignore-scripts`, other platforms' `pi-tui` natives removed) |
 
-`apps/purepoint-windows/scripts/stage-pointguard-runtime.mjs --out <dir> --lock-helper <exe>` stages it and prints the manifest's SHA-256; `--seal <dir>` rewrites only the seal. WIN-10.2 adds the directory to the Tauri resources and passes the digest as `PUREPOINT_POINTGUARD_MANIFEST_SHA256`. `pu.exe` is not in the payload: the app uses its sidecar (beside the exe, then the resource dir), else `%USERPROFILE%\.pu\bin\pu.exe`, each passing `check_trusted_binary`; `node.exe` and the lock helper must pass `check_trusted_file`.
+`apps/purepoint-windows/scripts/stage-pointguard-runtime.mjs --out <dir> --lock-helper <exe>` stages it and prints the manifest's SHA-256; `--seal <dir>` rewrites only the seal. `npm run bundle` (WIN-10.2, see Installer) adds the directory to the Tauri resources and passes the digest as `PUREPOINT_POINTGUARD_MANIFEST_SHA256`. `pu.exe` is not in the payload: the app uses its sidecar (beside the exe, then the resource dir), else `%USERPROFILE%\.pu\bin\pu.exe`, each passing `check_trusted_binary`; `node.exe` and the lock helper must pass `check_trusted_file`.
 
 Seal: the Mac's `BundleSeal` checks the code signature; Windows signing is not provisioned, so WIN-9.3 seals with the manifest hashes. Before each launch every listed file is hashed and compared, and the directory is walked for unlisted files, links and reparse points. The manifest can be rewritten by whoever can write the install dir; the compile-time pin closes that once the exe itself is signed. Development runs (`PUREPOINT_POINTGUARD_DEV=1`, debug builds only) use the system `node`, the repo's `apps/purepoint-mobile/bridge/main.js` and `target\debug\{pu,pu-point-guard-lock}.exe`, unsealed, as the Mac skips its seal in Debug.
 

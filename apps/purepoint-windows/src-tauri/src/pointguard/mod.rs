@@ -56,7 +56,13 @@ impl PointGuardState {
             .ok()
             .filter(|h| h.is_absolute())
             .unwrap_or_else(|| PathBuf::from(r"C:\"));
-        let resource_dir = app.path().resource_dir().ok();
+        // Tauri gives the resource dir as a verbatim `\\?\` path, which node.exe cannot resolve its entry
+        // script from (`lstat 'C:'`); the runtime paths are built from it (WIN-10.2).
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|dir| pu_core::canon::normalize(&dir));
         let exe_dir = std::env::current_exe()
             .and_then(pu_core::canon::canonicalize)
             .ok()
