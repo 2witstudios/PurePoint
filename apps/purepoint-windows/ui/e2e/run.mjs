@@ -11,8 +11,10 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   realpathSync,
   rmSync,
+  statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -116,7 +118,9 @@ try {
     sh('cargo', ['build', '--locked', '-p', 'pu-cli', '-p', 'pu-engine'], { cwd: repoRoot });
   }
 
-  if (!existsSync(debugApp) || process.env.PU_E2E_REBUILD === '1') {
+  // The debug app embeds the UI at build time, so a binary older than any UI or backend source
+  // would test stale code: rebuild when anything under ui/src, src-tauri/src or the configs is newer.
+  if (!existsSync(debugApp) || process.env.PU_E2E_REBUILD === '1' || appIsStale(debugApp)) {
     step('Build the debug app');
     sh('npx', ['tauri', 'build', '--debug', '--no-bundle'], { cwd: appDir, shell: true });
   }
@@ -165,3 +169,24 @@ try {
   );
 }
 process.exit(exitCode);
+
+/** True when any app source is newer than the built debug app (mtime comparison). */
+function appIsStale(binary) {
+  const built = statSync(binary).mtimeMs;
+  const roots = [join(appDir, 'ui', 'src'), join(appDir, 'src-tauri', 'src')];
+  const files = [
+    join(appDir, 'src-tauri', 'tauri.conf.json'),
+    join(appDir, 'src-tauri', 'Cargo.toml'),
+    join(appDir, 'package.json'),
+  ];
+  const newer = (path) => existsSync(path) && statSync(path).mtimeMs > built;
+  if (files.some(newer)) return true;
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory() ? walk(path) : newer(path)) return true;
+    }
+    return false;
+  };
+  return roots.some((root) => existsSync(root) && walk(root));
+}
