@@ -24,7 +24,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/AgentStatus.swift` | 48 | `ui/src/model/agentStatus.ts` | WIN-6.0 | ported | — |
 | `Models/AgentVariant.swift` | 73 | `ui/src/model/agentVariant.ts` | WIN-6.6 | ported | — |
 | `Models/AgentsHubModels.swift` | 160 | `ui/src/model/agentsHubModels.ts` | WIN-8.7 | ported | — |
-| `Models/ChannelModel.swift` | 58 | `ui/src/model/channelModel.ts` | WIN-8.10 | todo | — |
+| `Models/ChannelModel.swift` | 58 | `ui/src/model/channelModel.ts` (wire types are the generated protocol types) | WIN-8.10 | ported | — |
 | `Models/ChatMessage.swift` | 56 | `ui/src/model/content.ts` | WIN-8.16 | ported | — |
 | `Models/CommandPaletteItem.swift` | 180 | `ui/src/model/commandPalette.ts` | WIN-6.6 | ported | — |
 | `Models/ContentBlockSplitter.swift` | 81 | `ui/src/model/content.ts` | WIN-8.16 | ported | — |
@@ -116,7 +116,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/AppState+LibraryScope+iOS.swift` | 123 | — | — | excluded | `+iOS` file (iPad build only) |
 | `State/AppState+PointGuardPlays.swift` | 20 | `ui/src/state/appStatePointGuardPlays.ts` | WIN-8.13 | todo | — |
 | `State/AppState.swift` | 952 | `ui/src/state/appState.ts` | WIN-6.0 | ported | — |
-| `State/ChannelState.swift` | 298 | `ui/src/state/channelState.ts` | WIN-8.10 | todo | — |
+| `State/ChannelState.swift` | 298 | `ui/src/state/channelState.ts` | WIN-8.10 | ported | — |
 | `State/ChatState.swift` | 161 | — | — | excluded | DEC-11: legacy chat (iPad DEC-9) |
 | `State/CommandPaletteOpenCoordinator.swift` | 18 | `ui/src/state/commandPaletteOpenCoordinator.ts` | WIN-6.6 | ported | — |
 | `State/DiffState.swift` | 281 | `ui/src/state/diffState.ts` | WIN-6.0 | ported | — |
@@ -150,10 +150,10 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Agents/PromptCreationSheet.swift` | 125 | `ui/src/views/agents/PromptCreationSheet.tsx` | WIN-8.7 | ported | — |
 | `Views/Agents/SwarmCreationSheet.swift` | 144 | `ui/src/views/agents/SwarmCreationSheet.tsx` | WIN-8.7 | ported | — |
 | `Views/Channel/ChannelComposer+iOS.swift` | 330 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Channel/ChannelComposer.swift` | 93 | `ui/src/views/channel/ChannelComposer.tsx` | WIN-8.10 | todo | — |
-| `Views/Channel/ChannelHoverRow.swift` | 40 | `ui/src/views/channel/ChannelHoverRow.tsx` | WIN-8.10 | todo | — |
-| `Views/Channel/ChannelReferenceView.swift` | 37 | `ui/src/views/channel/ChannelReferenceView.tsx` | WIN-8.10 | todo | — |
-| `Views/Channel/ProjectChannelView.swift` | 268 | `ui/src/views/channel/ProjectChannelView.tsx` | WIN-8.10 | todo | — |
+| `Views/Channel/ChannelComposer.swift` | 93 | `ui/src/views/channel/ChannelComposer.tsx`, `ui/src/model/channelComposer.ts` | WIN-8.10 | ported | — |
+| `Views/Channel/ChannelHoverRow.swift` | 40 | `ui/src/views/channel/ChannelHoverRow.tsx` | WIN-8.10 | ported | — |
+| `Views/Channel/ChannelReferenceView.swift` | 37 | `ui/src/views/channel/ChannelReferenceView.tsx` | WIN-8.10 | ported | — |
+| `Views/Channel/ProjectChannelView.swift` | 268 | `ui/src/views/channel/ProjectChannelView.tsx`, `ui/src/views/channel/channel.css` | WIN-8.10 | ported | — |
 | `Views/Chat/ChatAreaView.swift` | 95 | — | — | excluded | DEC-11: legacy chat (iPad DEC-9) |
 | `Views/Chat/ChatInputView.swift` | 87 | — | — | excluded | DEC-11: legacy chat (iPad DEC-9) |
 | `Views/Chat/CodeBlockView.swift` | 9 | — | — | excluded | DEC-11: legacy chat, reached only from `ChatAreaView` |
@@ -285,7 +285,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `AgentsHubStateTests.swift` | all | `ui/src/state/agentsHubState.test.ts` | WIN-8.7 | ported | — |
 | `AppLifecycleTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` (`AppActivityTests`), though WIN-6.0 lists it; nothing to port |
 | `AttachmentUploadTests.swift` | all | `ui/src/services/attachmentUpload.test.ts` | WIN-9.7 | todo | Platform-neutral cases only |
-| `ChannelComposerIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
+| `ChannelComposerIOSTests.swift` | all | `ui/src/model/channelComposer.test.ts` | WIN-8.10 | ported | Whole-file `#if os(iOS)`; its platform-neutral composer cases (Return, mention range and completions, height clamp) |
 | `ChatStateTests.swift` | all | — | — | excluded | Tests `ChatState` (DEC-11 legacy chat) |
 | `CitadelSSHLiveTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `ClaudeConversationIndexTests.swift` | all | `src-tauri/src/conversations/claude.rs` (#[cfg(test)]) | WIN-8.12 | ported | — |

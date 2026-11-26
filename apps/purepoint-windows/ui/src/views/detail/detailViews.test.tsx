@@ -162,7 +162,7 @@ describe('ProjectDetailView', () => {
       />,
     );
     fireEvent.click(screen.getByRole('tab', { name: 'Channel' }));
-    expect(screen.getByText('ProjectChannelView')).toBeInTheDocument();
+    expect(document.querySelector('[data-view="ProjectChannelView"]')).toBeInTheDocument();
     expect(screen.queryByText('WORKTREES')).toBeNull();
   });
 });
@@ -189,7 +189,7 @@ describe('WorktreeDetailView', () => {
     expect(screen.getByRole('button', { name: 'Show file tree' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Channel' }));
-    expect(screen.getByText('ProjectChannelView')).toBeInTheDocument();
+    expect(document.querySelector('[data-view="ProjectChannelView"]')).toBeInTheDocument();
   });
 
   it('refreshes its review', () => {

@@ -21,6 +21,15 @@ export function ChatMarkdown({ text }: { text: string }) {
   );
 }
 
+/**
+ * Inline-only Markdown with whitespace preserved (Foundation's `.inlineOnlyPreservingWhitespace`),
+ * as the project channel renders message text (WIN-8.10).
+ */
+export function ChatInlineMarkdown({ text, className }: { text: string; className?: string }) {
+  const nodes = useMemo(() => parseInline(text), [text]);
+  return <span className={className}>{renderInline(nodes)}</span>;
+}
+
 type InlineLookup = (source: string) => ChatInline[];
 
 function Blocks({ blocks, inline }: { blocks: ChatMarkdownBlock[]; inline: InlineLookup }) {

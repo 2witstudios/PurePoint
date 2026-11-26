@@ -6,19 +6,15 @@
 //
 // Differences from Swift, until their leaves land: the file tree is FileTreeSidebarView (WIN-8.4),
 // the editor and its banners (current file breadcrumb, external change, save error) are
-// EditorState and EditorContentRepresentable (WIN-8.5), and the channel is ProjectChannelView
-// (WIN-8.10). Until then the editor shows its empty state, "Select a file to edit".
+// EditorState and EditorContentRepresentable (WIN-8.5). Until then the editor shows its empty state, "Select a file to edit".
 import { useState } from 'react';
 import type { WorktreeModel } from '../../model/workspaceModel.ts';
 import type { DiffState } from '../../state/diffState.ts';
 import type { ProjectState } from '../../state/projectState.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { ChangesContent } from './ChangesContent.tsx';
-import {
-  EditorPlaceholder,
-  FileTreeSidebarPlaceholder,
-  ScreenPlaceholder,
-} from './placeholders.tsx';
+import { ProjectChannelView } from '../channel/ProjectChannelView.tsx';
+import { EditorPlaceholder, FileTreeSidebarPlaceholder } from './placeholders.tsx';
 import { useDiffState } from './useDiffState.ts';
 import './detail.css';
 
@@ -132,11 +128,7 @@ export function WorktreeDetailView({
         </div>
         {showChannel && project !== null && (
           <div className="detail-channel">
-            <ScreenPlaceholder
-              icon="bubble.left.and.bubble.right"
-              title="Project channel"
-              view="ProjectChannelView"
-            />
+            <ProjectChannelView key={project.projectId} project={project} compact />
           </div>
         )}
       </div>

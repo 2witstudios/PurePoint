@@ -193,7 +193,13 @@ describe('ProjectState', () => {
     });
     project.startWatching();
     await until(() => requests.some((r) => r.type === 'resume'));
-    expect(requests.map((r) => r.type)).toEqual(['init', 'status', 'resume']);
+    // The channel's background poll (WIN-8.10) reads alongside the workspace requests.
+    expect(requests.some((r) => r.type === 'channel_read')).toBe(true);
+    expect(requests.map((r) => r.type).filter((type) => type !== 'channel_read')).toEqual([
+      'init',
+      'status',
+      'resume',
+    ]);
     expect(calls).toEqual([`watch ${root}`, `subscribe ${root}`]);
     expect(project.hasLoadedWorktrees).toBe(true);
     expect(project.rootAgents.map((a) => a.id)).toEqual(['ag-1']);
@@ -500,7 +506,9 @@ describe('ProjectState remote projects', () => {
     expect(project.projectId).toBe(`machine:${machineId}:/srv/app`);
     project.startWatching();
     await until(() => project.hasLoadedWorktrees);
-    expect(requests.map((r) => r.type)).toEqual(['status']);
+    expect(requests.map((r) => r.type).filter((type) => type !== 'channel_read')).toEqual([
+      'status',
+    ]);
     expect(project.remoteLayoutSaver).not.toBeNull();
   });
 });
