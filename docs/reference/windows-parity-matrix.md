@@ -25,9 +25,9 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/AgentVariant.swift` | 73 | `ui/src/model/agentVariant.ts` | WIN-6.6 | ported | — |
 | `Models/AgentsHubModels.swift` | 160 | `ui/src/model/agentsHubModels.ts` | WIN-8.7 | todo | — |
 | `Models/ChannelModel.swift` | 58 | `ui/src/model/channelModel.ts` | WIN-8.10 | todo | — |
-| `Models/ChatMessage.swift` | 56 | `ui/src/model/content.ts` | WIN-8.16 | todo | — |
+| `Models/ChatMessage.swift` | 56 | `ui/src/model/content.ts` | WIN-8.16 | ported | — |
 | `Models/CommandPaletteItem.swift` | 180 | `ui/src/model/commandPalette.ts` | WIN-6.6 | ported | — |
-| `Models/ContentBlockSplitter.swift` | 81 | `ui/src/model/content.ts` | WIN-8.16 | todo | — |
+| `Models/ContentBlockSplitter.swift` | 81 | `ui/src/model/content.ts` | WIN-8.16 | ported | — |
 | `Models/Conversation.swift` | 47 | `src-tauri/src/conversations/model.rs` | WIN-8.12 | ported | — |
 | `Models/DiffModel.swift` | 180 | `ui/src/model/diff.ts` (review data types are `ui/src/services/git.ts`, decoded in Rust by WIN-8.1) | WIN-6.0 | ported | — |
 | `Models/EditorTab.swift` | 142 | `ui/src/model/editorTab.ts` | WIN-8.5 | todo | — |
@@ -131,12 +131,12 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/ProjectState.swift` | 748 | `ui/src/state/projectState.ts`, `ui/src/state/remoteLayoutSaver.ts`, `ui/src/state/cachedWorkspacePersistence.ts`, `ui/src/services/fs.ts`, `src-tauri/src/files/text.rs` | WIN-6.0 | ported | — |
 | `State/RemoteFolderBrowser+iOS.swift` | 242 | — | — | excluded | `+iOS` file (iPad build only) |
 | `State/ScheduleState.swift` | 282 | `ui/src/state/scheduleState.ts` | WIN-8.8 | todo | — |
-| `State/SessionListState.swift` | 164 | `ui/src/state/sessions.ts` | WIN-8.16 | todo | — |
+| `State/SessionListState.swift` | 164 | `ui/src/state/sessions.ts` | WIN-8.16 | ported | — |
 | `State/SettingsState.swift` | 111 | `ui/src/state/settingsState.ts` | WIN-8.11 | todo | — |
 | `State/SidebarExpansionStore.swift` | 45 | `ui/src/state/sidebarExpansionStore.ts` | WIN-6.5 | ported | — |
 | `State/SidebarVisibility.swift` | 38 | `ui/src/state/sidebarVisibilityStore.ts` | WIN-6.5 | ported | — |
 | `State/SpawnTargetResolver.swift` | 31 | `ui/src/state/spawnTargetResolver.ts` | WIN-6.6 | ported | — |
-| `State/StreamAccumulator.swift` | 193 | `ui/src/state/sessions.ts` | WIN-8.16 | todo | — |
+| `State/StreamAccumulator.swift` | 193 | `ui/src/state/sessions.ts` | WIN-8.16 | ported | — |
 | `State/TriggersState.swift` | 93 | `ui/src/state/triggersState.ts` | WIN-8.9 | todo | — |
 | `State/WorkspaceFilesState.swift` | 139 | `ui/src/state/workspaceFilesState.ts` | WIN-8.4 | todo | — |
 | `State/WorkspaceRegistry.swift` | 749 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | ported | — |
@@ -294,7 +294,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `CommandPaletteOpenCoordinatorTests.swift` | all | `ui/src/state/commandPaletteOpenCoordinator.test.ts` | WIN-6.6 | ported | — |
 | `CommandPaletteOrderTests.swift` | all | `ui/src/model/commandPaletteOrder.test.ts` | WIN-6.6 | ported | — |
 | `CommandPalettePanelIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `ContentBlockSplitterTests.swift` | all | `ui/src/model/content.test.ts` | WIN-8.16 | todo | — |
+| `ContentBlockSplitterTests.swift` | all | `ui/src/model/content.test.ts` | WIN-8.16 | ported | — |
 | `DaemonClientParseTests.swift` | all | `ui/src/services/daemonConnection.test.ts` | WIN-6.0 | ported | The attach request case is asserted by `src-tauri/src/attach/session_tests.rs`; the three AppKit `ScrollableTerminal` cases are `it.todo` for the terminal view leaf |
 | `DaemonTransportTests.swift` | all | `ui/src/services/daemonConnection.test.ts` | WIN-6.0 | ported | Platform-neutral cases only (`sendBlocking` as `send`); Unix-socket and macOS endpoint cases are the named-pipe tests in `src-tauri/src/daemon/client.rs`; stream cases in `src-tauri/src/subscriptions/tests.rs` and `src-tauri/src/attach/session_tests.rs` |
 | `DaemonWorkspaceServiceTests.swift` | all | `ui/src/services/workspaceService.test.ts` | WIN-6.0 | ported | — |
@@ -327,7 +327,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `SSHMachineRegistryTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `SSHTransportTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `ScrollableTerminalIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `SessionListStateTests.swift` | all | `ui/src/state/sessions.test.ts` | WIN-8.16 | todo | — |
+| `SessionListStateTests.swift` | all | `ui/src/state/sessions.test.ts` | WIN-8.16 | ported | — |
 | `SidebarExpansionStoreTests.swift` | all | `ui/src/state/sidebarExpansionStore.test.ts` | WIN-6.5 | ported | — |
 | `SidebarMenuModelTests.swift` | all | `ui/src/model/sidebarMenu.test.ts` | WIN-6.5 | ported | — |
 | `SidebarOutlineModelTests.swift` | all | `ui/src/model/sidebarOutline.test.ts` | WIN-6.5 | ported | — |
@@ -336,7 +336,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `SidebarOutlineViewControllerTests.swift` | all | `ui/src/views/sidebar/SidebarOutline.test.tsx` | WIN-7.2 | todo | Platform-neutral cases only |
 | `SidebarVisibilityTests.swift` | all | `ui/src/state/sidebarVisibilityStore.test.ts` | WIN-6.5 | ported | — |
 | `SpawnTargetResolverTests.swift` | all | `ui/src/state/spawnTargetResolver.test.ts` | WIN-6.6 | ported | — |
-| `StreamAccumulatorTests.swift` | all | `ui/src/state/streamAccumulator.test.ts` | WIN-8.16 | todo | — |
+| `StreamAccumulatorTests.swift` | all | `ui/src/state/streamAccumulator.test.ts` | WIN-8.16 | ported | Timer cases use fake timers |
 | `StreamEventTests.swift` | all | `src-tauri/src/conversations/stream_event.rs` (#[cfg(test)]) | WIN-8.12 | ported | — |
 | `TabCloseConfirmationIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `TerminalOutputFilterTests.swift` | all | `ui/src/views/terminal/outputFilter.test.ts` | WIN-7.3 | todo | Only filters xterm.js still needs |

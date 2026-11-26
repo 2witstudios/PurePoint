@@ -3,6 +3,8 @@
 // (`src-tauri/src/conversations/`); these wrap its commands. Dates are Unix milliseconds.
 import { invoke } from '@tauri-apps/api/core';
 
+import type { ChatMessage as ModelChatMessage, TranscriptContentBlock } from '../model/content';
+
 /** `AgentSource`. */
 export type AgentSource = 'claude' | 'codex' | 'opencode';
 
@@ -44,24 +46,17 @@ export interface ListConversationsOptions {
   excluding?: readonly string[];
 }
 
-export type ChatRole = 'user' | 'assistant';
-export type ToolUseStatus = 'running' | 'completed' | 'failed';
+// The message model lives in `model/content.ts` (WIN-8.16); transcripts never hold `pulse` blocks.
+export type {
+  ChatRole,
+  ToolUseStatus,
+  TranscriptContentBlock as ContentBlock,
+} from '../model/content';
 
-/** `ContentBlock` as a transcript yields it (no Point Guard `pulse`). */
-export type ContentBlock =
-  | { type: 'text'; id: string; text: string }
-  | { type: 'codeBlock'; id: string; language: string | null; code: string }
-  | { type: 'toolUse'; id: string; name: string; input: string; status: ToolUseStatus }
-  | { type: 'toolResult'; id: string; toolUseId: string; output: string; isError: boolean };
-
-/** `ChatMessage`. */
-export interface ChatMessage {
-  id: string;
-  role: ChatRole;
-  timestamp: number;
-  contentBlocks: ContentBlock[];
-  isStreaming: boolean;
-}
+/** `ChatMessage` as a transcript yields it. */
+export type ChatMessage = Omit<ModelChatMessage, 'contentBlocks'> & {
+  contentBlocks: TranscriptContentBlock[];
+};
 
 /** One source's sessions, newest first. */
 export function listConversations(
