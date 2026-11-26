@@ -1,0 +1,21 @@
+# Windows Microsoft Windows [Version 10.0.26300.9974]
+== pwsh: pwsh.exe -NoLogo (120x30, flags=0x0)
+  [pwsh] bytes=168 input_phase=busy dim_cells=0 has_SGR2=false has_NBSP=false alt_screen=false answered=[]
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\pwsh.txt
+  child exited during capture: None
+== cmd: cmd.exe (120x30, flags=0x0)
+  [cmd] bytes=213 input_phase=busy dim_cells=0 has_SGR2=false has_NBSP=false alt_screen=false answered=[]
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\cmd.txt
+  child exited during capture: None
+== claude: C:\Users\<user>\.local\bin\claude.exe (120x30, flags=0x0)
+  [claude] bytes=1574 input_phase=input_ready dim_cells=25 has_SGR2=true has_NBSP=true alt_screen=true answered=[]
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\claude.txt
+  child exited during capture: None
+== claude-untrusted-dir: C:\Users\<user>\.local\bin\claude.exe (120x30, flags=0x0)
+  [claude-untrusted-dir] bytes=1490 input_phase=dialog dim_cells=0 has_SGR2=false has_NBSP=false alt_screen=false answered=[]
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\claude-untrusted-dir.txt
+  child exited during capture: None
+== codex: cmd.exe /d /s /c ""C:\Users\<user>\.local\bin\codex.cmd"" (120x30, flags=0x0)
+  [codex] bytes=3905 input_phase=dialog dim_cells=249 has_SGR2=true has_NBSP=false alt_screen=true answered=[]
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\codex.txt
+  child exited during capture: None

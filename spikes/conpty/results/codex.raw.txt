@@ -1,0 +1,67 @@
+\e[?9001h\e[?1004h\e[?2004h\e[?25l\e[2J\e[m\e[H\e]0;C:\WINDOWS\SYSTEM32\cmd.exe\a\e[?25h\e[?2026h\e[?25l\e[?1049h\e[?1003;1006h\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\e[120C\e[?2026h\e[0 q\e[?2026l\e[?2026l\e[?2026h\e[?2026l\e[H\e[K\r\n
+  \e[38;2;99;168;248m>_ \e[m\e[1mOpenAI Codex\e[22m\e[2m (v0.172.0)\e[22m\e[K\r\n
+     \e[2mloading\e[22m\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[55X\e[2m\e[55C⣀⣤⣤⣤⣀⣀\e[22m\e[K\r\n
+\e[52X\e[2m\e[52C⣠⣶⣿⣿⣿⣿⣿⣿⣿⣿⣦⣤⣤⣤⣤⣤⣤⡀\e[22m\e[K\r\n
+\e[50X\e[2m\e[50C⢀⣾⣿⣿⠿⠋⠉⠉⢉⣭⣿⣿⣿⣿⣿⠿⣿⣿⣿⣿⣷⣄\e[22m\e[K\r\n
+\e[49X\e[2m\e[49C⣀⣾⣿⣿⠃\e[22m \e[2m⣀⣴⣾⣿⣿⡿⠟⠋\e[22m \e[2m⣀⡀\e[22m \e[2m⠈⠙⢿⣿⣿⣧\e[22m\e[K\r\n
+\e[46X\e[2m\e[46C⣀⣶⣿⣿⣿⣿⡇\e[22m \e[2m⢸⣿⣿⡿⠛⠉⢀⣠⣴⣿⣿⣿⣷⣦⣀⠈⢻⣿⣿⡇\e[22m\e[K\r\n
+\e[45X\e[2m\e[45C⣰⣿⣿⡿⢿⣿⣿⡇\e[22m \e[2m⢸⣿⣿⢀⣤⣶⣿⣿⣿⠟⠛⠻⣿⣿⣿⣿⣮⣿⣿⡷\e[22m\e[K\r\n
+\e[44X\e[2m\e[44C⢰⣿⣿⡟⠁⢸⣿⣿⡇\e[22m \e[2m⢸⣿⣿⣿⣿⠿⠿⣿⣿⣿⣦⣄⡀⠈⠛⠿⣿⣿⣿⣧⡀\e[22m\e[K\r\n
+\e[44X\e[2m\e[44C⣾⣿⣿⠃\e[22m \e[2m⢸⣿⣿⡇\e[22m \e[2m⢸⣿⣿⠋⠁\e[22m  \e[2m⠈⠙⢻⣿⣿⣿⣶⣤⡀\e[22m \e[2m⠹⢿⣿⣷⡄\e[22m\e[K\r\n
+\e[44X\e[2m\e[44C⢸⣿⣿⣇\e[22m \e[2m⠸⣿⣿⣷⣦⣼⣿⣿\e[22m      \e[2m⢸⣿⣿⠻⢿⣿⣿⡇\e[22m \e[2m⠘⣿⣿⣿\e[22m\e[K\r\n
+\e[44X\e[2m\e[44C⠈⢿⣿⣿⣦⡀⠈⠛⠿⣿⣿⣿⣿⣄⡀\e[22m  \e[2m⢀⣠⣼⣿⣿\e[22m  \e[2m⣿⣿⡇\e[22m  \e[2m⣿⣿⣿⠇\e[22m\e[K\r\n
+\e[46X\e[2m\e[46C⢻⣿⣿⣿⣷⣦⣀⠈⠙⠻⣿⣿⣿⣶⣶⣿⣿⣿⣿⣿\e[22m  \e[2m⣿⣿⡇\e[22m \e[2m⣠⣿⣿⣿\e[22m\e[K\r\n
+\e[46X\e[2m\e[46C⢸⣿⣿⡿⢿⣿⣿⣿⣦⣠⣴⣿⣿⣿⡿⠟⠋⢸⣿⣿\e[22m  \e[2m⣿⣿⣷⣴⣿⣿⣿⠃\e[22m\e[K\r\n
+\e[46X\e[2m\e[46C⠘⣿⣿⣷\e[22m \e[2m⠈⠛⢿⣿⣿⣿⠿⠋⠉\e[22m \e[2m⣠⣴⣿⣿⣿\e[22m  \e[2m⣿⣿⣿⣿⣿⠟⠁\e[22m\e[K\r\n
+\e[47X\e[2m\e[47C⠻⣿⣿⣿⣤⣀\e[22m \e[2m⠈⠉\e[22m \e[2m⢀⣤⣶⣿⣿⣿⠿⠟⠁\e[22m \e[2m⣰⣿⣿⡟⠋⠁\e[22m\e[K\r\n
+\e[48X\e[2m\e[48C⠈⠿⣿⣿⣿⣿⣶⣾⣿⣿⣿⣿⠟⠋⠁\e[22m  \e[2m⣠⣼⣿⣿⡟\e[22m\e[K\r\n
+\e[51X\e[2m\e[51C⠙⠛⠛⠛⠻⠛⢿⣿⣿⣿⣿⣷⣾⣿⣿⣿⡿⠏\e[22m\e[K\r\n
+\e[58X\e[2m\e[58C⠈⠙⠛⠿⠿⠿⠿⠛⠉\e[22m\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\e[1m\r\n
+›\e[22m \e[2mAsk Codex to do anything\e[22m\e[K\r\n
+\e[K\r\n
+  \e[1m?\e[22m for shortcuts\e[K\e[28;3H\e[?25h\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?25l\e[2m\e[3;6H~\Dev\pp-wt\win-1.1\e[28;3H\e[?25h\e[?2026h\e[?2026l\e[22m\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?1003;1006l\e[?2026h\e[?2026l\e[?25l\e[1m\e[2;1H  Folder access\e[22m\e[K\e[2m\e[3;3HC:\Users\e[1C<user>\e[1CDev\pp-wt\win-1.1                                                                                    \e[38;5;3m\e[22m\e[5;3HNote: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:\e[K\e[m\e[2m\e[6;3Hc:\users\<user>\dev\purepoint                                                                                        \e[22m\e[7;2H\e[K\e[8;3HTrust\e[1Cthis\e[1Cfolder?\e[1CCodex\e[1Ccan\e[1Cread,\e[1Cedit,\e[1Cand\e[1Crun\e[1Cfiles here, subject\e[1Cto\e[1Cyour\e[1Cpermission\e[1Csettings.\e[1CFolder\e[1Csettings\e[9;3Hcan\e[1Crun\e[1Ccode\e[1Cautomatically,\e[1Ceven\e[1Cwithout\e[1Ca\e[1Cmodel request. Continue only\e[1Cif\e[1Cyou\e[1Ctrust\e[1Cthese\e[1Cfiles.\e[1CYour\e[1Ctrust\e[10;3Hdecision\e[1Cwill\e[1Cbe\e[1Csaved.\e[K\e[11;2H\e[K\e[1m\e[7m\r\n
+› 1. Trust and continue                                                                                                 \e[22m\e[27m\e[13;3H2.\e[1CBack\e[1Cto\e[1CAgent\e[1CCommand\e[1CCenter\e[K\e[14;2H\e[K\e[1m\e[15;3Henter\e[22m\e[2m continue · \e[22m\e[1mesc\e[22m\e[2m back\e[22m\e[K\e[16;2H\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\e[28;1H\e[K\e[30;2H\e[K\e[119C

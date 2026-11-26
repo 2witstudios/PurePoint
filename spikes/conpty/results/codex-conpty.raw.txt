@@ -1,0 +1,42 @@
+\e[?9001h\e[?1004h\e[?2004h\e[?25l\e[2J\e[m\e[H\e]0;C:\WINDOWS\SYSTEM32\cmd.exe\a\e[?25h\e[?2026h\e[?25l\e[?1049h\e[?1003;1006h\e[?2026h\e[0 q\e[?2026l\e[?2026l\e[?2026h\e[?2026l\e[K\r\n
+  \e[38;2;99;168;248m>_ \e[m\e[1mOpenAI Codex\e[22m\e[2m (v0.172.0)\e[22m\e[K\r\n
+     \e[2mloading\e[22m\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[55X\e[2m\e[55C⣀⣤⣤⣤⣀⣀\e[22m\e[K\r\n
+\e[52X\e[2m\e[52C⣠⣶⣿⣿⣿⣿⣿⣿⣿⣿⣦⣤⣤⣤⣤⣤⣤⡀\e[22m\e[K\r\n
+\e[50X\e[2m\e[50C⢀⣾⣿⣿⠿⠋⠉⠉⢉⣭⣿⣿⣿⣿⣿⠿⣿⣿⣿⣿⣷⣄\e[22m\e[K\r\n
+\e[49X\e[2m\e[49C⣀⣾⣿⣿⠃\e[22m \e[2m⣀⣴⣾⣿⣿⡿⠟⠋\e[22m \e[2m⣀⡀\e[22m \e[2m⠈⠙⢿⣿⣿⣧\e[22m\e[K\r\n
+\e[46X\e[2m\e[46C⣀⣶⣿⣿⣿⣿⡇\e[22m \e[2m⢸⣿⣿⡿⠛⠉⢀⣠⣴⣿⣿⣿⣷⣦⣀⠈⢻⣿⣿⡇\e[22m\e[K\r\n
+\e[45X\e[2m\e[45C⣰⣿⣿⡿⢿⣿⣿⡇\e[22m \e[2m⢸⣿⣿⢀⣤⣶⣿⣿⣿⠟⠛⠻⣿⣿⣿⣿⣮⣿⣿⡷\e[22m\e[K\r\n
+\e[44X\e[2m\e[44C⢰⣿⣿⡟⠁⢸⣿⣿⡇\e[22m \e[2m⢸⣿⣿⣿⣿⠿⠿⣿⣿⣿⣦⣄⡀⠈⠛⠿⣿⣿⣿⣧⡀\e[22m\e[K\r\n
+\e[44X\e[2m\e[44C⣾⣿⣿⠃\e[22m \e[2m⢸⣿⣿⡇\e[22m \e[2m⢸⣿⣿⠋⠁\e[22m  \e[2m⠈⠙⢻⣿⣿⣿⣶⣤⡀\e[22m \e[2m⠹⢿⣿⣷⡄\e[22m\e[K\r\n
+\e[44X\e[2m\e[44C⢸⣿⣿⣇\e[22m \e[2m⠸⣿⣿⣷⣦⣼⣿⣿\e[22m      \e[2m⢸⣿⣿⠻⢿⣿⣿⡇\e[22m \e[2m⠘⣿⣿⣿\e[22m\e[K\r\n
+\e[44X\e[2m\e[44C⠈⢿⣿⣿⣦⡀⠈⠛⠿⣿⣿⣿⣿⣄⡀\e[22m  \e[2m⢀⣠⣼⣿⣿\e[22m  \e[2m⣿⣿⡇\e[22m  \e[2m⣿⣿⣿⠇\e[22m\e[K\r\n
+\e[46X\e[2m\e[46C⢻⣿⣿⣿⣷⣦⣀⠈⠙⠻⣿⣿⣿⣶⣶⣿⣿⣿⣿⣿\e[22m  \e[2m⣿⣿⡇\e[22m \e[2m⣠⣿⣿⣿\e[22m\e[K\r\n
+\e[46X\e[2m\e[46C⢸⣿⣿⡿⢿⣿⣿⣿⣦⣠⣴⣿⣿⣿⡿⠟⠋⢸⣿⣿\e[22m  \e[2m⣿⣿⣷⣴⣿⣿⣿⠃\e[22m\e[K\r\n
+\e[46X\e[2m\e[46C⠘⣿⣿⣷\e[22m \e[2m⠈⠛⢿⣿⣿⣿⠿⠋⠉\e[22m \e[2m⣠⣴⣿⣿⣿\e[22m  \e[2m⣿⣿⣿⣿⣿⠟⠁\e[22m\e[K\r\n
+\e[47X\e[2m\e[47C⠻⣿⣿⣿⣤⣀\e[22m \e[2m⠈⠉\e[22m \e[2m⢀⣤⣶⣿⣿⣿⠿⠟⠁\e[22m \e[2m⣰⣿⣿⡟⠋⠁\e[22m\e[K\r\n
+\e[48X\e[2m\e[48C⠈⠿⣿⣿⣿⣿⣶⣾⣿⣿⣿⣿⠟⠋⠁\e[22m  \e[2m⣠⣼⣿⣿⡟\e[22m\e[K\r\n
+\e[51X\e[2m\e[51C⠙⠛⠛⠛⠻⠛⢿⣿⣿⣿⣿⣷⣾⣿⣿⣿⡿⠏\e[22m\e[K\r\n
+\e[58X\e[2m\e[58C⠈⠙⠛⠿⠿⠿⠿⠛⠉\e[22m\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\r\n
+\e[K\e[1m\r\n
+›\e[22m \e[2mAsk Codex to do anything\e[22m\e[K\r\n
+\e[K\r\n
+  \e[1m?\e[22m for shortcuts\e[K\e[28;3H\e[?25h\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?25l\e[2m\e[3;6H~\AppData\Local\Temp\pu-spike-untrusted\e[28;3H\e[?25h\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[22m\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e]0;pu-spike-untrusted\a\e]0;⠸ pu-spike-untrusted\a\e]7501;state=working:app=codex\e\\e[?2026h\e[?2026l\e[?2026h\e[?2026l\e[?25l\e[2m\e[5;1H  To get started, describe a task or try one of these commands:\e[22m\e[7;3H/init\e[2m - create an AGENTS.md file with instructions for Codex\e[22m\e[8;3H/status\e[2m - show current session configuration\e[22m\e[K\e[9;3H/permissions\e[2m - choose what Codex is allowed to do\e[22m\e[K\e[10;3H/model\e[2m - choose what model and reasoning effort to use\e[22m\e[K\e[11;3H/review\e[2m - review any changes and find issues\e[22m\e[K\e[12;2H\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\n
+\e[K\e[1m\e[27;1H›\e[22m\e[2m\e[1CAsk Codex to do anything\e[22m\r\n
+\e[K\e[38;2;246;226;183m\e[29;3HGPT-6.2-Sol default\e[m\e[1C·\e[38;2;171;223;167m\e[1C~\AppData\Local\Temp\pu-spike-untrusted\e[m\e[1m\e[30;3H←\e[22m\e[5Cagen\e[1Cs · \e[1m?\e[22m\e[1Cfor\e[1Cshortcuts\e[63C⚠\e[38;2;196;167;103m\e[1C1 warning\e[m\e[1C·\e[1m\e[1Cf2\e[22m\e[1Cto\e[1Cview\e[27;3H\e[?25h\e[?2026h\e[?2026l\e]0;⠼ pu-spike-untrusted\a\e]0;⠴ pu-spike-untrusted\a\e[?2026h\e[?2026l\e]0;⠦ pu-spike-untrusted\a\e[?2026h\e[?2026l\e]7501;state=idle:app=codex\e\\e[?2026h\e[?2026l\e]0;pu-spike-untrusted\a\e[?2026h\e[?2026l\e[?2026h\e[?2026l

@@ -1,0 +1,14 @@
+== resize claude: C:\Users\<user>\.local\bin\claude.exe
+  [before 120x30] bytes=1446 input_phase=input_ready dim_cells=23 has_SGR2=true has_NBSP=true alt_screen=false answered=[]
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\claude-resize-before-120x30.txt
+  ResizePseudoConsole(70x30) HRESULT=0x0
+  bytes after resize: 2654
+  [after 70x30] bytes=4100 input_phase=input_ready dim_cells=23 has_SGR2=true has_NBSP=true alt_screen=false answered=[]
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\claude-resize-after-70x30.txt
+== resize pwsh: pwsh.exe -NoLogo -NoProfile -NoExit -Command "1..40 | % { 'line ' + $_ + ' ' + ('x' * 90) }"
+  [before 120x30] bytes=4159 input_phase=busy dim_cells=0 has_SGR2=false has_NBSP=false alt_screen=false answered=[]
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\pwsh-resize-before-120x30.txt
+  ResizePseudoConsole(70x30) HRESULT=0x0
+  bytes after resize: 1543
+  [after 70x30] bytes=5702 input_phase=busy dim_cells=0 has_SGR2=false has_NBSP=false alt_screen=false answered=[]
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\pwsh-resize-after-70x30.txt
