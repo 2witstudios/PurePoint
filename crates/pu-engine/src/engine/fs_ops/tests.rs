@@ -1959,3 +1959,38 @@ fn given_timed_out_helper_tree_should_be_killed_with_its_children() {
     );
     assert!(!child.wait().unwrap().success());
 }
+
+/// The async tree kill runs `taskkill` off the runtime: on a current-thread
+/// runtime another task keeps running while it waits.
+#[cfg(windows)]
+#[tokio::test(flavor = "current_thread")]
+async fn given_async_tree_kill_should_not_block_the_runtime() {
+    use std::io::Read as _;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut child = std::process::Command::new("cmd")
+        .args(["/d", "/c", "ping -n 30 127.0.0.1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut first = [0u8; 1];
+    stdout.read_exact(&mut first).unwrap();
+    let ticks = std::sync::Arc::new(AtomicUsize::new(0));
+    let ticker = tokio::spawn({
+        let ticks = ticks.clone();
+        async move {
+            loop {
+                ticks.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }
+    });
+    kill_process_group_async(child.id()).await;
+    let during = ticks.load(Ordering::SeqCst);
+    ticker.abort();
+    let mut rest = Vec::new();
+    stdout.read_to_end(&mut rest).unwrap();
+    assert!(!child.wait().unwrap().success());
+    assert!(during > 0, "the runtime was blocked while taskkill ran");
+}
