@@ -37,14 +37,48 @@ fn bundle_contents(exe_dir: &Path) -> Option<&Path> {
     is_bundle.then_some(contents)
 }
 
+/// The engine executable's file name on Windows.
+#[cfg(windows)]
+const DAEMON_EXE: &str = "pu-engine.exe";
+
+/// Windows: the same order, without the app-bundle case: `PU_ENGINE_PATH`
+/// alone when set, else `pu-engine.exe` beside `pu.exe`, then
+/// `%USERPROFILE%\.pu\bin`. Trust is the file's owner and DACL
+/// ([`pu_core::win_security::check_trusted_binary`]).
 #[cfg(windows)]
 fn find_daemon_binary_in(
-    _exe: Option<&Path>,
-    _home: Option<&Path>,
-    _explicit: Option<&std::ffi::OsStr>,
+    exe: Option<&Path>,
+    home: Option<&Path>,
+    explicit: Option<&std::ffi::OsStr>,
 ) -> Result<PathBuf, String> {
-    // WIN-4.2: locate pu-engine.exe and check it is trusted (owner SID + DACL).
-    Err("finding a trusted pu-engine is not supported on Windows yet".into())
+    let candidates = if let Some(explicit) = explicit {
+        match which::which(explicit) {
+            Ok(path) => vec![path],
+            Err(e) => {
+                return Err(format!(
+                    "{ENGINE_PATH_ENV}={}: {e}",
+                    explicit.to_string_lossy()
+                ));
+            }
+        }
+    } else {
+        exe.and_then(Path::parent)
+            .map(|dir| dir.join(DAEMON_EXE))
+            .into_iter()
+            .chain(home.map(|home| home.join(".pu").join("bin").join(DAEMON_EXE)))
+            .collect()
+    };
+    let mut reasons = Vec::new();
+    for path in candidates {
+        match pu_core::win_security::check_trusted_binary(&path) {
+            Ok(()) => return Ok(path),
+            Err(reason) => reasons.push(format!("{}: {reason}", path.display())),
+        }
+    }
+    if reasons.is_empty() {
+        reasons.push("no candidate locations".into());
+    }
+    Err(reasons.join("; "))
 }
 
 #[cfg(unix)]
@@ -127,27 +161,6 @@ fn trusted_mode_and_owner(mode: u32, owner: u32, owners: &[u32]) -> Result<(), &
     } else {
         Ok(())
     }
-}
-
-/// Spawn the daemon detached from the caller's session: its own session (so
-/// an SSH hangup or the caller's process group dying does not reach it) and no
-/// inherited stdio (so `ssh host 'pu health'` returns instead of waiting on
-/// the daemon's open descriptors).
-#[cfg(windows)]
-fn daemon_command(
-    binary: &Path,
-    socket: &Path,
-    stderr: std::process::Stdio,
-) -> std::process::Command {
-    // WIN-4.2: detach with DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP instead of setsid.
-    let mut command = std::process::Command::new(binary);
-    command
-        .arg("--socket")
-        .arg(socket)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(stderr);
-    command
 }
 
 /// Spawn the daemon detached from the caller's session: its own session (so
@@ -347,34 +360,320 @@ async fn wait_for_healthy(socket: &Path) -> Result<Option<()>, CliError> {
     }
 }
 
-fn spawn_detached_daemon(socket: &Path) -> Result<(), CliError> {
+pub(crate) fn spawn_detached_daemon(socket: &Path) -> Result<(), CliError> {
     let binary = find_daemon_binary().map_err(|reasons| CliError::Other(format!(
         "no usable pu-engine ({reasons}) — install PurePoint (see docs/guide/linux-server.md), `cargo install --path crates/pu-engine`, or set PU_ENGINE_PATH"
     )))?;
 
     // Redirect daemon stderr to log file so startup errors are diagnosable
-    let stderr_target = match paths::daemon_log_path() {
-        Ok(log_path) => {
-            if let Some(parent) = log_path.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-            {
-                Ok(file) => std::process::Stdio::from(file),
-                Err(_) => std::process::Stdio::null(),
-            }
+    let log = paths::daemon_log_path().ok().and_then(|log_path| {
+        if let Some(parent) = log_path.parent() {
+            std::fs::create_dir_all(parent).ok();
         }
-        Err(_) => std::process::Stdio::null(),
-    };
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .ok()
+    });
 
     // Start daemon
-    daemon_command(&binary, socket, stderr_target)
-        .spawn()
-        .map_err(CliError::Io)?;
+    #[cfg(unix)]
+    {
+        let stderr_target = log
+            .map(std::process::Stdio::from)
+            .unwrap_or_else(std::process::Stdio::null);
+        daemon_command(&binary, socket, stderr_target)
+            .spawn()
+            .map_err(CliError::Io)?;
+    }
+    #[cfg(windows)]
+    win_spawn::spawn_detached(&binary, socket, log).map_err(CliError::Io)?;
     Ok(())
+}
+
+/// Spawning the daemon detached on Windows (WINAPP-009, REQ-WINAPP-030).
+#[cfg(windows)]
+mod win_spawn {
+    use std::ffi::OsStr;
+    use std::fs::File;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::AsRawHandle;
+    use std::path::Path;
+    use std::ptr::{null, null_mut};
+
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_ACCESS_DENIED, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW,
+        CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DETACHED_PROCESS,
+        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
+        InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+        PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+        STARTUPINFOEXW, UpdateProcThreadAttribute,
+    };
+
+    const QUOTE: u16 = b'"' as u16;
+    const BACKSLASH: u16 = b'\\' as u16;
+
+    /// One argument quoted for `CommandLineToArgvW` / the MSVC CRT.
+    pub(super) fn quote_arg(arg: &OsStr, out: &mut Vec<u16>) {
+        let wide: Vec<u16> = arg.encode_wide().collect();
+        let needs_quotes = wide.is_empty()
+            || wide
+                .iter()
+                .any(|&c| c == b' ' as u16 || c == b'\t' as u16 || c == QUOTE);
+        if !needs_quotes {
+            out.extend_from_slice(&wide);
+            return;
+        }
+        out.push(QUOTE);
+        let mut backslashes = 0;
+        for &c in &wide {
+            if c == BACKSLASH {
+                backslashes += 1;
+                continue;
+            }
+            let run = if c == QUOTE {
+                backslashes * 2 + 1
+            } else {
+                backslashes
+            };
+            out.extend(std::iter::repeat_n(BACKSLASH, run));
+            backslashes = 0;
+            out.push(c);
+        }
+        out.extend(std::iter::repeat_n(BACKSLASH, backslashes * 2));
+        out.push(QUOTE);
+    }
+
+    fn wide_nul(s: &OsStr) -> Vec<u16> {
+        s.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    /// Start `binary --socket <socket>` with no console, in its own process
+    /// group, out of the caller's job when the job allows it, with stdin and
+    /// stdout on NUL and stderr on `log` (or NUL). Only those three handles
+    /// are inherited (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), so a pipe the
+    /// caller inherited (an SSH session's stdout, say) never keeps the
+    /// caller's session waiting on the daemon, and closing the terminal that
+    /// ran `pu` does not reach it.
+    pub(super) fn spawn_detached(
+        binary: &Path,
+        socket: &Path,
+        log: Option<File>,
+    ) -> std::io::Result<()> {
+        let nul = || {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open("NUL")
+        };
+        let stdin = nul()?;
+        let stdout = nul()?;
+        let stderr = match log {
+            Some(file) => file,
+            None => nul()?,
+        };
+        let handles: [HANDLE; 3] = [
+            stdin.as_raw_handle(),
+            stdout.as_raw_handle(),
+            stderr.as_raw_handle(),
+        ];
+        for handle in handles {
+            // SAFETY: our own open file handles, made inheritable only so the
+            // handle list below may name them.
+            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) }
+                == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+
+        // The daemon outlives this shell: never hand it a relative socket
+        // path, and never pin the caller's directory (Windows cannot delete
+        // a directory that is some process's working directory).
+        let socket = std::path::absolute(socket)?;
+        let mut cmdline = Vec::new();
+        quote_arg(binary.as_os_str(), &mut cmdline);
+        cmdline.push(b' ' as u16);
+        quote_arg(OsStr::new("--socket"), &mut cmdline);
+        cmdline.push(b' ' as u16);
+        quote_arg(socket.as_os_str(), &mut cmdline);
+        cmdline.push(0);
+        let application = wide_nul(binary.as_os_str());
+        let cwd = pu_core::paths::home_dir()
+            .ok()
+            .filter(|home| home.is_dir())
+            .map(|home| wide_nul(home.as_os_str()));
+
+        // SAFETY: the attribute list is sized by the first call, lives in
+        // `attr_buf` until DeleteProcThreadAttributeList, and every pointer
+        // passed to CreateProcessW outlives the call.
+        unsafe {
+            let mut size = 0usize;
+            InitializeProcThreadAttributeList(null_mut(), 1, 0, &mut size);
+            let mut attr_buf = vec![0u8; size];
+            let attrs = attr_buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+            if InitializeProcThreadAttributeList(attrs, 1, 0, &mut size) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let result = (|| {
+                if UpdateProcThreadAttribute(
+                    attrs,
+                    0,
+                    PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                    handles.as_ptr() as *const _,
+                    std::mem::size_of_val(&handles),
+                    null_mut(),
+                    null(),
+                ) == 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let mut startup: STARTUPINFOEXW = std::mem::zeroed();
+                startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+                startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+                startup.StartupInfo.hStdInput = handles[0];
+                startup.StartupInfo.hStdOutput = handles[1];
+                startup.StartupInfo.hStdError = handles[2];
+                startup.lpAttributeList = attrs;
+                let base = DETACHED_PROCESS
+                    | CREATE_NEW_PROCESS_GROUP
+                    | CREATE_NO_WINDOW
+                    | CREATE_UNICODE_ENVIRONMENT
+                    | EXTENDED_STARTUPINFO_PRESENT;
+                // Leave the caller's job (an SSH session's, say) when it
+                // allows breakaway; otherwise stay in it.
+                let mut last = None;
+                for flags in [base | CREATE_BREAKAWAY_FROM_JOB, base] {
+                    let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+                    let mut line = cmdline.clone();
+                    let created = CreateProcessW(
+                        application.as_ptr(),
+                        line.as_mut_ptr(),
+                        null(),
+                        null(),
+                        1,
+                        flags,
+                        null(),
+                        cwd.as_ref().map_or(null(), |c| c.as_ptr()),
+                        &startup.StartupInfo,
+                        &mut info,
+                    );
+                    if created != 0 {
+                        CloseHandle(info.hThread);
+                        CloseHandle(info.hProcess);
+                        return Ok(());
+                    }
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(ERROR_ACCESS_DENIED as i32) {
+                        return Err(error);
+                    }
+                    last = Some(error);
+                }
+                Err(last.unwrap_or_else(|| std::io::Error::other("CreateProcessW failed")))
+            })();
+            DeleteProcThreadAttributeList(attrs);
+            result
+        }
+    }
+}
+
+// Windows binary discovery, trust and the detached spawn.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    fn make_exe(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"MZ").unwrap();
+        pu_core::win_security::set_private_dacl(path, false).unwrap();
+    }
+
+    fn find(exe_dir: &Path, home: Option<&Path>, explicit: Option<&Path>) -> Option<PathBuf> {
+        let exe = exe_dir.join("pu.exe");
+        find_daemon_binary_in(Some(&exe), home, explicit.map(Path::as_os_str)).ok()
+    }
+
+    #[test]
+    fn given_daemon_beside_pu_should_prefer_it_over_pu_bin() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let exe_dir = tmp.path().join("bin");
+        let home = tmp.path().join("home");
+        let installed = home.join(".pu").join("bin").join("pu-engine.exe");
+        make_exe(&exe_dir.join("pu-engine.exe"));
+        make_exe(&installed);
+        assert_eq!(
+            find(&exe_dir, Some(&home), None),
+            Some(exe_dir.join("pu-engine.exe"))
+        );
+        std::fs::remove_file(exe_dir.join("pu-engine.exe")).unwrap();
+        assert_eq!(find(&exe_dir, Some(&home), None), Some(installed));
+    }
+
+    #[test]
+    fn given_explicit_engine_path_should_use_only_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let exe_dir = tmp.path().join("bin");
+        make_exe(&exe_dir.join("pu-engine.exe"));
+        let dev = tmp.path().join("dev").join("pu-engine.exe");
+        make_exe(&dev);
+        assert_eq!(find(&exe_dir, None, Some(&dev)), Some(dev));
+        let missing = tmp.path().join("missing").join("pu-engine.exe");
+        assert_eq!(find(&exe_dir, None, Some(&missing)), None);
+    }
+
+    #[test]
+    fn given_untrusted_candidates_should_name_each_reason() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let exe_dir = tmp.path().join("bin");
+        let home = tmp.path().join("home");
+        let engine = exe_dir.join("pu-engine.exe");
+        make_exe(&engine);
+        pu_core::win_security::grant_for_test(&engine, "WD").unwrap(); // Everyone
+        let err =
+            find_daemon_binary_in(Some(&exe_dir.join("pu.exe")), Some(&home), None).unwrap_err();
+        let writable = format!("{}: writable by other users", engine.display());
+        assert!(err.contains(&writable), "{err}");
+        assert!(err.contains("pu-engine.exe: not found"), "{err}");
+    }
+
+    #[test]
+    fn given_args_with_spaces_and_quotes_should_quote_for_the_crt() {
+        let quoted = |arg: &str| {
+            let mut out = Vec::new();
+            win_spawn::quote_arg(std::ffi::OsStr::new(arg), &mut out);
+            String::from_utf16(&out).unwrap()
+        };
+        assert_eq!(quoted("--socket"), "--socket");
+        assert_eq!(quoted(r"C:\a b\pu-engine.exe"), r#""C:\a b\pu-engine.exe""#);
+        assert_eq!(quoted(r#"a"b"#), r#""a\"b""#);
+        assert_eq!(quoted(r"C:\x y\"), r#""C:\x y\\""#);
+        assert_eq!(quoted(""), r#""""#);
+    }
+
+    #[test]
+    fn given_detached_spawn_should_send_stderr_to_the_log() {
+        // where.exe rejects its `--socket <path>` arguments on stderr, which
+        // must land in the log.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let log_path = tmp.path().join("daemon.log");
+        let log = std::fs::File::create(&log_path).unwrap();
+        let system = std::env::var_os("SystemRoot").unwrap();
+        let binary = Path::new(&system).join("System32").join("where.exe");
+        win_spawn::spawn_detached(&binary, &tmp.path().join("d.sock"), Some(log)).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let text = std::fs::read_to_string(&log_path).unwrap_or_default();
+            if text.contains("ERROR") {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "log: {text:?}");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 }
 
 // These exercise Unix ownership/mode trust checks, setsid and Unix-socket fake daemons.

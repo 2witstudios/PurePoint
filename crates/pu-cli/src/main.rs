@@ -771,7 +771,31 @@ enum TriggerAction {
     },
 }
 
+/// Let legacy conhost render the ANSI colours `pu` prints. Windows Terminal
+/// already does; where the mode cannot be set (output is not a console, e.g.
+/// a pipe or file) nothing changes, as with piped output on Unix.
+#[cfg(windows)]
+fn enable_virtual_terminal() {
+    use windows_sys::Win32::System::Console::{
+        CONSOLE_MODE, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle,
+        STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
+    };
+    for id in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle has no preconditions; the Get/SetConsoleMode
+        // calls fail harmlessly on a handle that is not a console.
+        unsafe {
+            let handle = GetStdHandle(id);
+            let mut mode: CONSOLE_MODE = 0;
+            if GetConsoleMode(handle, &mut mode) != 0 {
+                SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            }
+        }
+    }
+}
+
 fn main() {
+    #[cfg(windows)]
+    enable_virtual_terminal();
     if std::env::args_os()
         .nth(1)
         .is_some_and(|arg| arg == "__agent-signal")

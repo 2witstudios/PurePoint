@@ -16,9 +16,14 @@ pub enum DaemonAction {
     /// Stop the daemon; its agents are suspended and resume on next start
     Stop,
     /// Show daemon health and service state
-    Status,
+    Status {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Run the daemon as a user service (systemd on Linux, launchd on macOS) so
-    /// it restarts after a crash and survives logout
+    /// it restarts after a crash and survives logout; on Windows, register a
+    /// logon Run entry (no admin rights needed)
     Install {
         /// Also start it now
         #[arg(long)]
@@ -39,7 +44,7 @@ pub async fn run(socket: &Path, custom_socket: bool, action: DaemonAction) -> Re
             Ok(())
         }
         DaemonAction::Stop => stop(socket, custom_socket).await,
-        DaemonAction::Status => status(socket, custom_socket).await,
+        DaemonAction::Status { json } => status(socket, custom_socket, json).await,
         DaemonAction::Install { now } => {
             // A daemon started outside the service still holds the socket lock,
             // so the service's daemon would exit at once and stay inactive.
@@ -47,7 +52,9 @@ pub async fn run(socket: &Path, custom_socket: bool, action: DaemonAction) -> Re
                 .await
                 .unwrap_or(true);
             install(socket, custom_socket, now)?;
-            if already_running {
+            // The Windows Run entry supervises nothing once started, so a
+            // running daemon is already what it would start.
+            if already_running && !cfg!(windows) {
                 println!(
                     "a daemon is already running outside the service; run `pu daemon stop` then `pu daemon start` to move it under the service (running agents are suspended and resume)"
                 );
@@ -130,8 +137,13 @@ async fn stop_supervised(manager: Manager, socket: &Path) -> Result<bool, CliErr
     }
 }
 
-async fn status(socket: &Path, custom_socket: bool) -> Result<(), CliError> {
-    match client::send_request(socket, &Request::Health).await {
+async fn status(socket: &Path, custom_socket: bool, json: bool) -> Result<(), CliError> {
+    let health = client::send_request(socket, &Request::Health).await;
+    if json {
+        println!("{}", status_json(socket, custom_socket, health));
+        return Ok(());
+    }
+    match health {
         Ok(Response::HealthReport {
             pid,
             uptime_seconds,
@@ -153,6 +165,55 @@ async fn status(socket: &Path, custom_socket: bool) -> Result<(), CliError> {
         None => println!("service: not installed (`pu daemon install --now` to supervise it)"),
     }
     Ok(())
+}
+
+/// `pu daemon status --json`: the daemon's health (or null when nothing
+/// answers) and, for the default socket, the service manager's state.
+fn status_json(
+    socket: &Path,
+    custom_socket: bool,
+    health: Result<Response, CliError>,
+) -> serde_json::Value {
+    let daemon = match health {
+        Ok(Response::HealthReport {
+            pid,
+            uptime_seconds,
+            protocol_version,
+            agent_count,
+            ..
+        }) => serde_json::json!({
+            "running": true,
+            "pid": pid,
+            "uptime_seconds": uptime_seconds,
+            "protocol_version": protocol_version,
+            "agent_count": agent_count,
+        }),
+        Ok(Response::Error { code, message }) => serde_json::json!({
+            "running": true,
+            "error": { "code": code, "message": message },
+        }),
+        _ => serde_json::json!({ "running": false }),
+    };
+    let service = if custom_socket {
+        serde_json::Value::Null
+    } else {
+        match service::installed() {
+            Some(manager) => serde_json::json!({
+                "installed": true,
+                "manager": manager.name(),
+                "state": service::state(manager),
+            }),
+            None => serde_json::json!({
+                "installed": false,
+                "manager": Manager::current().map(Manager::name),
+            }),
+        }
+    };
+    serde_json::json!({
+        "socket": socket.display().to_string(),
+        "daemon": daemon,
+        "service": service,
+    })
 }
 
 fn install(socket: &Path, custom_socket: bool, now: bool) -> Result<(), CliError> {

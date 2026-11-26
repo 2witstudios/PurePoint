@@ -939,6 +939,7 @@ dependencies = [
  "owo-colors",
  "pu-core",
  "pu-engine",
+ "pu-transport",
  "qrcode",
  "serde",
  "serde_json",
@@ -947,6 +948,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "which",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -977,11 +979,13 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "chrono",
+ "fs4",
  "indexmap",
  "libc",
  "nix",
  "notify",
  "pu-core",
+ "pu-transport",
  "reqwest",
  "rusqlite",
  "serde",

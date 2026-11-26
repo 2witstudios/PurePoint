@@ -2,65 +2,37 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-#[cfg(unix)]
-use tokio::net::UnixListener;
 use tokio::sync::{Notify, Semaphore};
+
+use pu_transport::{Endpoint, Listener, PeerIdentity, Stream};
 
 const MAX_MESSAGE_SIZE: u64 = 1024 * 1024; // 1MB
 /// The app holds a status and a grid stream per open project plus one attach
 /// stream per terminal pane, all for as long as they are open, so this must sit
 /// well above what a busy session uses.
-#[cfg(unix)]
 const MAX_CONNECTIONS: usize = 1024;
 const ATTACH_OUTPUT_CHUNK_SIZE: usize = 64 * 1024;
 /// How long a new connection may take to send its first complete request.
 /// Streams and request loops have no idle limit once a request has arrived.
-#[cfg(unix)]
 const FIRST_LINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 use crate::engine::Engine;
 use pu_core::protocol::{Request, Response};
 
-#[cfg(unix)]
-type IpcReader = BufReader<tokio::net::unix::OwnedReadHalf>;
-#[cfg(unix)]
-type IpcWriter = tokio::net::unix::OwnedWriteHalf;
-// WIN-3.4: named-pipe halves replace these stand-ins.
-#[cfg(windows)]
-type IpcReader = BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>;
-#[cfg(windows)]
-type IpcWriter = tokio::io::WriteHalf<tokio::io::DuplexStream>;
+type IpcReader = BufReader<pu_transport::ReadHalf>;
+type IpcWriter = pu_transport::WriteHalf;
 
+mod signals;
 mod streams;
 
-// These drive the server over Unix sockets.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests;
 
-// Tokio may not yet have registered a readiness event for an already-visible
-// EOF. Check the kernel before polling delivery, which can enqueue an OS write.
-#[cfg(windows)]
+// Unread bytes mean the client moved on; otherwise ask the transport, since
+// tokio may not yet have registered a readiness event for an already-visible
+// EOF. Checked before polling delivery, which can enqueue an OS write.
 fn operation_disconnected(reader: &IpcReader) -> bool {
-    // WIN-3.4: peek the named pipe (PeekNamedPipe) for an already-visible EOF.
-    !reader.buffer().is_empty()
-}
-
-#[cfg(unix)]
-fn operation_disconnected(reader: &IpcReader) -> bool {
-    use std::os::fd::AsRawFd;
-    if !reader.buffer().is_empty() {
-        return true;
-    }
-    let mut byte = 0u8;
-    let result = unsafe {
-        libc::recv(
-            reader.get_ref().as_ref().as_raw_fd(),
-            (&mut byte as *mut u8).cast(),
-            1,
-            libc::MSG_PEEK | libc::MSG_DONTWAIT,
-        )
-    };
-    result >= 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::WouldBlock
+    !reader.buffer().is_empty() || reader.get_ref().peer_sent_or_closed()
 }
 
 enum StreamMode {
@@ -136,45 +108,27 @@ async fn reject_frame_too_large(writer: &mut IpcWriter) {
     let _ = write_response(writer, &resp).await;
 }
 
-/// Only processes running as the daemon's own user may use the socket. The
-/// 0600 socket mode already says so; this holds even if the mode is changed.
-#[cfg(unix)]
-fn peer_allowed(peer_uid: Option<u32>, daemon_euid: u32) -> bool {
-    peer_uid == Some(daemon_euid)
-}
+/// Only processes running as the daemon's own user may use the endpoint. The
+/// 0600 socket mode or the pipe's owner-only DACL already says so; this holds
+/// even if those are changed.
+type PeerCheck = fn(&PeerIdentity) -> bool;
 
-#[cfg(unix)]
-fn daemon_euid() -> u32 {
-    // SAFETY: geteuid has no preconditions and cannot fail.
-    unsafe { libc::geteuid() }
-}
-
-#[cfg_attr(windows, allow(dead_code))]
 pub struct IpcServer {
-    #[cfg(unix)]
-    listener: UnixListener,
+    listener: Listener,
     engine: Arc<Engine>,
     shutdown: Arc<Notify>,
     conn_limit: Arc<Semaphore>,
     first_line_timeout: std::time::Duration,
+    peer_allowed: PeerCheck,
 }
 
 impl IpcServer {
-    #[cfg(windows)]
-    pub fn bind(_socket_path: &Path, _engine: Engine) -> Result<Self, std::io::Error> {
-        // WIN-3.4: create the owner-only named pipe the daemon listens on.
-        Err(crate::os::unsupported("IPC server socket"))
-    }
-
-    #[cfg(unix)]
     pub fn bind(socket_path: &Path, engine: Engine) -> Result<Self, std::io::Error> {
-        use std::os::unix::fs::PermissionsExt;
-        // Remove stale socket if it exists
-        let _ = std::fs::remove_file(socket_path);
-        let listener = UnixListener::bind(socket_path)?;
-        // Owner-only whatever the umask. Connections accepted before this are
-        // still held to the peer check in `run`.
-        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
+        // Replaces a stale Unix socket and makes it owner-only whatever the
+        // umask; on Windows creates the private first pipe instance.
+        // Connections accepted before the mode is set are still held to the
+        // peer check in `run`.
+        let listener = Listener::bind(&Endpoint::for_socket(socket_path)?)?;
         let engine = Arc::new(engine);
         // Every served registry is pruned, so the projects stream always opens.
         engine.start_registry_prune();
@@ -184,20 +138,28 @@ impl IpcServer {
             shutdown: Arc::new(Notify::new()),
             conn_limit: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
             first_line_timeout: FIRST_LINE_TIMEOUT,
+            peer_allowed: PeerIdentity::is_same_user,
         })
     }
 
     /// Override the concurrent connection cap (defaults to `MAX_CONNECTIONS`).
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub(crate) fn with_connection_limit(mut self, limit: usize) -> Self {
         self.conn_limit = Arc::new(Semaphore::new(limit));
         self
     }
 
     /// Override how long a connection may wait before its first request.
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub(crate) fn with_first_line_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.first_line_timeout = timeout;
+        self
+    }
+
+    /// Override the peer check (defaults to [`PeerIdentity::is_same_user`]).
+    #[cfg(test)]
+    pub(crate) fn with_peer_check(mut self, check: PeerCheck) -> Self {
+        self.peer_allowed = check;
         self
     }
 
@@ -206,39 +168,24 @@ impl IpcServer {
         &self.engine
     }
 
-    #[cfg(windows)]
-    pub async fn run(self) -> Result<(), std::io::Error> {
-        // WIN-3.4: named-pipe accept loop with a same-user peer check.
-        // WIN-3.5: Ctrl-C / console-close shutdown in place of SIGTERM/SIGINT/SIGHUP.
-        Err(crate::os::unsupported("IPC server"))
-    }
-
-    #[cfg(unix)]
-    pub async fn run(self) -> Result<(), std::io::Error> {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-        // The terminal or SSH session that started the daemon may hang up; the
-        // daemon must outlive it. A handler (unlike SIG_IGN) resets on exec, so
-        // agents still get SIGHUP when their own PTY closes.
-        let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
+    pub async fn run(mut self) -> Result<(), std::io::Error> {
+        let mut signals = signals::ShutdownSignals::new()?;
 
         loop {
             tokio::select! {
                 accept = self.listener.accept() => {
                     // A failed accept (e.g. EMFILE) is transient: never let it end
                     // the server and strand every running agent.
-                    let stream = match accept {
-                        Ok((stream, _addr)) => stream,
+                    let (stream, peer) = match accept {
+                        Ok(accepted) => accepted,
                         Err(e) => {
                             tracing::warn!("accept failed: {e}");
                             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                             continue;
                         }
                     };
-                    let peer_uid = stream.peer_cred().ok().map(|cred| cred.uid());
-                    if !peer_allowed(peer_uid, daemon_euid()) {
-                        tracing::warn!(?peer_uid, "rejecting connection from another user");
+                    if !(self.peer_allowed)(&peer) {
+                        tracing::warn!(peer_pid = ?peer.pid, "rejecting connection from another user");
                         continue; // dropping the stream closes it
                     }
                     // Never wait for a permit: waiting here would stall accepting,
@@ -246,8 +193,8 @@ impl IpcServer {
                     // let stalled clients pile up descriptors past the cap.
                     let Ok(permit) = self.conn_limit.clone().try_acquire_owned() else {
                         tracing::warn!("connection limit reached; rejecting connection");
-                        reject_busy(&stream);
-                        continue; // dropping the stream closes it
+                        reject_busy(stream);
+                        continue;
                     };
                     let engine = self.engine.clone();
                     let shutdown = self.shutdown.clone();
@@ -261,24 +208,16 @@ impl IpcServer {
                     tracing::info!("shutdown requested via IPC");
                     return Ok(());
                 }
-                _ = sigterm.recv() => {
-                    tracing::info!("received SIGTERM, shutting down");
+                name = signals.recv() => {
+                    tracing::info!("received {name}, shutting down");
                     return Ok(());
-                }
-                _ = sigint.recv() => {
-                    tracing::info!("received SIGINT, shutting down");
-                    return Ok(());
-                }
-                _ = sighup.recv() => {
-                    tracing::info!("received SIGHUP, ignoring");
                 }
             }
         }
     }
 
-    #[cfg(unix)]
     async fn handle_connection(
-        stream: tokio::net::UnixStream,
+        stream: Stream,
         engine: Arc<Engine>,
         shutdown: Arc<Notify>,
         first_line_timeout: std::time::Duration,
@@ -321,7 +260,6 @@ impl IpcServer {
 
     /// Handles a single parsed request line. Returns `true` to continue the
     /// connection loop, `false` to break.
-    #[cfg_attr(windows, allow(dead_code))]
     async fn dispatch_request(
         line: &str,
         reader: &mut IpcReader,
@@ -437,17 +375,40 @@ impl IpcServer {
     }
 }
 
-/// Best-effort, non-blocking BUSY reply to a connection over the limit; a
-/// partial or failed write is ignored since the stream is closed right after.
-#[cfg(unix)]
-fn reject_busy(stream: &tokio::net::UnixStream) {
+/// Best-effort BUSY reply to a connection over the limit, then close it.
+///
+/// Unix writes without waiting; a partial or failed write is ignored since
+/// the stream is closed right after. A freshly connected Windows pipe has no
+/// write readiness yet, so `try_write` would drop the line for some clients
+/// (WIN-1.2 finding 1): there the line is written by a short-lived task with
+/// a 1 s timeout, at most `MAX_BUSY_WRITERS` at a time. Over-cap clients
+/// beyond those are closed without a line.
+fn reject_busy(stream: Stream) {
     let resp = Response::Error {
         code: "BUSY".into(),
         message: "daemon connection limit reached".into(),
     };
-    if let Ok(mut json) = serde_json::to_vec(&resp) {
-        json.push(b'\n');
+    let Ok(mut json) = serde_json::to_vec(&resp) else {
+        return;
+    };
+    json.push(b'\n');
+    #[cfg(unix)]
+    {
         let _ = stream.try_write(&json);
+    }
+    #[cfg(windows)]
+    {
+        const MAX_BUSY_WRITERS: usize = 128;
+        static BUSY_WRITERS: Semaphore = Semaphore::const_new(MAX_BUSY_WRITERS);
+        let Ok(permit) = BUSY_WRITERS.try_acquire() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let _permit = permit;
+            let mut stream = stream;
+            let write = stream.write_all(&json);
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(1), write).await;
+        });
     }
 }
 
