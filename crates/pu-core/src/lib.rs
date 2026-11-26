@@ -26,4 +26,6 @@ pub mod signals;
 mod ts_export;
 
 #[cfg(windows)]
+pub mod engine_binary;
+#[cfg(windows)]
 pub mod win_security;

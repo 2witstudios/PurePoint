@@ -67,10 +67,10 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/ClaudeProcess.swift` | 168 | — | — | excluded | DEC-11: legacy chat; WIN-8.12 grep found no caller outside `State/ChatState.swift` (which declares `ClaudeProcessProvider`) and `ClaudeProcessTests`, and nothing constructs it |
 | `Services/CodexConversationIndex.swift` | 160 | `src-tauri/src/conversations/codex.rs` | WIN-8.12 | ported | — |
 | `Services/DaemonAttachSession.swift` | 354 | `src-tauri/src/attach/session.rs` | WIN-5.4 | todo | — |
-| `Services/DaemonClient.swift` | 138 | `src-tauri/src/daemon/client.rs`, `ui/src/services/daemon.ts` | WIN-5.3 | todo | — |
+| `Services/DaemonClient.swift` | 138 | `src-tauri/src/daemon/client.rs`, `src-tauri/src/daemon/relay.rs`, `ui/src/services/daemon.ts` | WIN-5.3 | ported | — |
 | `Services/DaemonConnection.swift` | 80 | `ui/src/services/daemonConnection.ts` | WIN-6.0 | todo | — |
 | `Services/DaemonGridSubscription.swift` | 127 | `src-tauri/src/subscriptions/grid.rs`, `ui/src/state/gridCommands.ts` | WIN-6.4 | todo | — |
-| `Services/DaemonLifecycle.swift` | 285 | `src-tauri/src/daemon/lifecycle.rs` | WIN-5.3 | todo | — |
+| `Services/DaemonLifecycle.swift` | 285 | `src-tauri/src/daemon/lifecycle.rs` | WIN-5.3 | ported | — |
 | `Services/DaemonProjectsSubscription.swift` | 69 | `src-tauri/src/subscriptions/projects.rs` | WIN-5.5 | todo | — |
 | `Services/DaemonProtocol.swift` | 1438 | `ui/src/protocol/generated/` (from pu-core via ts-rs) | WIN-5.2 | todo | — |
 | `Services/DaemonStatusSubscription.swift` | 143 | `src-tauri/src/subscriptions/status.rs` | WIN-5.5 | todo | — |
