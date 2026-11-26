@@ -141,7 +141,8 @@ nonisolated enum CodexConversationIndex {
 
     /// Build a UUID -> file URL map by listing session directories.
     /// Session file path: ~/.codex/sessions/{YYYY}/{MM}/{DD}/rollout-*-{uuid}.jsonl
-    private static func sessionFilePaths(baseURL: URL) throws -> [String: URL] {
+    /// Internal so tests can exercise the indexing step in isolation.
+    static func sessionFilePaths(baseURL: URL) throws -> [String: URL] {
         let sessionsDir = baseURL.appendingPathComponent("sessions", isDirectory: true)
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: sessionsDir.path) else { return [:] }
