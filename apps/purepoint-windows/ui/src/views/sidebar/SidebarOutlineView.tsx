@@ -67,6 +67,17 @@ export function SidebarOutlineView({
         return machines.find((machine) => machine.machine.id === machineId)?.machine.name ?? null;
       },
       isPointGuardFolder: (root) => app.isPointGuardFolder(root),
+      siblingProjectIds: (project) => {
+        const state = app.projectState(project.projectId);
+        return state === null ? [] : app.siblingProjects(state).map((p) => p.projectId);
+      },
+      unsavedFileNames: (project) => {
+        const state = app.projectState(project.projectId);
+        const machine = machines.find((m) => m.machine.id === state?.machineId);
+        return state === null ? [] : (machine?.unsavedFileNamesIn?.(state) ?? []);
+      },
+      machineUnsavedFileNames: (snapshot) =>
+        machines.find((machine) => machine.machine.id === snapshot.id)?.unsavedFileNames ?? [],
     }),
     [app, machines],
   );

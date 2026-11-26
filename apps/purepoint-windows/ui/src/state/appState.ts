@@ -96,6 +96,10 @@ export interface MachineState {
   hideProject(root: string): void;
   removeProject(root: string, suspendAgents: boolean): Promise<void>;
   moveProject(root: string, index: number): void;
+  /** Swift `unsavedFileNames`: files with unsaved edits across the machine's projects. */
+  readonly unsavedFileNames?: readonly string[];
+  /** Swift `unsavedFileNames(in:)`. */
+  unsavedFileNamesIn?(project: ProjectState): string[];
 }
 
 /** The machine registry and how machine states are made (Swift `MachineRegistryStore`). */

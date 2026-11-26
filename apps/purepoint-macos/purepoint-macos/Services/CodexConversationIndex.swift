@@ -118,9 +118,31 @@ nonisolated enum CodexConversationIndex {
 
     // MARK: - Private
 
+    /// The session id in a rollout file stem. Rollouts are named
+    /// `rollout-2026-11-26T10-00-00-<uuid>`, and a UUID has dashes of its own, so the id is
+    /// the trailing 36-character UUID. (Taking the text after the last `-` yields only the
+    /// UUID's final group, which never matches a full id from the index.) Stems without a
+    /// trailing UUID keep the after-the-last-`-` rule.
+    static func sessionIdFromStem(_ stem: String) -> String? {
+        if stem.count >= 36 {
+            let tail = String(stem.suffix(36))
+            let isUUID = tail.enumerated().allSatisfy { offset, character in
+                switch offset {
+                case 8, 13, 18, 23: return character == "-"
+                default: return character.isHexDigit
+                }
+            }
+            if isUUID { return tail }
+        }
+        guard let lastDash = stem.lastIndex(of: "-") else { return nil }
+        let afterDash = String(stem[stem.index(after: lastDash)...])
+        return afterDash.count >= 8 ? afterDash : nil
+    }
+
     /// Build a UUID -> file URL map by listing session directories.
     /// Session file path: ~/.codex/sessions/{YYYY}/{MM}/{DD}/rollout-*-{uuid}.jsonl
-    private static func sessionFilePaths(baseURL: URL) throws -> [String: URL] {
+    /// Internal so tests can exercise the indexing step in isolation.
+    static func sessionFilePaths(baseURL: URL) throws -> [String: URL] {
         let sessionsDir = baseURL.appendingPathComponent("sessions", isDirectory: true)
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: sessionsDir.path) else { return [:] }
@@ -137,13 +159,9 @@ nonisolated enum CodexConversationIndex {
         else { return [:] }
 
         for case let fileURL as URL in enumerator where fileURL.pathExtension == "jsonl" {
-            // Extract UUID from filename: rollout-*-{uuid}.jsonl
             let filename = fileURL.deletingPathExtension().lastPathComponent
-            if let lastDash = filename.lastIndex(of: "-") {
-                let uuid = String(filename[filename.index(after: lastDash)...])
-                if uuid.count >= 8 {  // sanity check
-                    map[uuid] = fileURL
-                }
+            if let uuid = sessionIdFromStem(filename) {
+                map[uuid] = fileURL
             }
         }
 

@@ -31,33 +31,3 @@ export function EmptyState({ icon, children }: { icon: SfSymbolName; children: R
     </div>
   );
 }
-
-/** Swift `editorPlaceholder`: no file open. The editor itself is WIN-8.5. */
-export function EditorPlaceholder() {
-  return (
-    <EmptyState icon="doc.text">
-      <span>Select a file to edit</span>
-    </EmptyState>
-  );
-}
-
-/** Swift `FileTreeSidebarView` (WIN-8.4): its header and hide button; the tree comes with 8.4. */
-export function FileTreeSidebarPlaceholder({ onHide }: { onHide: () => void }) {
-  return (
-    <div className="detail-file-tree">
-      <div className="detail-file-tree-header">
-        <button
-          type="button"
-          className="detail-icon-button"
-          aria-label="Hide file tree"
-          title="Hide file tree"
-          onClick={onHide}
-        >
-          <Icon name="sidebar.left" size={14} />
-        </button>
-        <span>Files</span>
-      </div>
-      <ScreenPlaceholder icon="folder" title="Files" view="FileTreeSidebarView" />
-    </div>
-  );
-}

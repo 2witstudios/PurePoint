@@ -20,6 +20,7 @@ const { WorkspaceFilesState } = await import('../../state/workspaceFilesState.ts
 const { DiffState } = await import('../../state/diffState.ts');
 const { AppStateContext } = await import('../shell/appContext.ts');
 const { makeTestApp } = await import('../shell/testApp.ts');
+const { memoryFileHost } = await import('../../services/fileHost.fixtures.ts');
 type FileDiff = import('../../services/git.ts').FileDiff;
 type GitReviewSummary = import('../../services/git.ts').GitReviewSummary;
 type DiffGitService = import('../../state/diffState.ts').DiffGitService;
@@ -208,8 +209,13 @@ describe('WorktreeDetailView', () => {
 });
 
 describe('WorkspaceFilesSidebar', () => {
-  function filesState(changes: FileDiff[] | Error, diff?: FileDiff) {
+  function filesState(
+    changes: FileDiff[] | Error,
+    diff?: FileDiff,
+    fileHost = memoryFileHost({}, { folders: [ROOT] }),
+  ) {
     return new WorkspaceFilesState(ROOT, {
+      fileHost,
       git: {
         fetchWorkingTreeChanges: () =>
           changes instanceof Error ? Promise.reject(changes) : Promise.resolve(changes),
@@ -266,7 +272,26 @@ describe('WorkspaceFilesSidebar', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Point Guard' }));
     expect(screen.getByTestId('pg-chat')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
-    expect(screen.getByText('InlineFileTreeRow')).toBeInTheDocument();
+    expect(await screen.findByText('No files')).toBeInTheDocument();
+  });
+
+  it('browses the files inline and previews a file', async () => {
+    const host = memoryFileHost({
+      [`${ROOT}\\src\\app.ts`]: 'const a = 1;\nconst b = 2;\n',
+      [`${ROOT}\\empty.txt`]: '',
+    });
+    render(<WorkspaceFilesSidebar state={filesState([], undefined, host)} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'src, Expand' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'src/app.ts, Expand' }));
+    // A line's text, highlighted or not.
+    const line = (text: string) => (_: string, element: Element | null) =>
+      element?.classList.contains('inline-code-text') === true && element.textContent === text;
+    expect(await screen.findByText(line('const b = 2;'))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'src/app.ts, Collapse' }));
+    expect(screen.queryByText(line('const b = 2;'))).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'empty.txt, Expand' }));
+    expect(await screen.findByText('Empty file')).toBeInTheDocument();
   });
 
   it('is hidden and reopened from the layout', async () => {

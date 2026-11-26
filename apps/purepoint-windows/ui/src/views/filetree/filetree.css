@@ -1,0 +1,251 @@
+/*
+ * The file tree (WIN-8.4): FileTreeSidebarView's header, search field and outline, the outline's
+ * context menu, and its Rename / Delete alerts. Colors come from theme/tokens.css and the shell's
+ * layout.css.
+ */
+:root {
+  --file-tree-divider: rgba(0, 0, 0, 0.1);
+  --file-tree-selection: rgba(0, 103, 192, 0.16);
+  --file-tree-folder: #0067c0; /* NSColor.systemBlue */
+  --file-tree-accent: #0067c0;
+}
+
+:root[data-theme='dark'] {
+  --file-tree-divider: rgba(255, 255, 255, 0.1);
+  --file-tree-selection: rgba(76, 194, 255, 0.2);
+  --file-tree-folder: #4cc2ff;
+  --file-tree-accent: #4cc2ff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --file-tree-divider: rgba(255, 255, 255, 0.1);
+    --file-tree-selection: rgba(76, 194, 255, 0.2);
+    --file-tree-folder: #4cc2ff;
+    --file-tree-accent: #4cc2ff;
+  }
+}
+
+.file-tree-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  font-family: var(--pp-font-ui);
+}
+
+.file-tree-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 4px;
+}
+
+.file-tree-sidebar-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.file-tree-icon-button {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: none;
+  color: var(--secondary-text);
+  padding: 3px 4px;
+  border-radius: 4px;
+}
+
+.file-tree-icon-button:hover {
+  background: var(--control-hover);
+}
+
+.file-tree-search {
+  margin: 8px 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--file-tree-divider);
+  border-radius: 5px;
+  background: var(--pp-system-control-background);
+  color: var(--pp-app-text);
+  font: 12px var(--pp-font-ui);
+}
+
+.file-tree-divider {
+  flex: none;
+  height: 1px;
+  background: var(--file-tree-divider);
+}
+
+.file-tree-outline {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+  padding: 2px 0;
+}
+
+.file-tree-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 4px;
+  margin: 0 4px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+
+.file-tree-row:hover {
+  background: var(--control-hover);
+}
+
+.file-tree-row[data-selected='true'] {
+  background: var(--file-tree-selection);
+}
+
+.file-tree-disclosure {
+  flex: none;
+  display: inline-flex;
+  width: 10px;
+  color: var(--secondary-text);
+}
+
+.file-tree-icon {
+  flex: none;
+  color: var(--secondary-text);
+}
+
+.file-tree-icon-folder {
+  flex: none;
+  color: var(--file-tree-folder);
+}
+
+.file-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-tree-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--menu-border);
+  border-radius: 8px;
+  background: var(--menu-background);
+  box-shadow: var(--menu-shadow);
+  font: 12px var(--pp-font-ui);
+}
+
+.file-tree-menu-item {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--pp-app-text);
+  font: inherit;
+  text-align: left;
+}
+
+.file-tree-menu-item:hover,
+.file-tree-menu-item:focus-visible {
+  background: var(--control-hover);
+  outline: none;
+}
+
+.file-tree-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--menu-border);
+}
+
+.file-tree-alert-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.file-tree-alert {
+  width: 300px;
+  padding: 20px;
+  border: 1px solid var(--menu-border);
+  border-radius: 10px;
+  background: var(--menu-background);
+  box-shadow: var(--menu-shadow);
+  color: var(--pp-app-text);
+  font-family: var(--pp-font-ui);
+  text-align: center;
+}
+
+.file-tree-alert-icon {
+  color: #c19c00;
+}
+
+.file-tree-alert h2 {
+  margin: 8px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.file-tree-alert p {
+  margin: 0 0 16px;
+  font-size: 11px;
+  color: var(--secondary-text);
+  overflow-wrap: anywhere;
+}
+
+.file-tree-alert-input {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 8px 0 14px;
+  padding: 4px 6px;
+  border: 1px solid var(--menu-border);
+  border-radius: 5px;
+  background: var(--pp-system-control-background);
+  color: var(--pp-app-text);
+  font: 13px var(--pp-font-ui);
+}
+
+.file-tree-alert-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.file-tree-alert-buttons button {
+  padding: 5px 12px;
+  border: 1px solid var(--menu-border);
+  border-radius: 5px;
+  background: var(--pp-system-control-background);
+  color: var(--pp-app-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.file-tree-alert-buttons .file-tree-alert-default {
+  border-color: transparent;
+  background: var(--file-tree-accent);
+  color: #fff;
+}
+
+.file-tree-alert-buttons .file-tree-alert-destructive {
+  background: #c42b1c;
+}
+
+.file-tree-alert-buttons button:disabled {
+  opacity: 0.4;
+}

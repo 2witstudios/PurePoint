@@ -33,6 +33,18 @@ export class FileTabSession {
     this.showTree = showTree;
   }
 
+  setShowTree(showTree: boolean): void {
+    this.showTree = showTree;
+  }
+
+  setShowPreview(showPreview: boolean): void {
+    this.showPreview = showPreview;
+  }
+
+  setLoadedRoot(root: string): void {
+    this.loadedRoot = root;
+  }
+
   get hasUnsavedChanges(): boolean {
     return this.editor.currentFile?.isDirty ?? false;
   }

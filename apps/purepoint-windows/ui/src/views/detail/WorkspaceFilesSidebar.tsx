@@ -4,12 +4,16 @@
 // in place to its diff, with a pinned header that collapses it), Files and Point Guard, plus the
 // button that hides the sidebar. Polls the working tree while mounted (WorkspaceFilesState).
 //
-// Differences from Swift, until their leaves land: the Files mode's inline tree and previews
-// need FileTreeState (WIN-8.4) and Point Guard's compact chat is PiPointGuardChatView (WIN-9.x);
-// both show a placeholder.
-import { useEffect, useRef } from 'react';
+// Files (WIN-8.4) is the root's tree inline: a folder expands in place, a file expands to a
+// read-only preview of its text (`InlineFilePreview`), polled while it is open.
+//
+// Difference from Swift, until its leaf lands: Point Guard's compact chat is PiPointGuardChatView
+// (WIN-9.x) and shows a placeholder.
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
-import type { FileDiff } from '../../services/git.ts';
+import type { FileNode } from '../../model/fileNode.ts';
+import { fileHostErrorMessage, type FileHost } from '../../services/fileHost.ts';
+import type { FileDiff, Hunk } from '../../services/git.ts';
 import {
   WORKSPACE_FILES_MODE_TITLES,
   WORKSPACE_FILES_MODES,
@@ -21,7 +25,6 @@ import {
 } from '../../state/sidebarVisibilityStore.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { InlineCodeView } from '../diff/InlineCodeView.tsx';
-import { ScreenPlaceholder } from './placeholders.tsx';
 import { CompactPointGuardChat } from '../chat/PiPointGuardChatView.tsx';
 import './detail.css';
 
@@ -127,6 +130,125 @@ function Changes({ state }: { state: WorkspaceFilesState }) {
   });
 }
 
+/** Swift `InlineFilePreview`: the file's text as one context hunk, re-read when it changes. */
+function InlineFilePreview({ path, name, host }: { path: string; name: string; host: FileHost }) {
+  const [hunks, setHunks] = useState<Hunk[] | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const run = { cancelled: false };
+    const isCancelled = () => run.cancelled;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let loaded = false;
+    let lastModified: number | null = null;
+    const tick = async () => {
+      // A remote check is a daemon round trip: skip it while the app is in the background, as
+      // the other remote pollers do (the first read always runs).
+      const checkNow = !loaded || host.isLocal || document.hasFocus();
+      try {
+        const modified = checkNow ? await host.stat(path) : lastModified;
+        if (isCancelled()) return;
+        if (checkNow && (!loaded || modified !== lastModified)) {
+          const file = await host.read(path, 1_000_000);
+          if (isCancelled()) return;
+          setMessage(file.isBinary ? 'Binary file' : file.content === '' ? 'Empty file' : null);
+          const lines = file.content.split('\n');
+          if (lines.at(-1) === '') lines.pop();
+          setHunks([
+            {
+              header: '',
+              lines: lines.map((content, index) => ({
+                type: 'context',
+                content,
+                oldLineNo: null,
+                newLineNo: index + 1,
+              })),
+            },
+          ]);
+          loaded = true;
+          lastModified = modified;
+        }
+      } catch (error) {
+        if (isCancelled()) return;
+        setMessage(fileHostErrorMessage(error));
+        loaded = true;
+      }
+      if (!isCancelled()) timer = setTimeout(() => void tick(), host.isLocal ? 2000 : 5000);
+    };
+    void tick();
+    return () => {
+      run.cancelled = true;
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [path, host]);
+
+  if (message !== null) return <Message text={message} />;
+  if (hunks === null) return <Message text="Loading…" />;
+  return <InlineCodeView hunks={hunks} filename={name} />;
+}
+
+/** Swift `InlineFileTreeRow`: a folder expands to its children, a file to its preview. */
+function InlineFileTreeRow({
+  node,
+  state,
+  depth,
+}: {
+  node: FileNode;
+  state: WorkspaceFilesState;
+  depth: number;
+}) {
+  const expanded = useStore(state.store, (s) =>
+    node.isDirectory
+      ? s.expandedFolders.has(node.relativePath)
+      : s.expandedPreviews.has(node.relativePath),
+  );
+  return (
+    <div>
+      <button
+        type="button"
+        className="workspace-tree-row"
+        title={node.relativePath}
+        aria-label={`${node.relativePath}, ${expanded ? 'Collapse' : 'Expand'}`}
+        aria-expanded={expanded}
+        style={{ paddingLeft: 10 + depth * 12 }}
+        onClick={() => {
+          if (node.isDirectory) void state.toggleFolder(node);
+          else state.togglePreview(node.relativePath);
+        }}
+      >
+        <Icon name={expanded ? 'chevron.down' : 'chevron.right'} size={8} />
+        {node.isDirectory && <Icon name="folder" size={11} className="workspace-tree-folder" />}
+        <span className="workspace-file-name">{node.name}</span>
+      </button>
+      {expanded &&
+        (node.isDirectory ? (
+          node.children.map((child) => (
+            <InlineFileTreeRow
+              key={child.relativePath}
+              node={child}
+              state={state}
+              depth={depth + 1}
+            />
+          ))
+        ) : (
+          <InlineFilePreview path={node.absolutePath} name={node.name} host={state.fileHost} />
+        ))}
+    </div>
+  );
+}
+
+function Files({ state }: { state: WorkspaceFilesState }) {
+  const rootNodes = useStore(state.fileTree.store, (s) => s.rootNodes);
+  return (
+    <>
+      {rootNodes.map((node) => (
+        <InlineFileTreeRow key={node.relativePath} node={node} state={state} depth={0} />
+      ))}
+      {rootNodes.length === 0 && <Message text="No files" />}
+    </>
+  );
+}
+
 export function WorkspaceFilesSidebar({ state }: { state: WorkspaceFilesState }) {
   const mode = useStore(state.store, (s) => s.mode);
   const changeCount = useStore(state.store, (s) => s.files.length);
@@ -157,11 +279,9 @@ export function WorkspaceFilesSidebar({ state }: { state: WorkspaceFilesState })
       </div>
       {mode === 'pointGuard' ? (
         <CompactPointGuardChat />
-      ) : mode === 'files' ? (
-        <ScreenPlaceholder icon="folder" title="Files" view="InlineFileTreeRow" />
       ) : (
         <div className="workspace-files-scroll">
-          <Changes state={state} />
+          {mode === 'files' ? <Files state={state} /> : <Changes state={state} />}
         </div>
       )}
     </div>
