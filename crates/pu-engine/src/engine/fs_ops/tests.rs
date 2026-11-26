@@ -1856,3 +1856,103 @@ fn given_subcommand_named_like_an_outside_symlink_should_not_be_checked_as_a_pat
         Ok(())
     );
 }
+
+/// Git for Windows maps `/dev/null` to `nul`: the `git_exec` guards
+/// (`GIT_CONFIG_GLOBAL=/dev/null`, `core.hooksPath=/dev/null`) and the
+/// `diff --no-index -- /dev/null <path>` form all keep working there.
+#[cfg(windows)]
+#[test]
+fn given_windows_git_should_honor_dev_null_guards_and_no_index_diff() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(home.join(".gitconfig"), "[user]\n\tname = Leak\n").unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    let run = |guarded: bool, args: &[&str]| {
+        let mut command = std::process::Command::new("git");
+        if guarded {
+            command
+                .args(exec_args("git", strings_of(args)))
+                .envs(exec_env("git"));
+        } else {
+            command.args(args);
+        }
+        command
+            .current_dir(&repo)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .output()
+            .unwrap()
+    };
+
+    // The user's global config is visible without the guard, invisible with it.
+    let leak = run(false, &["config", "--global", "--get", "user.name"]);
+    assert_eq!(String::from_utf8_lossy(&leak.stdout).trim(), "Leak");
+    let guarded = run(true, &["config", "--global", "--get", "user.name"]);
+    assert!(!guarded.status.success(), "{guarded:?}");
+    assert!(guarded.stdout.is_empty());
+
+    // A failing pre-commit hook runs without the guard and is skipped with it.
+    let hooks = repo.join(".git").join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 1\n").unwrap();
+    let commit = [
+        "-c",
+        "user.name=T",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "x",
+    ];
+    assert!(
+        !run(false, &commit).status.success(),
+        "hook must run unguarded"
+    );
+    let out = run(true, &commit);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // `diff --no-index -- /dev/null <path>` shows a new file.
+    std::fs::write(repo.join("new.txt"), "hello\n").unwrap();
+    let diff = run(true, &["diff", "--no-index", "--", "/dev/null", "new.txt"]);
+    assert_eq!(diff.status.code(), Some(1), "{diff:?}");
+    let text = String::from_utf8_lossy(&diff.stdout);
+    assert!(
+        text.contains("new file mode") && text.contains("+hello"),
+        "{text}"
+    );
+}
+
+/// A `git_exec` timeout kills the helper's whole tree: here `cmd` and the
+/// `ping` it started. The shared stdout pipe only closes once both are gone.
+#[cfg(windows)]
+#[test]
+fn given_timed_out_helper_tree_should_be_killed_with_its_children() {
+    use std::io::Read as _;
+    let mut child = std::process::Command::new("cmd")
+        .args(["/d", "/c", "ping -n 30 127.0.0.1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut first = [0u8; 1];
+    stdout.read_exact(&mut first).unwrap();
+    let start = std::time::Instant::now();
+    kill_process_group(child.id());
+    let mut rest = Vec::new();
+    stdout.read_to_end(&mut rest).unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        start.elapsed()
+    );
+    assert!(!child.wait().unwrap().success());
+}

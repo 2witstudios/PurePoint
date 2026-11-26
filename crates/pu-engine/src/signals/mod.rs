@@ -401,15 +401,18 @@ pub(crate) async fn prepare(
         .unwrap_or("");
     // Verify CLI compatibility and warm OS executable validation before native
     // hooks can run. Never fall back to an older CLI's normal routing path.
-    let helper_probe = tokio::process::Command::new(&helper)
+    let mut helper_probe = tokio::process::Command::new(&helper);
+    helper_probe
         .arg("__agent-signal")
         .env_clear()
         .env("HOME", &home)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .status();
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    helper_probe.creation_flags(crate::git::HELPER_CREATION_FLAGS);
+    let helper_probe = helper_probe.status();
     if !tokio::time::timeout(Duration::from_millis(500), helper_probe)
         .await
         .ok()?
@@ -421,7 +424,10 @@ pub(crate) async fn prepare(
     // Record the running version for evidence only; any release is observed.
     let probe = async {
         use tokio::io::AsyncReadExt;
-        let mut child = tokio::process::Command::new(command)
+        let mut child = tokio::process::Command::new(command);
+        #[cfg(windows)]
+        child.creation_flags(crate::git::HELPER_CREATION_FLAGS);
+        let mut child = child
             .arg("--version")
             .env_clear()
             .env("HOME", &home)

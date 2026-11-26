@@ -22,6 +22,7 @@ base64 = { workspace = true }
 notify = "8"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tempfile = "3"
+fs4 = "1.1"
 
 [target.'cfg(windows)'.dependencies]
 pu-transport = { path = "../pu-transport" }
