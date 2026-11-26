@@ -4,8 +4,6 @@
 //! destination; its id (a UUID) names its private directory of forwarded
 //! sockets under `~/.pu/machines/<id>/`.
 
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -164,25 +162,7 @@ fn save(path: &Path, registry: &MachineRegistry) -> Result<(), PuError> {
         .unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent)?;
     let content = serde_json::to_string_pretty(registry)? + "\n";
-    let file_name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "machines.json".into());
-    let temp = parent.join(format!(".{file_name}.tmp.{}", uuid::Uuid::new_v4()));
-    let write = || -> std::io::Result<()> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temp)?;
-        file.write_all(content.as_bytes())?;
-        file.sync_all()?;
-        std::fs::rename(&temp, path)?;
-        std::fs::File::open(parent)?.sync_all()
-    };
-    write().inspect_err(|_| {
-        let _ = std::fs::remove_file(&temp);
-    })?;
+    crate::private_fs::write_private_file(path, content.as_bytes())?;
     Ok(())
 }
 
@@ -199,12 +179,7 @@ pub fn update<T>(
     let mut lock_path = path.as_os_str().to_os_string();
     lock_path.push(".lock");
     // Never deleted: unlinking a lock someone waits on breaks mutual exclusion.
-    let lock_file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
-        .open(PathBuf::from(lock_path))?;
+    let lock_file = crate::private_fs::open_private_file(&PathBuf::from(lock_path))?;
     FileExt::lock(&lock_file)?;
     let mut registry = load(path)?;
     let result = change(&mut registry)?;
@@ -212,13 +187,10 @@ pub fn update<T>(
     Ok(result)
 }
 
-/// Create `dir` (and missing parents) and force it to mode 0700.
+/// Create `dir` (and missing parents) and make it private to the user
+/// (mode 0700 on Unix, an owner-only DACL on Windows).
 pub fn ensure_private_dir(dir: &Path) -> Result<(), PuError> {
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)?;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    crate::private_fs::create_private_dir(dir)?;
     Ok(())
 }
 
@@ -235,8 +207,28 @@ pub fn ensure_machine_dir(machine_id: &str) -> Result<PathBuf, PuError> {
 mod tests {
     use super::*;
 
-    fn mode(path: &Path) -> u32 {
-        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    /// Private on every platform; on Unix also exactly `unix_mode`.
+    fn assert_private(path: &Path, unix_mode: u32) {
+        crate::private_fs::check_private(path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, unix_mode);
+        }
+        #[cfg(not(unix))]
+        let _ = unix_mode;
+    }
+
+    /// Make `dir` readable by others, so tests prove it gets re-privatized.
+    fn open_up(dir: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        #[cfg(windows)]
+        crate::win_security::grant_for_test(dir, "WD").unwrap();
     }
 
     #[test]
@@ -253,7 +245,7 @@ mod tests {
         let path = tmp.path().join("nested").join("machines.json");
         let added = update(&path, |r| r.add("studio", "studio-mac")).unwrap();
         assert!(uuid::Uuid::parse_str(&added.id).is_ok());
-        assert_eq!(mode(&path), 0o600);
+        assert_private(&path, 0o600);
 
         let registry = load(&path).unwrap();
         assert_eq!(registry.machines, vec![added.clone()]);
@@ -368,14 +360,14 @@ mod tests {
         paths::set_home_override(Some(tmp.path().to_path_buf()));
         let machines = tmp.path().join(".pu").join("machines");
         std::fs::create_dir_all(&machines).unwrap();
-        std::fs::set_permissions(&machines, std::fs::Permissions::from_mode(0o755)).unwrap();
+        open_up(&machines);
         let id = uuid::Uuid::new_v4().to_string();
 
         let dir = ensure_machine_dir(&id).unwrap();
 
         assert_eq!(dir, machines.join(&id));
-        assert_eq!(mode(&machines), 0o700);
-        assert_eq!(mode(&dir), 0o700);
+        assert_private(&machines, 0o700);
+        assert_private(&dir, 0o700);
         assert!(ensure_machine_dir("../escape").is_err());
         paths::set_home_override(None);
     }

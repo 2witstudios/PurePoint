@@ -5,6 +5,7 @@ pub mod id;
 pub mod machines;
 pub mod manifest;
 pub mod paths;
+pub mod private_fs;
 pub mod protocol;
 pub mod schedule_def;
 pub mod serde_defaults;
@@ -18,3 +19,6 @@ pub mod channel;
 pub mod read;
 
 pub mod signals;
+
+#[cfg(windows)]
+pub mod win_security;

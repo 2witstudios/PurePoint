@@ -1,0 +1,6 @@
+# Keep LF in working copies on every platform, so Windows checkouts with
+# core.autocrlf=true match the byte-exact fixtures and shell hooks (WIN-3.11).
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=lf

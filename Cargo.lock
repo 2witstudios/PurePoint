@@ -948,6 +948,7 @@ dependencies = [
  "chrono",
  "fs4",
  "indexmap",
+ "libc",
  "rand",
  "serde",
  "serde_json",
@@ -957,6 +958,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

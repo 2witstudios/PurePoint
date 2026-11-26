@@ -157,7 +157,7 @@ impl ChannelStore {
             file.write_all(b"\n")?;
             file.sync_all()?;
             std::fs::rename(&temp, &self.path)?;
-            std::fs::File::open(self.path.parent().expect("channel parent"))?.sync_all()?;
+            crate::private_fs::sync_dir(self.path.parent().expect("channel parent"))?;
             Ok(())
         };
         write().inspect_err(|_| {
