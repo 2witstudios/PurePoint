@@ -67,7 +67,7 @@ jobs:
     env:
       # Crates that build natively on Windows so far; WIN leaves widen this
       # until it covers the whole workspace (WIN-3.12, WIN-4.5).
-      WINDOWS_CRATES: -p pu-core -p pu-transport
+      WINDOWS_CRATES: -p pu-core -p pu-transport -p pu-cli
     defaults:
       run:
         shell: bash
