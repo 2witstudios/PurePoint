@@ -2498,6 +2498,8 @@ name = "purepoint-windows"
 version = "0.1.0"
 dependencies = [
  "pu-core",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "webview2-com",
