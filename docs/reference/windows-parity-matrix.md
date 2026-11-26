@@ -289,6 +289,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `ChatStateTests.swift` | all | — | — | excluded | Tests `ChatState` (DEC-11 legacy chat) |
 | `CitadelSSHLiveTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `ClaudeConversationIndexTests.swift` | all | `src-tauri/src/conversations/claude.rs` (#[cfg(test)]) | WIN-8.12 | ported | — |
+| `CodexConversationIndexTests.swift` | all | `src-tauri/src/conversations/codex.rs` (#[cfg(test)]; trailing-UUID rollout ids, added on the Mac by WIN-11.2 after the Windows port fixed it) | WIN-8.12 | ported | — |
 | `ClaudeProcessTests.swift` | all | — | — | excluded | Tests `ClaudeProcess` (DEC-11 legacy chat, no caller; WIN-8.12) |
 | `CommandPaletteNamingTests.swift` | all | `ui/src/model/commandPaletteNaming.test.ts` | WIN-6.6 | ported | — |
 | `CommandPaletteOpenCoordinatorTests.swift` | all | `ui/src/state/commandPaletteOpenCoordinator.test.ts` | WIN-6.6 | ported | — |
@@ -349,7 +350,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `WorkspaceRegistryTests.swift` | all | `ui/src/state/workspaceRegistry.test.ts` | WIN-6.2 | ported | — |
 | `purepoint_macosTests.swift` | `GlobalAgentSettingsTests` | `ui/src/state/agentConfigState.test.ts` | WIN-8.7 | ported | — |
 | `purepoint_macosTests.swift` | `PaneSplitNodeTests` | `ui/src/model/paneSplit.test.ts` | WIN-6.2 | ported | — |
-| `purepoint_macosTests.swift` | `GridLayoutPersistenceTests` | `ui/src/model/workspacePersistence.test.ts` | WIN-6.3 | todo | — |
+| `purepoint_macosTests.swift` | `GridLayoutPersistenceTests` | `ui/src/model/workspacePersistence.test.ts` (legacy grid-layout.json migration) | WIN-6.3 | ported | — |
 
 ## SF Symbols
 
