@@ -51,11 +51,17 @@ pub fn normalize(path: &Path) -> PathBuf {
 /// case-insensitively on Windows (NTFS directories are case-insensitive by
 /// default) and byte-exactly on Unix.
 pub fn same_path(a: impl AsRef<Path>, b: impl AsRef<Path>) -> bool {
-    let (a, b) = (normalize(a.as_ref()), normalize(b.as_ref()));
+    let (a, b) = (a.as_ref(), b.as_ref());
+    let (na, nb) = (normalize(a), normalize(b));
     if cfg!(windows) {
-        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        let fold = |p: &Path| p.to_string_lossy().to_lowercase();
+        // Same spelling, or the same existing directory under another one
+        // (8.3 short names such as RUNNER~1, junctions): the canonical forms
+        // decide.
+        fold(&na) == fold(&nb)
+            || matches!((canonicalize(a), canonicalize(b)), (Ok(ca), Ok(cb)) if fold(&ca) == fold(&cb))
     } else {
-        a == b
+        na == nb
     }
 }
 
