@@ -536,8 +536,10 @@ const OS_PROBE_COMMAND: &str = "uname -s";
 const SSH_FAILED: i32 = 255;
 
 /// `ssh -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3
-/// <ssh_host> <relay>` (machines.md, Windows relay). Win32-OpenSSH has no
-/// connection sharing, so there are no ControlMaster options to pin.
+/// -o ControlMaster=no -o ControlPath=none <ssh_host> <relay>` (machines.md,
+/// Windows relay). Win32-OpenSSH has no connection sharing, but the `ssh` on
+/// `PATH` may be another build (Git for Windows, MSYS2) honouring a user's
+/// ControlMaster config, which would hand the relay to a shared master.
 #[cfg_attr(unix, allow(dead_code))]
 pub fn relay_args(host: &str, os: RemoteOs) -> Vec<OsString> {
     let relay = match os {
@@ -553,6 +555,7 @@ pub fn relay_args(host: &str, os: RemoteOs) -> Vec<OsString> {
         args.push("-o".into());
         args.push(option.into());
     }
+    args.extend(NO_CONTROL_MASTER.map(OsString::from));
     args.extend([ssh_destination(host).into(), relay.into()]);
     args
 }
@@ -1199,6 +1202,10 @@ mod tests {
                 "ServerAliveInterval=15",
                 "-o",
                 "ServerAliveCountMax=3",
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "ControlPath=none",
                 "ssh://me@box:2222",
                 r#"/bin/sh -c 'PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; exec pu daemon proxy'"#,
             ]
@@ -1217,6 +1224,10 @@ mod tests {
                 "ServerAliveInterval=15",
                 "-o",
                 "ServerAliveCountMax=3",
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "ControlPath=none",
                 "winbox",
                 "pu daemon proxy",
             ]

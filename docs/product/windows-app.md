@@ -373,6 +373,8 @@ Owner: the current user. `check_private` accepts the user, SYSTEM or Administrat
 ssh.exe -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 <ssh_host> <relay>
 ```
 
+- `pu --machine` also passes `-o ControlMaster=no -o ControlPath=none` before `<ssh_host>`, as on its other ssh commands: Win32-OpenSSH ignores connection sharing, but `PU_SSH` or `PATH` may name an ssh (Git for Windows, MSYS2) that honours a user's ControlMaster config.
+
 - Unix machine: `<relay>` is `/bin/sh -c 'PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; exec pu daemon proxy'`, the same as the iPad.
 - Windows machine (detected once per connection by the start probe: `uname -s` exits non-zero or prints nothing): `<relay>` is `pu daemon proxy`. Windows sshd builds the session environment from the user's registry `PATH`, which includes `%USERPROFILE%\.pu\bin`.
 - Exit 0 means a normal close, 69 means no daemon, and 127 or 9009 means `pu` is missing.
