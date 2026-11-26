@@ -139,13 +139,14 @@ impl Engine {
         crate::os::process_command(pid).is_some_and(|command| command.contains(session_id))
     }
 
-    /// SIGTERM the process group led by `pid` (agents are spawned with setsid),
-    /// wait up to 3s for the whole group to exit, then SIGKILL whatever is left.
-    /// Waiting on the leader alone would let a child that ignores SIGTERM keep
-    /// running beside the resumed agent.
+    /// Terminate the process tree rooted at `pid` (an agent that outlived its
+    /// daemon), descendants included, so none keeps running beside the
+    /// resumed agent.
     #[cfg(windows)]
-    fn stop_process_group(_pid: u32) {
-        // WIN-3.3: terminate the session's job object (grace, then hard kill).
+    fn stop_process_group(pid: u32) {
+        // No console to type into and no process group: end the root and its
+        // descendants (Toolhelp32 snapshot) by handle.
+        crate::pty_manager::stop_process_tree(pid);
     }
 
     /// SIGTERM the process group led by `pid` (agents are spawned with setsid),
@@ -417,5 +418,45 @@ mod reconcile_tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn given_orphan_tree_on_windows_should_stop_root_and_descendants() {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // An agent tree that outlived its daemon: not in any job of ours.
+        let mut orphan = std::process::Command::new("cmd")
+            .args(["/d", "/c", "ping -t 127.0.0.1"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .unwrap();
+        let pid = orphan.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let ping = loop {
+            if let Some(p) = crate::pty_manager::descendant_probes(pid)
+                .into_iter()
+                .find(|p| p.name.eq_ignore_ascii_case("ping.exe"))
+            {
+                break p;
+            }
+            assert!(std::time::Instant::now() < deadline, "ping never started");
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        };
+
+        tokio::task::spawn_blocking(move || Engine::stop_process_group(pid))
+            .await
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while ping.is_alive() {
+            assert!(std::time::Instant::now() < deadline, "grandchild survived");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let status = orphan.wait().unwrap();
+        assert_eq!(status.code(), Some(137));
     }
 }

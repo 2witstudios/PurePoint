@@ -1,13 +1,8 @@
 use std::collections::HashSet;
 use std::io::BufRead;
-#[cfg(unix)]
-use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use crate::pty_manager::NativePtyHost;
-#[cfg(windows)]
-use crate::pty_manager::OwnedFd;
+use crate::pty_manager::{NativePtyHost, Pty};
 
 use super::Engine;
 
@@ -95,14 +90,14 @@ impl Engine {
 /// Returns `true` on success.
 pub(super) async fn inject_initial_prompt(
     pty_host: &NativePtyHost,
-    master_fd: &Arc<OwnedFd>,
+    pty: &Pty,
     agent_id: &str,
     prompt: &[u8],
 ) -> bool {
     if prompt.is_empty() {
         return true;
     }
-    if let Err(e) = pty_host.write_chunked_submit(master_fd, prompt).await {
+    if let Err(e) = pty_host.write_chunked_submit(pty, prompt).await {
         tracing::warn!("failed to inject initial prompt for {}: {}", agent_id, e);
         return false;
     }

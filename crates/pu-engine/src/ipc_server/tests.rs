@@ -802,15 +802,10 @@ async fn given_size_claims_should_ignore_nonowners_and_handoff_only_to_claimers(
     let (legacy, _) = engine.register_attachment(&id, None).await;
     engine.attachment_resize(&id, legacy, 110, 35, false).await;
     assert_eq!(engine.attachment_size(&id).await, (110, 35, None));
-    let (buffer, fd, _) = engine.get_attach_handles(&id).await.unwrap();
+    let (buffer, pty, _) = engine.get_attach_handles(&id).await.unwrap();
     assert_eq!(buffer.terminal_size(), (35, 110));
-    use std::os::fd::AsRawFd;
-    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
-    assert_eq!(
-        unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) },
-        0
-    );
-    assert_eq!((ws.ws_row, ws.ws_col), buffer.terminal_size());
+    let (cols, rows) = pty.size().expect("PTY size");
+    assert_eq!((rows, cols), buffer.terminal_size());
     engine.handle_legacy_resize(&id, 80, 24).await;
     assert_eq!(engine.attachment_size(&id).await, (80, 24, None));
     engine.unregister_attachment(&id, legacy).await;

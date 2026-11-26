@@ -1341,7 +1341,7 @@ mod tests {
         let mut exit = handle[&id].exit_rx.clone();
         engine
             .pty_host
-            .write_to_fd(&handle[&id].master_fd(), b"exit\r")
+            .write_to_pty(&handle[&id].pty(), b"exit\r")
             .await
             .unwrap();
         drop(handle);

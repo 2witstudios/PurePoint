@@ -26,6 +26,17 @@ tempfile = "3"
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["term", "signal", "process", "fs", "resource", "user"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
 [[bin]]
 name = "pu-engine"
 path = "src/main.rs"
