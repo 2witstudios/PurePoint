@@ -2,7 +2,7 @@
 //
 // Routes the sidebar selection to its screen. The screens are later leaves; until each lands its
 // slot renders a placeholder naming the view that will fill it (the leaf is in the parity matrix).
-// WIN-8.2 fills the project, worktree and workspace files screens.
+// WIN-8.2 fills the project, worktree and workspace files screens; WIN-8.13 the Point Guard one.
 import { useStore } from 'zustand';
 import { isPointGuard } from '../../model/workspace.ts';
 import type { SidebarSelection } from '../../model/sidebarItem.ts';
@@ -15,6 +15,7 @@ import { ShowsWorkspaceSidebarToggleContext } from '../panegrid/PaneTabBar.tsx';
 import { ScheduleView } from '../schedule/ScheduleView.tsx';
 import { ScreenPlaceholder } from './placeholders.tsx';
 import { ProjectChannelView } from '../channel/ProjectChannelView.tsx';
+import { PointGuardView } from '../chat/PointGuardView.tsx';
 import { ProjectDetailView } from './ProjectDetailView.tsx';
 import { WorkspaceFilesLayout } from './WorkspaceFilesLayout.tsx';
 import { WorktreeDetailView } from './WorktreeDetailView.tsx';
@@ -55,15 +56,7 @@ function SelectedContent({ selection }: { selection: SidebarSelection }) {
       if (workspace === null) {
         return <ScreenPlaceholder icon="rectangle.split.2x2" title="Workspace not found" />;
       }
-      if (isPointGuard(workspace)) {
-        return (
-          <ScreenPlaceholder
-            icon="bubble.left.and.bubble.right"
-            title="Point Guard"
-            view="PointGuardView"
-          />
-        );
-      }
+      if (isPointGuard(workspace)) return <PointGuardView />;
       const rootPath = app.fileRoot(selection.id);
       const paneGrid = (
         <PaneGridView key={selection.id} workspaceId={selection.id} registry={registry} />
@@ -85,13 +78,7 @@ function SelectedContent({ selection }: { selection: SidebarSelection }) {
     case 'nav':
       switch (selection.item) {
         case 'dashboard':
-          return (
-            <ScreenPlaceholder
-              icon="bubble.left.and.bubble.right"
-              title="Point Guard"
-              view="PointGuardView"
-            />
-          );
+          return <PointGuardView />;
         case 'agents':
           return <AgentsHubView />;
         case 'schedule':

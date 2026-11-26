@@ -11,12 +11,14 @@ import { useStore } from 'zustand';
 import { isAgentStatusAlive } from '../../model/agentStatus.ts';
 import { canSplit, topTrailingLeafId } from '../../model/paneSplit.ts';
 import { agentDisplayName, type AgentModel } from '../../model/workspaceModel.ts';
-import { contentAgentId, paneCount, type Surface } from '../../model/workspace.ts';
+import { contentAgentId, paneActiveTab, paneCount, type Surface } from '../../model/workspace.ts';
 import type { WorkspaceRegistry } from '../../state/workspaceRegistry.ts';
 import { useSidebarVisibilityStore } from '../../state/sidebarVisibilityStore.ts';
+import { pointGuardSessionFor } from '../../state/pointGuardSession.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import type { SfSymbolName } from '../../theme/icons.ts';
 import { WorkspaceSidebarToggle } from '../detail/WorkspaceFilesSidebar.tsx';
+import { PointGuardPaneControls } from '../chat/PointGuardPaneControls.tsx';
 import { useAppState } from '../shell/appContext.ts';
 import { terminalHost } from '../terminal/terminals.ts';
 import { closeConfirmationSource, confirmTabClose } from './tabCloseConfirmation.tsx';
@@ -133,6 +135,9 @@ export function PaneTabBar({ workspaceId, leafId, isFocused, registry }: PaneTab
       <div className="pane-tab-bar-spacer" />
       <div className="pane-tab-bar-divider" />
       <div className="pane-tab-bar-actions">
+        {paneActiveTab(pane)?.content.kind === 'pointGuard' && (
+          <PointGuardPaneControls session={pointGuardSessionFor(app)} />
+        )}
         {splittable && (
           <TabBarButton
             icon="rectangle.split.2x1"

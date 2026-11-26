@@ -38,8 +38,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/ManifestModel.swift` | 100 | `ui/src/protocol/generated/` (replaced by generated types; Swift's lenient decoding in `ui/src/services/daemonConnection.ts`) | WIN-6.0 | ported | — |
 | `Models/PRModel.swift` | 33 | `ui/src/model/pr.ts` (`PullRequestInfo` from `ui/src/services/git.ts`) | WIN-6.0 | ported | — |
 | `Models/PiChatDomain.swift` | 368 | `ui/src/model/piChatDomain.ts`, `ui/src/services/pointGuardChat.ts` (recovery store, coalesced writer) | WIN-9.4 | ported | — |
-| `Models/PointGuardPlays.swift` | 219 | `ui/src/model/pointGuardPlays.ts` | WIN-8.13 | todo | — |
-| `Models/PointGuardRuntime.swift` | 96 | `ui/src/model/pointGuardRuntime.ts` | WIN-8.13 | todo | — |
+| `Models/PointGuardPlays.swift` | 219 | `ui/src/model/pointGuardPlays.ts` | WIN-8.13 | ported | — |
+| `Models/PointGuardRuntime.swift` | 96 | `src-tauri/src/pointguard/runtime.rs` (manifest, descriptor, private files, startup failure and working folder checks live in the backend, WIN-9.3) | WIN-8.13 | ported | — |
 | `Models/ProjectKey.swift` | 159 | `ui/src/model/projectKey.ts` | WIN-6.5 | ported | — |
 | `Models/ProjectOrder.swift` | 67 | `ui/src/model/projectOrder.ts` | WIN-6.5 | ported | — |
 | `Models/ScheduleEvent.swift` | 231 | `ui/src/model/scheduleEvent.ts` (local calendar math in `ui/src/model/scheduleCalendar.ts`) | WIN-8.8 | ported | — |
@@ -114,7 +114,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/AgentConfigState.swift` | 243 | `ui/src/state/agentConfigState.ts` (added agents are the store's `addedAgents`, not a static) | WIN-8.7 | ported | — |
 | `State/AgentsHubState.swift` | 270 | `ui/src/state/agentsHubState.ts` | WIN-8.7 | ported | — |
 | `State/AppState+LibraryScope+iOS.swift` | 123 | — | — | excluded | `+iOS` file (iPad build only) |
-| `State/AppState+PointGuardPlays.swift` | 20 | `ui/src/state/appStatePointGuardPlays.ts` | WIN-8.13 | todo | — |
+| `State/AppState+PointGuardPlays.swift` | 20 | `ui/src/state/appStatePointGuardPlays.ts`, `ui/src/state/pointGuardSession.ts` (the app's chat, service and playbook) | WIN-8.13 | ported | — |
 | `State/AppState.swift` | 952 | `ui/src/state/appState.ts` | WIN-6.0 | ported | — |
 | `State/ChannelState.swift` | 298 | `ui/src/state/channelState.ts` | WIN-8.10 | ported | — |
 | `State/ChatState.swift` | 161 | — | — | excluded | DEC-11: legacy chat (iPad DEC-9) |
@@ -163,13 +163,13 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Chat/MessageStreamView.swift` | 61 | — | — | excluded | DEC-11: legacy chat, reached only from `ChatAreaView` |
 | `Views/Chat/PiPointGuardChatView.swift` | 776 | `ui/src/views/chat/PiPointGuardChatView.tsx` | WIN-9.5 | todo | — |
 | `Views/Chat/PiTranscriptScrollCoordinator.swift` | 65 | `ui/src/views/chat/piTranscriptScrollCoordinator.ts` | WIN-9.5 | todo | — |
-| `Views/Chat/PointGuardConversationLayout.swift` | 165 | `ui/src/views/chat/PointGuardConversationLayout.tsx` | WIN-8.13 | todo | — |
-| `Views/Chat/PointGuardCourtView.swift` | 481 | `ui/src/views/chat/PointGuardCourtView.tsx` | WIN-8.13 | todo | — |
-| `Views/Chat/PointGuardPaneControls.swift` | 86 | `ui/src/views/chat/PointGuardPaneControls.tsx` | WIN-8.13 | todo | — |
+| `Views/Chat/PointGuardConversationLayout.swift` | 165 | `ui/src/views/chat/PointGuardConversationLayout.tsx` | WIN-8.13 | ported | — |
+| `Views/Chat/PointGuardCourtView.swift` | 481 | `ui/src/views/chat/PointGuardCourtView.tsx`, `ui/src/views/chat/pointGuardParts.tsx`, `ui/src/views/chat/pointGuard.css` | WIN-8.13 | ported | — |
+| `Views/Chat/PointGuardPaneControls.swift` | 86 | `ui/src/views/chat/PointGuardPaneControls.tsx` | WIN-8.13 | ported | — |
 | `Views/Chat/PointGuardSetupView+iOS.swift` | 152 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Chat/PointGuardSetupView+iOSScanner.swift` | 110 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Chat/PointGuardSetupView.swift` | 240 | `ui/src/views/chat/PointGuardSetupView.tsx` | WIN-9.5 | todo | — |
-| `Views/Chat/PointGuardView.swift` | 84 | `ui/src/views/chat/PointGuardView.tsx` | WIN-8.13 | todo | — |
+| `Views/Chat/PointGuardView.swift` | 84 | `ui/src/views/chat/PointGuardView.tsx` | WIN-8.13 | ported | — |
 | `Views/Chat/ToolCallCardView.swift` | 54 | `ui/src/views/chat/ToolCallCardView.tsx` | WIN-9.5 | todo | — |
 | `Views/CommandPalette/CommandPalettePanel+iOS.swift` | 195 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/CommandPalette/CommandPalettePanel+iOSContent.swift` | 809 | — | — | excluded | `+iOS` file (iPad build only) |
@@ -318,9 +318,9 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `PaneTabStackTests.swift` | all | `ui/src/state/workspaceRegistry.tabs.test.ts` | WIN-6.2 | ported | — |
 | `PointGuardAttachmentIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `PointGuardPairingTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `PointGuardPlaysTests.swift` | all | `ui/src/model/pointGuardPlays.test.ts` | WIN-8.13 | todo | — |
-| `PointGuardRoutingTests.swift` | all | `ui/src/state/pointGuardRouting.test.ts` | WIN-8.13 | todo | — |
-| `PointGuardWorkspaceTests.swift` | all | `ui/src/state/pointGuardWorkspace.test.ts` | WIN-8.13 | todo | — |
+| `PointGuardPlaysTests.swift` | all | `ui/src/model/pointGuardPlays.test.ts` | WIN-8.13 | ported | — |
+| `PointGuardRoutingTests.swift` | all | `ui/src/state/pointGuardRouting.test.ts` | WIN-8.13 | ported | — |
+| `PointGuardWorkspaceTests.swift` | all | `ui/src/state/pointGuardWorkspace.test.ts` | WIN-8.13 | ported | — |
 | `ProjectOrderTests.swift` | all | `ui/src/model/projectOrder.test.ts` | WIN-6.5 | ported | — |
 | `RemoteFolderPickerTests.swift` | `FsBrowseRequestTests` | `ui/src/state/machineState.fsBrowse.test.ts` (the Windows picker's browsing: `ui/src/state/remoteFolderBrowser.test.ts`) | WIN-8.14 | ported | Only `FsBrowseRequestTests` is platform-neutral; the rest is `#if os(iOS)` |
 | `SSHIdentityTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |

@@ -97,7 +97,7 @@ describe('ContentView', () => {
     renderShell();
     expect(screen.getByRole('navigation', { name: 'Sidebar' })).toBeInTheDocument();
     expect(screen.getByRole('separator', { name: 'Resize sidebar' })).toBeInTheDocument();
-    expect(screen.getByText('PointGuardView')).toBeInTheDocument();
+    expect(screen.getByTestId('point-guard-view')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Hide Sidebar' })).toBeInTheDocument();
   });
 
@@ -152,7 +152,7 @@ describe('ContentView', () => {
     renderShell();
     runMenu('Panes', /^Split Right/);
     runMenu('Help', /^Check for Updates/);
-    expect(screen.getByText('PointGuardView')).toBeInTheDocument();
+    expect(screen.getByTestId('point-guard-view')).toBeInTheDocument();
   });
 
   it('shows the daemon banner over the shell', () => {

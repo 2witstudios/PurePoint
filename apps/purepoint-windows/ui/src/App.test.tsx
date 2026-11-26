@@ -8,6 +8,6 @@ describe('App', () => {
     render(<App app={makeTestApp()} />);
     expect(screen.getByRole('menubar')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
-    expect(screen.getByText('PointGuardView')).toBeInTheDocument();
+    expect(screen.getByTestId('point-guard-view')).toBeInTheDocument();
   });
 });

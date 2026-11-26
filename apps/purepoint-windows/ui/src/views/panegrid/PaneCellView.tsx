@@ -21,6 +21,7 @@ import { ScreenPlaceholder } from '../detail/placeholders.tsx';
 import { openEmptyTabPalette } from '../palette/openPalette.ts';
 import { useAppState } from '../shell/appContext.ts';
 import { TerminalPane } from '../terminal/TerminalPane.tsx';
+import { PointGuardChatSurfaceView } from '../chat/PointGuardView.tsx';
 import { PaneTabBar } from './PaneTabBar.tsx';
 import {
   type PaneDropZone,
@@ -104,13 +105,7 @@ function PaneContent({
         <div className="pane-terminal-pending" data-testid="pane-terminal-pending" />
       );
     case 'pointGuard':
-      return (
-        <ScreenPlaceholder
-          icon="bubble.left.and.bubble.right"
-          title="Point Guard"
-          view="PointGuardChatSurfaceView"
-        />
-      );
+      return <PointGuardChatSurfaceView isFocused={isFocused} />;
     case 'file':
       return <ScreenPlaceholder icon="doc.text" title="Files" view="FilePaneView" />;
     case 'empty':

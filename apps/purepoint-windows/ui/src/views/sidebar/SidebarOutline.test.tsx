@@ -812,7 +812,7 @@ describe('SidebarView', () => {
     expect(app.activeProjectRoot).toBe('C:\\work\\purepoint');
 
     fireEvent.click(screen.getByRole('button', { name: 'Point Guard' }));
-    expect(screen.getByText('PointGuardView')).toBeInTheDocument();
+    expect(screen.getByTestId('point-guard-view')).toBeInTheDocument();
     expect(screen.getByRole('treeitem', { name: 'purepoint' })).toHaveAttribute(
       'aria-selected',
       'false',

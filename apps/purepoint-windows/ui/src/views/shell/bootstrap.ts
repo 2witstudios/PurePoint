@@ -2,7 +2,8 @@
 // opens — the theme following Windows, AppState's backend listeners (daemon state into the
 // banner), the first daemon status, the projects subscription, the installer's state, and the
 // updater's state (WIN-10.3), and the
-// machines in `machines.json` (WIN-8.14), whose agents' terminals attach through their machine.
+// machines in `machines.json` (WIN-8.14), whose agents' terminals attach through their machine,
+// and the Point Guard session (WIN-8.13), whose runtime folder becomes `pointGuardRoot`.
 import { daemonStatus, type DaemonConnectionState } from '../../services/daemon.ts';
 import {
   installerStatus,
@@ -17,6 +18,7 @@ import {
   startAgentSignals,
 } from '../../services/agentSignalNotifications.ts';
 import { AppState } from '../../state/appState.ts';
+import { startPointGuardSession } from '../../state/pointGuardSession.ts';
 import { TauriMachineDirectory } from '../../state/machineState.ts';
 import { configureTerminals } from '../terminal/terminals.ts';
 import { CachedWorkspacePersistence } from '../../state/cachedWorkspacePersistence.ts';
@@ -36,6 +38,8 @@ export interface StartAppDeps {
   startUpdater?(): () => void;
   /** The machines in `machines.json` and where remote agents' terminals attach (WIN-8.14). */
   loadMachines?(app: AppState): void;
+  /** The Point Guard session: the service, the chat binding and the runtime folder (WIN-8.13). */
+  startPointGuard?(app: AppState): () => void;
 }
 
 const defaultDeps: StartAppDeps = {
@@ -54,6 +58,7 @@ const defaultDeps: StartAppDeps = {
     });
     app.loadMachines().catch(logged('loading machines'));
   },
+  startPointGuard: (app) => startPointGuardSession(app),
 };
 
 /** The updater store follows the backend: its events, then its current state. */
@@ -142,6 +147,7 @@ export function startApp(app: AppState, deps: StartAppDeps = defaultDeps): () =>
   if (deps.loadMachines !== undefined) deps.loadMachines(app);
   if (deps.startAgentSignals !== undefined) keep(deps.startAgentSignals(app));
   if (deps.startUpdater !== undefined) keep(deps.startUpdater());
+  if (deps.startPointGuard !== undefined) keep(deps.startPointGuard(app));
 
   return () => {
     stopped = true;
