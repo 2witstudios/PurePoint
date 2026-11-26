@@ -229,8 +229,8 @@ pub(super) fn repair_session_file(path: &Path) -> bool {
     }
     // Temp file + rename, so a reader never sees a half-written transcript.
     let tmp = path.with_extension("jsonl.repair.tmp");
-    if std::fs::write(&tmp, &output).is_err() || std::fs::rename(&tmp, path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    if std::fs::write(&tmp, &output).is_err() || pu_core::fs_retry::rename(&tmp, path).is_err() {
+        let _ = pu_core::fs_retry::remove_file(&tmp);
         return false;
     }
 

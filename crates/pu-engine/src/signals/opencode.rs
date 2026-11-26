@@ -4,10 +4,7 @@ use pu_core::signals::*;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-#[cfg(unix)]
 use std::io::Read;
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -193,11 +190,7 @@ pub(super) fn prepare(
         get("XDG_STATE_HOME").or_else(|| get("HOME").map(|p| p.join(".local/state")))?;
     let launch = pu_core::id::session_id();
     let artifacts = install::Artifacts::new(Path::new(project), &launch).ok()?;
-    #[cfg(unix)]
-    let socket = tokio::net::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
-    // WIN-3.9: the Windows signal endpoint.
-    #[cfg(windows)]
-    let socket = super::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
+    let socket = artifacts.bind_signal().ok()?;
     let identity = SignalIdentity {
         agent_id: agent.into(),
         worktree_id: worktree,
@@ -233,25 +226,10 @@ struct Registration {
     password: Option<String>,
 }
 
-#[cfg(windows)]
-fn registration(_path: &Path) -> Option<Registration> {
-    // WIN-3.8: open without following reparse points and check the owner SID / DACL.
-    None
-}
-
-#[cfg(unix)]
 fn registration(path: &Path) -> Option<Registration> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
+    let file = pu_core::private_fs::open_no_follow(path).ok()?;
     let meta = file.metadata().ok()?;
-    if !meta.is_file()
-        || meta.len() > 16 * 1024
-        || meta.mode() & 0o7777 != 0o600
-        || meta.uid() != unsafe { libc::geteuid() }
-    {
+    if !meta.is_file() || meta.len() > 16 * 1024 || !super::exact_private_file(&file, path) {
         return None;
     }
     let mut bytes = Vec::new();

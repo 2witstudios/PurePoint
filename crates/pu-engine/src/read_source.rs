@@ -1,6 +1,5 @@
 //! Native storage effects; normalization stays in pu-core.
 
-#[cfg(unix)]
 use std::io::BufRead;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -263,38 +262,14 @@ pub fn load_binding(root: &Path, agent: &str) -> Result<Binding, SourceError> {
     serde_json::from_slice(&bytes).map_err(|e| SourceError::UnsupportedSchema(e.to_string()))
 }
 
-#[cfg(windows)]
-pub fn save_binding(_root: &Path, _agent: &str, _binding: &Binding) -> Result<(), SourceError> {
-    // WIN-3.8: write the binding owner-only (pu_core::private_fs) instead of mode 0600.
-    Err(crate::os::unsupported("read-source binding save").into())
-}
-
-#[cfg(unix)]
 pub fn save_binding(root: &Path, agent: &str, binding: &Binding) -> Result<(), SourceError> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let path = binding_path(root, agent)?;
-    let dir = path.parent().unwrap();
-    std::fs::create_dir_all(dir)?;
-    let temporary = dir.join(format!(".{agent}-{}.tmp", pu_core::id::session_id()));
-    let result = (|| -> Result<(), SourceError> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        file.write_all(
-            &serde_json::to_vec(binding)
-                .map_err(|e| SourceError::UnsupportedSchema(e.to_string()))?,
-        )?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, &path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(temporary);
-    }
-    result
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let bytes =
+        serde_json::to_vec(binding).map_err(|e| SourceError::UnsupportedSchema(e.to_string()))?;
+    // Owner-only temp file (0600 / private DACL), synced, then renamed over.
+    pu_core::private_fs::write_private_file(&path, &bytes)?;
+    Ok(())
 }
 
 /// The manifest lock serializes ownership checks with stop/resume publication.
@@ -671,23 +646,12 @@ fn filter_codex_rollouts(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         .collect()
 }
 
-#[cfg(windows)]
-fn first_record(_path: &Path) -> Result<Value, SourceError> {
-    // WIN-3.8: open without following reparse points and check the owner SID.
-    Err(crate::os::unsupported("rollout header read").into())
-}
-
-#[cfg(unix)]
 fn first_record(path: &Path) -> Result<Value, SourceError> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     // Header candidates are untrusted paths even when an owned process holds
     // them. Never follow a replacement link or block a shared scan on a FIFO.
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)?;
+    let file = pu_core::private_fs::open_no_follow(path)?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.uid() != unsafe { libc::geteuid() } {
+    if !metadata.is_file() || !pu_core::private_fs::owned_by_current_user(&file)? {
         return Err(SourceError::IdentityUnavailable);
     }
     let mut line = String::new();

@@ -18,6 +18,98 @@ pub const DEFAULT_GATE_MAX_RETRIES: u32 = 0;
 pub struct GateEvalResult {
     pub passed: bool,
     pub output: String,
+    /// The interpreter gate commands ran under (`"sh"`, or on Windows without
+    /// Git's `sh.exe`, `"pwsh"` / `"powershell"`).
+    pub shell: &'static str,
+}
+
+/// How gate commands run: `sh -c` everywhere it exists. On Windows that is
+/// Git for Windows' `sh.exe` (the same shell git runs hooks with); without
+/// it, `pwsh -NoProfile -Command`, then Windows PowerShell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateShell {
+    pub name: &'static str,
+    program: std::path::PathBuf,
+}
+
+impl GateShell {
+    fn command(&self, script: &str) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(&self.program);
+        if self.name == "sh" {
+            command.arg("-c");
+        } else {
+            command.args(["-NoProfile", "-NonInteractive", "-Command"]);
+        }
+        command.arg(script);
+        #[cfg(windows)]
+        command.creation_flags(crate::git::HELPER_CREATION_FLAGS);
+        command
+    }
+}
+
+/// The shell gates use on this machine, resolved once.
+pub fn gate_shell() -> &'static GateShell {
+    static SHELL: std::sync::OnceLock<GateShell> = std::sync::OnceLock::new();
+    SHELL.get_or_init(|| {
+        resolve_gate_shell(
+            std::env::var_os("PATH").unwrap_or_default(),
+            std::env::var_os("ProgramFiles"),
+        )
+    })
+}
+
+#[cfg(unix)]
+fn resolve_gate_shell(
+    _path: std::ffi::OsString,
+    _program_files: Option<std::ffi::OsString>,
+) -> GateShell {
+    GateShell {
+        name: "sh",
+        program: "sh".into(),
+    }
+}
+
+/// `sh.exe` on PATH, else beside the `git.exe` on PATH (`<Git>\cmd\git.exe`
+/// → `<Git>\bin\sh.exe` or `<Git>\usr\bin\sh.exe`), else the default Git
+/// install; then `pwsh.exe` on PATH, then Windows PowerShell.
+#[cfg(windows)]
+fn resolve_gate_shell(
+    path: std::ffi::OsString,
+    program_files: Option<std::ffi::OsString>,
+) -> GateShell {
+    use std::path::PathBuf;
+    let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    let on_path = |exe: &str| dirs.iter().map(|d| d.join(exe)).find(|p| p.is_file());
+    let beside_git = || {
+        let git = on_path("git.exe")?;
+        git.ancestors()
+            .skip(2)
+            .take(2)
+            .flat_map(|root| [root.join("bin").join("sh.exe"), root.join("usr/bin/sh.exe")])
+            .find(|p| p.is_file())
+    };
+    let program_files = || {
+        let root = program_files.clone()?;
+        let sh = PathBuf::from(root).join("Git").join("bin").join("sh.exe");
+        sh.is_file().then_some(sh)
+    };
+    if let Some(program) = on_path("sh.exe").or_else(beside_git).or_else(program_files) {
+        return GateShell {
+            name: "sh",
+            program,
+        };
+    }
+    if let Some(program) = on_path("pwsh.exe") {
+        return GateShell {
+            name: "pwsh",
+            program,
+        };
+    }
+    let system = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    GateShell {
+        name: "powershell",
+        program: PathBuf::from(system).join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
+    }
 }
 
 /// Evaluate all gate actions across the given trigger definitions.
@@ -40,6 +132,7 @@ pub async fn evaluate_trigger_gates(
                 "gate evaluation timed out after {}s\n",
                 GATE_TOTAL_TIMEOUT.as_secs()
             ),
+            shell: gate_shell().name,
         }),
     }
 }
@@ -66,7 +159,7 @@ async fn evaluate_trigger_gates_inner(
                         ));
                     }
 
-                    match run_gate_command(&resolved_run, worktree_path).await {
+                    match run_with(gate_shell(), &resolved_run, worktree_path).await {
                         Ok((exit_code, stdout, stderr)) => {
                             if exit_code == expect_exit {
                                 passed = true;
@@ -92,6 +185,7 @@ async fn evaluate_trigger_gates_inner(
                     return Ok(GateEvalResult {
                         passed: false,
                         output: all_output,
+                        shell: gate_shell().name,
                     });
                 }
             }
@@ -101,6 +195,7 @@ async fn evaluate_trigger_gates_inner(
     Ok(GateEvalResult {
         passed: true,
         output: all_output,
+        shell: gate_shell().name,
     })
 }
 
@@ -108,11 +203,18 @@ pub async fn run_gate_command(
     command: &str,
     cwd: &Path,
 ) -> Result<(i32, String, String), Box<dyn std::error::Error + Send + Sync>> {
+    run_with(gate_shell(), command, cwd).await
+}
+
+async fn run_with(
+    shell: &GateShell,
+    command: &str,
+    cwd: &Path,
+) -> Result<(i32, String, String), Box<dyn std::error::Error + Send + Sync>> {
     let output = tokio::time::timeout(
         GATE_TIMEOUT,
-        tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
+        shell
+            .command(command)
             .current_dir(cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -159,7 +261,7 @@ mod tests {
     #[tokio::test]
     async fn given_passing_gate_should_return_passed() {
         let trigger = make_gate_trigger("true", None);
-        let result = evaluate_trigger_gates(&[trigger], Path::new("/tmp"))
+        let result = evaluate_trigger_gates(&[trigger], &std::env::temp_dir())
             .await
             .unwrap();
         assert!(result.passed);
@@ -168,7 +270,7 @@ mod tests {
     #[tokio::test]
     async fn given_failing_gate_should_return_not_passed() {
         let trigger = make_gate_trigger("false", None);
-        let result = evaluate_trigger_gates(&[trigger], Path::new("/tmp"))
+        let result = evaluate_trigger_gates(&[trigger], &std::env::temp_dir())
             .await
             .unwrap();
         assert!(!result.passed);
@@ -178,7 +280,7 @@ mod tests {
     #[tokio::test]
     async fn given_custom_expect_exit_should_match() {
         let trigger = make_gate_trigger("exit 2", Some(2));
-        let result = evaluate_trigger_gates(&[trigger], Path::new("/tmp"))
+        let result = evaluate_trigger_gates(&[trigger], &std::env::temp_dir())
             .await
             .unwrap();
         assert!(result.passed);
@@ -198,7 +300,7 @@ mod tests {
             variables: std::collections::HashMap::new(),
             scope: String::new(),
         };
-        let result = evaluate_trigger_gates(&[trigger], Path::new("/tmp"))
+        let result = evaluate_trigger_gates(&[trigger], &std::env::temp_dir())
             .await
             .unwrap();
         assert!(result.passed);
@@ -221,7 +323,7 @@ mod tests {
             variables: std::collections::HashMap::new(),
             scope: String::new(),
         };
-        let result = evaluate_trigger_gates(&[trigger], Path::new("/tmp"))
+        let result = evaluate_trigger_gates(&[trigger], &std::env::temp_dir())
             .await
             .unwrap();
         assert!(!result.passed);
@@ -230,8 +332,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn given_gate_should_record_the_shell_it_ran_under() {
+        let trigger = make_gate_trigger("exit 0", None);
+        let result = evaluate_trigger_gates(&[trigger], &std::env::temp_dir())
+            .await
+            .unwrap();
+        assert!(result.passed);
+        assert_eq!(result.shell, gate_shell().name);
+        // Unix always has sh; Windows CI and dev machines have Git's sh.exe.
+        assert_eq!(result.shell, "sh");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn given_no_git_sh_should_fall_back_to_powershell() {
+        let empty = tempfile::tempdir().unwrap();
+        let shell = resolve_gate_shell(empty.path().as_os_str().to_owned(), None);
+        assert_eq!(shell.name, "powershell");
+        let (code, _, _) = run_with(&shell, "exit 3", &std::env::temp_dir())
+            .await
+            .unwrap();
+        assert_eq!(code, 3);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_git_on_path_should_find_its_sh() {
+        let Some(git) = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|d| d.join("git.exe"))
+            .find(|p| p.is_file())
+        else {
+            return;
+        };
+        let dir = git.parent().unwrap().as_os_str().to_owned();
+        let shell = resolve_gate_shell(dir, None);
+        assert_eq!(shell.name, "sh", "{shell:?}");
+        assert!(shell.program.is_file());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn given_pwsh_should_run_gate_with_no_profile_command() {
+        let shell = GateShell {
+            name: "pwsh",
+            program: "pwsh.exe".into(),
+        };
+        if std::process::Command::new("pwsh.exe")
+            .args(["-NoProfile", "-Command", "exit 0"])
+            .status()
+            .is_err()
+        {
+            eprintln!("pwsh not installed; skipping");
+            return;
+        }
+        let (code, stdout, _) = run_with(&shell, "Write-Output ok; exit 4", &std::env::temp_dir())
+            .await
+            .unwrap();
+        assert_eq!(code, 4);
+        assert_eq!(stdout.trim(), "ok");
+    }
+
+    #[tokio::test]
     async fn given_empty_triggers_should_pass() {
-        let result = evaluate_trigger_gates(&[], Path::new("/tmp"))
+        let result = evaluate_trigger_gates(&[], &std::env::temp_dir())
             .await
             .unwrap();
         assert!(result.passed);

@@ -28,6 +28,11 @@ Mac/iOS acceptance. All production attention notifications remain gated.
 
 * Private launch directory (0700), exact owned settings/extension files (0600),
   short private Unix datagram socket directory (0700), random per-launch token.
+  On Windows the endpoint is a per-launch named pipe
+  (`purepoint-<hash16>-signal-<nonce>`, owner-only DACL, writer SID checked)
+  taking one `{"token","payload"}` frame per connection; `pi.mjs` and
+  `opencode-v2.mjs` write it directly with `net.connect`, and `pu
+  __agent-signal` uses a watchdog thread in place of `SIGALRM`.
   Capabilities are inherited only by the launch; fresh spawns strip inherited
   `PU_SIGNAL_*` material. Native session, launch ID and worktree bind reducer facts.
 * CLI observer bypasses CLI parsing, daemon discovery, background plugin updates,

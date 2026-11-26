@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import net from 'node:net';
+// Windows launches name a named pipe, written directly; Unix keeps the helper's datagram.
+const PIPE = (process.env.PU_SIGNAL_SOCKET ?? '').startsWith('\\\\.\\pipe\\');
 // No policy callbacks, UI wrappers, remote calls or awaited relay operations.
 export default function (pi) {
   let sequence = 0, outcome, request = 0, pending, running = false, lost = false, last;
@@ -14,13 +17,22 @@ export default function (pi) {
     running = true;
     const lossReport = JSON.parse(data).type === 'observer_loss';
     try {
-      const child = spawn(process.env.PU_SIGNAL_HELPER, ['__agent-signal'], { stdio: ['pipe', 'ignore', 'ignore'] });
-      let done = false;
+      let done = false, stop;
       const finish = () => { if (!done) { done = true; running = false; clearTimeout(timer); queueMicrotask(drain); } };
-      const timer = setTimeout(() => { child.kill(); lost = !lossReport; finish(); }, 100);
+      if (PIPE) {
+        // Windows: one {"token","payload"} frame per pipe connection, ended by EOF.
+        const frame = JSON.stringify({ token: process.env.PU_SIGNAL_TOKEN ?? '', payload: JSON.parse(data) });
+        const socket = net.createConnection(process.env.PU_SIGNAL_SOCKET, () => socket.end(frame));
+        stop = () => socket.destroy();
+        socket.on('error', finish); socket.on('close', finish);
+      } else {
+        const child = spawn(process.env.PU_SIGNAL_HELPER, ['__agent-signal'], { stdio: ['pipe', 'ignore', 'ignore'] });
+        stop = () => child.kill();
+        child.on('error', finish); child.on('close', finish);
+        child.stdin.on('error', () => {}); child.stdin.end(data);
+      }
+      const timer = setTimeout(() => { stop(); lost = !lossReport; finish(); }, 100);
       timer.unref();
-      child.on('error', finish); child.on('close', finish);
-      child.stdin.on('error', () => {}); child.stdin.end(data);
     } catch { running = false; lost = !lossReport; queueMicrotask(drain); }
   };
   const send = (payload, ctx) => {

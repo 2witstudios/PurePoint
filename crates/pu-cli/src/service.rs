@@ -383,7 +383,7 @@ pub fn uninstall(manager: Manager) -> Result<Option<PathBuf>, CliError> {
     match manager {
         Manager::Systemd => {
             let _ = run("systemctl", &["--user", "disable", "--now", SYSTEMD_UNIT]);
-            std::fs::remove_file(&file)?;
+            pu_core::fs_retry::remove_file(&file)?;
             let _ = run("systemctl", &["--user", "daemon-reload"]);
         }
         Manager::Launchd => {
@@ -393,7 +393,7 @@ pub fn uninstall(manager: Manager) -> Result<Option<PathBuf>, CliError> {
                     &["bootout", &format!("{domain}/{LAUNCHD_LABEL}")],
                 );
             }
-            std::fs::remove_file(&file)?;
+            pu_core::fs_retry::remove_file(&file)?;
         }
         #[cfg(windows)]
         Manager::RunKey => unreachable!("removed above"),

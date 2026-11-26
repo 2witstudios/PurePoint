@@ -313,10 +313,16 @@ fn git_ignored(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    // Own process group, so a timeout also stops anything git spawned.
-    // WIN-3.10: put the child in a job object so a timeout stops its helpers too.
+    // Own process group, so a timeout also stops anything git spawned. On
+    // Windows: no console window, and a timeout kills the whole tree
+    // (`kill_process_group`).
     #[cfg(unix)]
     command.process_group(0);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        command.creation_flags(crate::git::HELPER_CREATION_FLAGS);
+    }
     let child = command.spawn();
     let Ok(mut child) = child else {
         return ignored;
@@ -571,13 +577,15 @@ fn fs_read(path: &str, roots: &[PathBuf], max_bytes: u64) -> Response {
         }
         Err(e) => return io_error(&resolved, &e),
     }
-    // O_NONBLOCK too, in case the path was swapped for a FIFO since.
+    // O_NONBLOCK too, in case the path was swapped for a FIFO since. Windows
+    // has no FIFOs in the file system (pipes live under `\\.\pipe\`, which
+    // confinement never resolves to), and `resolved` is already canonical, so
+    // a plain open is enough; the regular-file check below still applies.
     #[cfg(unix)]
     let opened = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
         .open(&resolved);
-    // WIN-3.8: decide whether named pipes / reparse points need a guard here.
     #[cfg(windows)]
     let opened = std::fs::OpenOptions::new().read(true).open(&resolved);
     let file = match opened {
@@ -768,22 +776,28 @@ fn write_atomically(
             .create_new(true)
             .mode(mode)
             .open(&tmp)?;
-        // WIN-3.8: carry the replaced file's ACL over to the temp file.
+        // Windows: the temp file inherits the directory's ACL while it is
+        // written; `replace_file` (ReplaceFileW) then keeps the replaced
+        // file's ACL and attributes, so nothing is widened or lost.
         #[cfg(windows)]
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&tmp)?;
+        #[cfg(unix)]
         if let Some(meta) = existing {
             // Restore bits the umask dropped, before any data is written.
             file.set_permissions(meta.permissions())?;
         }
+        #[cfg(windows)]
+        let _ = existing;
         file.write_all(data)?;
         file.sync_all()?;
-        std::fs::rename(&tmp, target)
+        drop(file);
+        pu_core::private_fs::replace_file(&tmp, target)
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        let _ = pu_core::fs_retry::remove_file(&tmp);
     }
     result
 }
@@ -806,9 +820,9 @@ fn fs_delete(path: &str, roots: &FsRoots) -> Response {
         Err(e) => return io_error(&resolved, &e),
     };
     let result = if meta.is_dir() {
-        std::fs::remove_dir_all(&resolved)
+        pu_core::fs_retry::remove_dir_all(&resolved)
     } else {
-        std::fs::remove_file(&resolved)
+        pu_core::fs_retry::remove_file(&resolved)
     };
     match result {
         Ok(()) => Response::Ok,
@@ -1140,13 +1154,18 @@ fn global_excludes_args() -> Vec<String> {
     static EXCLUDES: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     EXCLUDES
         .get_or_init(|| {
-            let output = std::process::Command::new("git")
+            let mut command = std::process::Command::new("git");
+            command
                 .args(["config", "--global", "--path", "--get", "core.excludesFile"])
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output()
-                .ok()?;
+                .stderr(Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt as _;
+                command.creation_flags(crate::git::HELPER_CREATION_FLAGS);
+            }
+            let output = command.output().ok()?;
             let path = String::from_utf8(output.stdout).ok()?.trim().to_string();
             (output.status.success() && !path.is_empty()).then_some(path)
         })
@@ -1157,6 +1176,8 @@ fn global_excludes_args() -> Vec<String> {
 
 /// Extra environment for `git_exec`: git ignores the user's global and the
 /// system config, so neither can configure helpers (fsmonitor, pager, ...).
+/// `/dev/null` is right on Windows too: Git for Windows maps it to `nul`
+/// (tested in `given_windows_git_should_honor_dev_null_guards_and_no_index_diff`).
 fn exec_env(program: &str) -> Vec<(&'static str, &'static str)> {
     if program == "git" {
         vec![
@@ -1173,9 +1194,20 @@ fn exec_env(program: &str) -> Vec<(&'static str, &'static str)> {
     }
 }
 
+/// Kill the process tree rooted at `pid` (`taskkill /T /F`), so helpers git
+/// or gh spawned (credential helpers, hooks, pagers) stop with it. Runs before
+/// the root itself is killed, while its children still name it as parent.
 #[cfg(windows)]
-fn kill_process_group(_pid: u32) {
-    // WIN-3.10: terminate the git/gh child's job object.
+fn kill_process_group(pid: u32) {
+    use std::os::windows::process::CommandExt as _;
+    let system = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    let _ = std::process::Command::new(Path::new(&system).join(r"System32\taskkill.exe"))
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(crate::git::HELPER_CREATION_FLAGS)
+        .status();
 }
 
 /// SIGKILL the process group led by `pid` (git_exec children lead their own).
@@ -1406,10 +1438,12 @@ impl Engine {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         // Own process group, so a timeout also stops helpers git or gh
-        // spawned (pagers, credential helpers, hooks).
-        // WIN-3.10: put the child in a job object instead.
+        // spawned (pagers, credential helpers, hooks). Windows: no console
+        // window; a timeout kills the tree (`kill_process_group`).
         #[cfg(unix)]
         command.process_group(0);
+        #[cfg(windows)]
+        command.creation_flags(crate::git::HELPER_CREATION_FLAGS);
         if let Some(path) = login_path {
             command.env("PATH", path);
         }

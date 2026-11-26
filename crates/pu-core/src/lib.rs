@@ -3,6 +3,7 @@ pub mod canon;
 pub mod config;
 pub mod env_path;
 pub mod error;
+pub mod fs_retry;
 pub mod id;
 pub mod machines;
 pub mod manifest;

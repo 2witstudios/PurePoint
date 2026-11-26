@@ -848,10 +848,10 @@ fn write_registry(path: &Path, projects: &[String]) -> std::io::Result<()> {
         let mut file = std::fs::File::create(&temporary)?;
         file.write_all(&serde_json::to_vec_pretty(projects)?)?;
         file.sync_all()?;
-        std::fs::rename(&temporary, path)
+        pu_core::fs_retry::rename(&temporary, path)
     };
     write().inspect_err(|_| {
-        let _ = std::fs::remove_file(&temporary);
+        let _ = pu_core::fs_retry::remove_file(&temporary);
     })
 }
 

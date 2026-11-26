@@ -1,10 +1,7 @@
 //! Explicit owner attestation; default denied. This reads no credentials and never
 //! contacts the proof URL. A proof record is an operator assertion, not verification.
 use serde::Deserialize;
-#[cfg(unix)]
 use std::io::Read;
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -53,14 +50,12 @@ impl Grant {
         self.current_with_clock(|| now)
     }
 }
-#[cfg_attr(windows, allow(dead_code))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
     schema_version: u32,
     qualifications: Vec<Record>,
 }
-#[cfg_attr(windows, allow(dead_code))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -108,19 +103,6 @@ pub(super) async fn load(
     .ok()?
 }
 
-#[cfg(windows)]
-fn load_sync(
-    _project: &Path,
-    _tool: &str,
-    _adapter: &str,
-    _interactive: bool,
-    _now: i64,
-) -> Option<Grant> {
-    // WIN-3.8: open without following reparse points and check the owner SID / DACL.
-    None
-}
-
-#[cfg(unix)]
 fn load_sync(
     project: &Path,
     tool: &str,
@@ -131,17 +113,10 @@ fn load_sync(
     if !interactive {
         return None;
     }
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(project.join(".pu/agent-signals/qualifications.json"))
-        .ok()?;
+    let path = project.join(".pu/agent-signals/qualifications.json");
+    let file = pu_core::private_fs::open_no_follow(&path).ok()?;
     let meta = file.metadata().ok()?;
-    if !meta.is_file()
-        || meta.len() > 16 * 1024
-        || meta.mode() & 0o7777 != 0o600
-        || meta.uid() != unsafe { libc::geteuid() }
-    {
+    if !meta.is_file() || meta.len() > 16 * 1024 || !super::exact_private_file(&file, &path) {
         return None;
     }
     let mut data = Vec::new();

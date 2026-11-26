@@ -4,19 +4,33 @@ use pu_core::signals::*;
 use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
-#[cfg(unix)]
 use std::io::{Read, Seek, SeekFrom};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(all(test, unix))]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 pub(super) struct Observer {
-    #[cfg_attr(windows, allow(dead_code))]
     not_before_ms: i64,
     env: Vec<(String, String)>,
     initial_transcript: Box<Transcript>,
+}
+
+/// The registry row must not be writable by another user. Unix: no group or
+/// other write bit. Windows: owned by the user with a private DACL, which the
+/// profile's default ACL (user, SYSTEM, Administrators) satisfies.
+fn not_writable_by_others(file: &std::fs::File, label: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = label;
+        file.metadata().is_ok_and(|meta| meta.mode() & 0o022 == 0)
+    }
+    #[cfg(windows)]
+    {
+        pu_core::private_fs::check_private_file(file, label).is_ok()
+    }
 }
 
 pub(super) async fn prepare_launch(
@@ -73,11 +87,7 @@ pub(super) fn prepare(
     }
     let launch = pu_core::id::session_id();
     let artifacts = install::Artifacts::new(Path::new(project), &launch).ok()?;
-    #[cfg(unix)]
-    let socket = tokio::net::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
-    // WIN-3.9: the Windows signal endpoint.
-    #[cfg(windows)]
-    let socket = super::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
+    let socket = artifacts.bind_signal().ok()?;
     Some(Prepared {
         socket,
         token: String::new(),
@@ -155,13 +165,6 @@ fn windows_pid_domain(computer: &str) -> Option<String> {
 }
 
 impl Observer {
-    #[cfg(windows)]
-    async fn row(&self, _cwd: &str, _pid: u32, _session: &str) -> Option<Value> {
-        // WIN-3.8: open without following reparse points and check the owner SID / DACL.
-        None
-    }
-
-    #[cfg(unix)]
     async fn row(&self, cwd: &str, pid: u32, session: &str) -> Option<Value> {
         use tokio::io::AsyncReadExt;
         // The native interactive registry is stored per process.
@@ -169,20 +172,19 @@ impl Observer {
         // observer, and no cross-profile shared cache that can mix identities.
         let root =
             crate::read_source::native_root(pu_core::read::Runtime::Claude, &self.env).ok()?;
-        let file = tokio::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(root.join("sessions").join(format!("{pid}.json")))
-            .await
-            .ok()?;
-        let meta = file.metadata().await.ok()?;
-        if !meta.is_file()
-            || meta.uid() != unsafe { libc::geteuid() }
-            || meta.mode() & 0o022 != 0
-            || meta.len() > 16 * 1024
-        {
-            return None;
-        }
+        let path = root.join("sessions").join(format!("{pid}.json"));
+        let file = tokio::task::spawn_blocking(move || {
+            let file = pu_core::private_fs::open_no_follow(&path).ok()?;
+            let meta = file.metadata().ok()?;
+            (meta.is_file()
+                && pu_core::private_fs::owned_by_current_user(&file).ok()?
+                && not_writable_by_others(&file, &path)
+                && meta.len() <= 16 * 1024)
+                .then_some(file)
+        })
+        .await
+        .ok()??;
+        let file = tokio::fs::File::from_std(file);
         let mut data = Vec::new();
         file.take(16 * 1024 + 1).read_to_end(&mut data).await.ok()?;
         if data.len() > 16 * 1024 {
@@ -422,28 +424,18 @@ impl RecordFacts {
 }
 
 impl Transcript {
-    #[cfg(windows)]
-    fn read(&mut self, _path: &Path, _identity: &SignalIdentity, _cwd: &str) -> Option<()> {
-        // WIN-3.8: open without following reparse points and check the owner SID / DACL.
-        None
-    }
-
-    #[cfg(unix)]
     fn read(&mut self, path: &Path, identity: &SignalIdentity, cwd: &str) -> Option<()> {
+        use pu_core::private_fs as pfs;
         self.materialized |= std::fs::symlink_metadata(path).is_ok();
         if self.poisoned {
             return None;
         }
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .ok()?;
+        let mut file = pfs::open_no_follow(path).ok()?;
         self.poisoned = true;
         let meta = file.metadata().ok()?;
-        let inode = (meta.dev(), meta.ino());
+        let inode = pfs::file_identity(&file).ok()?;
         if !meta.is_file()
-            || meta.uid() != unsafe { libc::geteuid() }
+            || !pfs::owned_by_current_user(&file).ok()?
             || meta.len() < self.offset
             || meta.len() < self.observed_length
             || self.inode.is_some_and(|old| old != inode)
@@ -508,7 +500,6 @@ impl Transcript {
             })
     }
 
-    #[cfg_attr(windows, allow(dead_code))]
     fn record(&mut self, v: &Value, identity: &SignalIdentity, cwd: &str) -> Option<()> {
         let content_record = matches!(v["type"].as_str(), Some("user" | "assistant"));
         if v["isSidechain"] == true {

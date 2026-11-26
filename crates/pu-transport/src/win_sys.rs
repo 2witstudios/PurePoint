@@ -171,6 +171,40 @@ pub fn pipe_client_pid(pipe: RawHandle) -> io::Result<u32> {
     Ok(pid)
 }
 
+/// The user of a pipe client, from the security context captured when it
+/// connected (valid after the client exits). Needs a completed read first.
+/// Impersonates on the calling thread only between these calls, with no await.
+pub fn pipe_client_token_sid(pipe: RawHandle) -> io::Result<Sid> {
+    use windows_sys::Win32::Security::RevertToSelf;
+    use windows_sys::Win32::System::Pipes::ImpersonateNamedPipeClient;
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+    check(unsafe { ImpersonateNamedPipeClient(pipe as HANDLE) })?;
+    let mut token: HANDLE = null_mut();
+    // OpenAsSelf: open with the process's own identity, not the client's.
+    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) };
+    let opened_err = io::Error::last_os_error();
+    let reverted = unsafe { RevertToSelf() };
+    if reverted == 0 {
+        // Never keep running as the client.
+        std::process::abort();
+    }
+    if opened == 0 {
+        return Err(opened_err);
+    }
+    let token = unsafe { OwnedHandle::from_raw_handle(token as RawHandle) };
+    token_user(token_raw(&token))
+}
+
+/// Wait up to `timeout` for an instance of `name` to be free (`WaitNamedPipeW`).
+pub fn wait_named_pipe(name: &str, timeout: std::time::Duration) {
+    use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
+    let w = wide(name);
+    let ms = u32::try_from(timeout.as_millis())
+        .unwrap_or(u32::MAX)
+        .max(1);
+    unsafe { WaitNamedPipeW(w.as_ptr(), ms) };
+}
+
 pub fn pipe_server_pid(pipe: RawHandle) -> io::Result<u32> {
     let mut pid = 0;
     check(unsafe { GetNamedPipeServerProcessId(pipe as HANDLE, &mut pid) })?;

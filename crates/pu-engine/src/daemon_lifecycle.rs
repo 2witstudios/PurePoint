@@ -138,7 +138,7 @@ pub fn claim_pid_file(path: &Path) -> Result<(), std::io::Error> {
         writeln!(file, "{}", std::process::id())?;
         file.sync_all()?;
     }
-    std::fs::rename(&tmp, path)
+    pu_core::fs_retry::rename(&tmp, path)
 }
 
 pub fn read_pid_file(path: &Path) -> Result<Option<u32>, std::io::Error> {
@@ -155,8 +155,8 @@ pub fn cleanup_files(pid_path: &Path, socket_path: &Path) {
     if !matches!(read_pid_file(pid_path), Ok(Some(pid)) if pid == std::process::id()) {
         return;
     }
-    let _ = std::fs::remove_file(pid_path);
-    let _ = std::fs::remove_file(socket_path);
+    let _ = pu_core::fs_retry::remove_file(pid_path);
+    let _ = pu_core::fs_retry::remove_file(socket_path);
 }
 
 /// Raise the open-file soft limit as far as the hard limit allows (capped, since

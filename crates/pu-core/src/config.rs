@@ -130,7 +130,7 @@ pub fn save_global_agent_settings(
     let mut tmp = std::fs::File::create(&tmp_path)?;
     std::io::Write::write_all(&mut tmp, yaml.as_bytes())?;
     tmp.sync_all()?;
-    std::fs::rename(tmp_path, path)?;
+    crate::fs_retry::rename(tmp_path, path)?;
     Ok(settings)
 }
 
@@ -248,7 +248,7 @@ pub fn update_agent_config(
     let mut tmp = std::fs::File::create(&tmp_path)?;
     std::io::Write::write_all(&mut tmp, yaml.as_bytes())?;
     tmp.sync_all()?;
-    std::fs::rename(&tmp_path, &path)?;
+    crate::fs_retry::rename(&tmp_path, &path)?;
     drop(lock_file);
 
     // Return fully merged config (with code defaults filled in)

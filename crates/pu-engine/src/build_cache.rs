@@ -7,10 +7,7 @@
 //! low, also drops idle caches of worktrees that still exist.
 
 use pu_core::canon::CanonicalPath;
-#[cfg(unix)]
 use std::fs::File;
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -84,9 +81,14 @@ pub fn worktree_target_dirs(project_root: &Path) -> Vec<PathBuf> {
 }
 
 /// Temp roots agents write caches into: the literal `/tmp` agents type, and
-/// the per-user `$TMPDIR` on macOS.
+/// the per-user `$TMPDIR` on macOS (`std::env::temp_dir()`, which is
+/// `%TEMP%` on Windows, where `/tmp` does not exist).
 pub fn tmp_roots() -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = [PathBuf::from("/tmp"), std::env::temp_dir()]
+    #[cfg(unix)]
+    let candidates = [PathBuf::from("/tmp"), std::env::temp_dir()];
+    #[cfg(windows)]
+    let candidates = [std::env::temp_dir()];
+    let mut roots: Vec<PathBuf> = candidates
         .into_iter()
         .filter_map(|p| p.canonical().ok())
         .collect();
@@ -141,24 +143,17 @@ pub fn sweep_policy(free_bytes: Option<u64>) -> SweepPolicy {
     }
 }
 
-#[cfg(windows)]
-pub fn free_bytes(_path: &Path) -> Option<u64> {
-    // WIN-3.10: GetDiskFreeSpaceExW in place of statvfs.
-    None
-}
-
-#[cfg(unix)]
+/// Space available to this user on `path`'s file system: `statvfs`
+/// `f_bavail * f_frsize` on Unix, `GetDiskFreeSpaceExW` on Windows.
 pub fn free_bytes(path: &Path) -> Option<u64> {
-    let stat = nix::sys::statvfs::statvfs(path).ok()?;
-    #[allow(clippy::useless_conversion)]
-    Some(u64::from(stat.blocks_available()) * u64::from(stat.fragment_size()))
+    fs4::available_space(path).ok()
 }
 
 /// Delete each idle cache in `dirs`, returning the ones removed.
 pub fn remove_idle(dirs: &[PathBuf], now: SystemTime, idle_after: Duration) -> Vec<PathBuf> {
     dirs.iter()
         .filter(|dir| is_idle(dir, now, idle_after))
-        .filter(|dir| match std::fs::remove_dir_all(dir) {
+        .filter(|dir| match pu_core::fs_retry::remove_dir_all(dir) {
             Ok(()) => true,
             Err(e) => {
                 tracing::warn!(dir = %dir.display(), "failed to remove build cache: {e}");
@@ -198,21 +193,15 @@ fn scan(dir: &Path, depth: usize, visit: &mut impl FnMut(&Path, &std::fs::Metada
     }
 }
 
-#[cfg(windows)]
-fn lock_is_held(_path: &Path) -> bool {
-    // WIN-3.10: probe cargo's lock with LockFileEx; until then every cache counts as busy.
-    true
-}
-
-#[cfg(unix)]
+/// Whether a running cargo holds this lock file: try an exclusive,
+/// non-blocking lock (`flock(LOCK_EX|LOCK_NB)` on Unix, `LockFileEx` on
+/// Windows, both what cargo itself takes). Any failure counts as held; the
+/// probe lock is released when `file` drops.
 fn lock_is_held(path: &Path) -> bool {
     let Ok(file) = File::open(path) else {
         return false;
     };
-    // SAFETY: flock on a valid fd owned by `file`; the lock is released when
-    // `file` is dropped.
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    rc != 0
+    fs4::FileExt::try_lock(&file).is_err()
 }
 
 #[cfg(test)]
@@ -231,6 +220,28 @@ mod tests {
         .unwrap();
         std::fs::write(dir.join("debug/.cargo-lock"), b"").unwrap();
         std::fs::write(dir.join("debug/deps/libfoo.rlib"), b"x").unwrap();
+    }
+
+    #[test]
+    fn given_cargo_lock_held_by_another_handle_should_count_as_busy() {
+        let tmp = TempDir::new().unwrap();
+        let lock = tmp.path().join(".cargo-lock");
+        std::fs::write(&lock, b"").unwrap();
+        assert!(!lock_is_held(&lock));
+        let holder = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock)
+            .unwrap();
+        fs4::FileExt::try_lock(&holder).unwrap();
+        assert!(lock_is_held(&lock));
+        drop(holder);
+        assert!(!lock_is_held(&lock));
+    }
+
+    #[test]
+    fn given_temp_dir_should_report_free_space() {
+        assert!(free_bytes(&std::env::temp_dir()).is_some_and(|b| b > 0));
     }
 
     fn later(by: Duration) -> SystemTime {
@@ -260,7 +271,10 @@ mod tests {
             targets,
             vec![&(
                 CARGO_TARGET_DIR_ENV.to_string(),
-                "/p/.pu/worktrees/wt-1/target".to_string()
+                Path::new("/p/.pu/worktrees/wt-1")
+                    .join("target")
+                    .to_string_lossy()
+                    .into_owned()
             )]
         );
     }
@@ -330,7 +344,6 @@ mod tests {
         assert!(!idle);
     }
 
-    #[cfg(unix)]
     #[test]
     fn given_build_holding_cargo_lock_should_not_be_idle() {
         // given — cargo holds an flock on <profile>/.cargo-lock while it runs
@@ -338,7 +351,7 @@ mod tests {
         let dir = tmp.path().join("purepoint-x-target");
         make_target_dir(&dir);
         let lock = File::open(dir.join("debug/.cargo-lock")).unwrap();
-        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+        fs4::FileExt::lock(&lock).unwrap();
 
         // when
         let idle = is_idle(&dir, later(7 * HOUR), 6 * HOUR);
@@ -396,7 +409,6 @@ mod tests {
         assert_eq!(found, vec![worktree_target_dir(&wt_with_cache)]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn given_idle_and_active_caches_should_remove_only_idle_ones() {
         // given
@@ -406,7 +418,7 @@ mod tests {
         make_target_dir(&idle);
         make_target_dir(&busy);
         let lock = File::open(busy.join("debug/.cargo-lock")).unwrap();
-        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+        fs4::FileExt::lock(&lock).unwrap();
 
         // when
         let removed = remove_idle(&[idle.clone(), busy.clone()], later(7 * HOUR), 6 * HOUR);

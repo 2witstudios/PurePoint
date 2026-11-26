@@ -989,7 +989,7 @@ impl Engine {
             let content = match serde_json::to_string_pretty(&m) {
                 Ok(c) => c + "\n",
                 Err(e) => {
-                    let _ = std::fs::remove_file(&manifest_path);
+                    let _ = pu_core::fs_retry::remove_file(&manifest_path);
                     return Response::Error {
                         code: "IO_ERROR".into(),
                         message: format!("failed to serialize manifest: {e}"),
@@ -1001,7 +1001,7 @@ impl Engine {
                 .write_all(content.as_bytes())
                 .and_then(|_| file.sync_all())
             {
-                let _ = std::fs::remove_file(&manifest_path);
+                let _ = pu_core::fs_retry::remove_file(&manifest_path);
                 return Response::Error {
                     code: "IO_ERROR".into(),
                     message: format!("failed to write manifest: {e}"),

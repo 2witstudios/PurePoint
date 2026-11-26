@@ -9,7 +9,7 @@ use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-    GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT, SetNamedSecurityInfoW,
+    GetNamedSecurityInfoW, GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT, SetNamedSecurityInfoW,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
@@ -212,7 +212,6 @@ fn denied(path: &Path, why: &str) -> io::Error {
 /// Owner must be the current user (or SYSTEM/Administrators); every allow ACE
 /// must be for the current user, SYSTEM or Administrators.
 pub fn check_private(path: &Path) -> io::Result<()> {
-    let user = current_user_sid()?;
     let name = wide(path.as_os_str());
     let mut owner: PSID = null_mut();
     let mut dacl: *mut ACL = null_mut();
@@ -234,7 +233,66 @@ pub fn check_private(path: &Path) -> io::Result<()> {
         return Err(io::Error::from_raw_os_error(rc as i32));
     }
     let _sd = Sd(psd);
-    // SAFETY: owner was filled by GetNamedSecurityInfoW and lives in psd.
+    // SAFETY: owner and dacl were filled by GetNamedSecurityInfoW and live in psd.
+    unsafe { check_descriptor(path, owner, dacl) }
+}
+
+/// [`check_private`] for an open file: no second path lookup, so a swapped
+/// path cannot change what is checked. The handle needs READ_CONTROL (any
+/// handle opened for reading has it).
+pub fn check_private_handle(handle: HANDLE, label: &Path) -> io::Result<()> {
+    let (owner, dacl, sd) = handle_security(handle, true)?;
+    let _sd = sd;
+    // SAFETY: owner and dacl were filled by GetSecurityInfo and live in sd.
+    unsafe { check_descriptor(label, owner, dacl) }
+}
+
+/// True when an open file is owned by the current user, or by SYSTEM or
+/// Administrators (who already control the machine): the Windows meaning of
+/// `st_uid == geteuid()`.
+pub fn handle_owned_by_current_user(handle: HANDLE) -> io::Result<bool> {
+    let user = current_user_sid()?;
+    let (owner, _, sd) = handle_security(handle, false)?;
+    let _sd = sd;
+    // SAFETY: owner was filled by GetSecurityInfo and lives in sd.
+    Ok(unsafe { user.equals(owner) || is_system_or_admins(owner) })
+}
+
+fn handle_security(handle: HANDLE, with_dacl: bool) -> io::Result<(PSID, *mut ACL, Sd)> {
+    let mut owner: PSID = null_mut();
+    let mut dacl: *mut ACL = null_mut();
+    let mut psd: PSECURITY_DESCRIPTOR = null_mut();
+    let info = if with_dacl {
+        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION
+    } else {
+        OWNER_SECURITY_INFORMATION
+    };
+    // SAFETY: handle is a live file handle; out-pointers are valid; psd is
+    // freed by Sd.
+    let rc = unsafe {
+        GetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            info,
+            &mut owner,
+            null_mut(),
+            if with_dacl { &mut dacl } else { null_mut() },
+            null_mut(),
+            &mut psd,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::from_raw_os_error(rc as i32));
+    }
+    Ok((owner, dacl, Sd(psd)))
+}
+
+/// # Safety
+/// `owner` must be a valid SID and `dacl` null or a valid ACL, both alive
+/// for the call.
+unsafe fn check_descriptor(path: &Path, owner: PSID, dacl: *mut ACL) -> io::Result<()> {
+    let user = current_user_sid()?;
+    // SAFETY: caller guarantees owner is a valid SID.
     if !unsafe { user.equals(owner) || is_system_or_admins(owner) } {
         return Err(denied(path, "is not owned by the current user"));
     }

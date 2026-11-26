@@ -80,16 +80,6 @@ fn get_user_name() -> Option<String> {
     name.into_string().ok().filter(|n| !n.is_empty())
 }
 
-/// Error for a host facility the Windows port does not implement yet. Every
-/// caller names the WIN leaf that replaces it.
-#[cfg(windows)]
-pub(crate) fn unsupported(what: &str) -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        format!("{what} is not supported on Windows yet"),
-    )
-}
-
 /// Parse `/proc/<pid>/stat` into `(pid, ppid)`. The command name (field 2) is
 /// parenthesised and may itself contain spaces or `)`, so fields are read after
 /// the last `)`: state, then ppid.
