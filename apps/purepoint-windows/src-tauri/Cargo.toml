@@ -1,0 +1,35 @@
+# Its own workspace (DEC-7): the Tauri dependency tree stays out of the root
+# workspace's Cargo.lock and cargo-deny scan. The root Cargo.toml excludes it.
+[workspace]
+
+[package]
+name = "purepoint-windows"
+version = "0.1.0"
+description = "PurePoint desktop app for Windows"
+edition = "2024"
+license = "MIT"
+# Matches the root rust-toolchain.toml. Edition 2024 resolves dependencies
+# MSRV-aware (resolver 3), so Cargo.lock picks crate versions that build on it.
+rust-version = "1.89"
+publish = false
+
+[lib]
+name = "purepoint_windows_lib"
+
+[build-dependencies]
+# Tauri 2.12 raised its MSRV to 1.90; stay on 2.11 until the root toolchain moves.
+tauri-build = { version = "~2.6", features = [] }
+
+[dependencies]
+tauri = { version = "~2.11", features = [] }
+pu-core = { path = "../../../crates/pu-core" }
+
+# Same versions Tauri 2.11's WebView2 runtime links, so the COM types match.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows-core = "0.61"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

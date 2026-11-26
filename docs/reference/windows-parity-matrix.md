@@ -8,7 +8,7 @@ Maps every macOS app source file to its planned counterpart in the Windows app (
 - `node scripts/check-parity-matrix.mjs` fails when a Swift file, a test file or an SF Symbol in the source is missing here, or a non-excluded row lacks a leaf. `--no-todo` also fails on any `todo` row (the WIN-10.5 and WIN-11.1 gate).
 - Keep the tables in this exact format: one row per line, cells separated by `|`, file names in backticks.
 
-Summary: 256 source files, 67 excluded, 189 todo, 0 ported. 69 test files (23 iOS-only). 104 SF Symbols.
+Summary: 256 source files, 67 excluded, 188 todo, 1 ported. 69 test files (23 iOS-only). 104 SF Symbols.
 
 ## Source files
 
@@ -269,7 +269,7 @@ Summary: 256 source files, 67 excluded, 189 todo, 0 ported. 69 test files (23 iO
 | `Views/Triggers/TriggerDetailView.swift` | 170 | `ui/src/views/triggers/TriggerDetailView.tsx` | WIN-8.9 | todo | — |
 | `Views/WindowChrome+iOS.swift` | 102 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/WindowChrome.swift` | 42 | `ui/src/views/shell/WindowChrome.tsx` | WIN-7.1 | todo | — |
-| `purepoint_macosApp.swift` | 95 | `ui/src/main.tsx`, `src-tauri/src/main.rs` | WIN-5.1 | todo | — |
+| `purepoint_macosApp.swift` | 95 | `ui/src/main.tsx`, `src-tauri/src/main.rs` | WIN-5.1 | ported | — |
 
 ## Tests
 
