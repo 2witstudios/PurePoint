@@ -1,8 +1,7 @@
 // Port of apps/purepoint-macos/purepoint-macosTests/WorkspaceReconcilerTests.swift (WIN-6.1).
 //
-// Each title keeps the Swift test function name. The three restart cases that save and load
-// through `WorkspacePersistence` stand in a JSON round trip for the file until WIN-6.3 ports it;
-// the cases that only exercise the file format are `todo` here and land with WIN-6.3.
+// Each title keeps the Swift test function name. Cases that save and load through
+// `WorkspacePersistence` use its port (workspacePersistence.ts, WIN-6.3) over an in-memory file.
 
 import type { AgentEntry } from '../protocol';
 import { leaf } from './paneSplit';
@@ -40,6 +39,18 @@ import {
   makeWorktreeModel,
   type AgentModel,
 } from './workspaceModel';
+import {
+  decodeWorkspaceDocument,
+  documentText,
+  legacyGridLayoutPath,
+  loadWorkspaces,
+  memoryWorkspaceFileIO,
+  saveWorkspaces,
+  workspaceFilePath,
+  workspacesFromText,
+} from './workspacePersistence';
+
+const ROOT = '/tmp/pp-workspace-tests';
 
 function makeAgent(id: string): AgentModel {
   return makeAgentModel({
@@ -78,9 +89,11 @@ function makeGroupedWorkspace(): Workspace {
     .workspace;
 }
 
-/** Stand-in for `WorkspacePersistence.save` then `load` until WIN-6.3 ports the file format. */
+/** `WorkspacePersistence.save` then `load`: through the file's encoded text. */
 function restart(workspaces: Workspace[]): Workspace[] {
-  return JSON.parse(JSON.stringify(workspaces)) as Workspace[];
+  const text = documentText(workspaces);
+  if (text === null) throw new Error('layout did not encode');
+  return workspacesFromText(text, ROOT);
 }
 
 /**
@@ -301,13 +314,69 @@ describe('WorkspaceReconcilerTests', () => {
 
   // MARK: - Migration (file format: WorkspacePersistence, WIN-6.3)
 
-  it.todo('givenVersionTwoDocumentShouldMigrateEachLeafToOneTab (WIN-6.3: WorkspacePersistence)');
-  it.todo(
-    'givenLegacyGridLayoutShouldMigrateIntoOneWorkspaceAndRetireTheFile (WIN-6.3: WorkspacePersistence)',
-  );
-  it.todo('givenNewerDocumentOnDiskShouldNotOverwriteIt (WIN-6.3: WorkspacePersistence)');
-  it.todo('givenActiveWorkspaceShouldRecordItForTheCLI (WIN-6.3: WorkspacePersistence)');
-  it.todo('givenMissingLayoutFileShouldLoadEmptyRatherThanFail (WIN-6.3: WorkspacePersistence)');
+  /**
+   * Version 2 stored one agent per leaf and file panes in a side list. Each leaf becomes a one-tab
+   * pane: its agent, else its file, else an empty tab.
+   */
+  it('givenVersionTwoDocumentShouldMigrateEachLeafToOneTab', async () => {
+    const v2 = `{"version":2,"workspaces":[{"id":"ws-ag-a","focusedLeafId":2,"nextLeafId":3,
+      "filePanes":[{"leafId":1,"path":"/tmp/x.md"}],
+      "tree":{"type":"split","axis":"vertical","ratio":0.5,
+        "first":{"type":"leaf","leafId":0,"agentId":"ag-a"},
+        "second":{"type":"split","axis":"horizontal","ratio":0.5,
+          "first":{"type":"leaf","leafId":1},
+          "second":{"type":"leaf","leafId":2}}}}]}`;
+    const io = memoryWorkspaceFileIO(new Map([[workspaceFilePath(ROOT), v2]]));
+
+    const [workspace] = await loadWorkspaces(io, ROOT);
+
+    expect(workspace && allLeafIds(workspace.root)).toEqual([0, 1, 2]);
+    expect(workspace?.panes[0]?.tabs.map((tab) => tab.content)).toEqual([agentContent('ag-a')]);
+    expect(workspace?.panes[1]?.tabs.map((tab) => tab.content)).toEqual([fileContent('/tmp/x.md')]);
+    expect(workspace?.panes[2]?.tabs.map((tab) => tab.content)).toEqual([{ kind: 'empty' }]);
+    expect(workspace?.focusedLeafId).toBe(2);
+    expect(
+      new Set(Object.values(workspace?.panes ?? {}).flatMap((pane) => pane?.tabs.map((t) => t.id)))
+        .size,
+    ).toBe(3);
+  });
+
+  it('givenLegacyGridLayoutShouldMigrateIntoOneWorkspaceAndRetireTheFile', async () => {
+    const legacyPath = legacyGridLayoutPath(ROOT);
+    const legacy =
+      '{"ownerAgentId":"ag-a","tree":{"type":"split","axis":"vertical","ratio":0.5,' +
+      '"first":{"type":"leaf","agentId":"ag-a"},"second":{"type":"leaf","agentId":"ag-b"}}}';
+    const io = memoryWorkspaceFileIO(new Map([[legacyPath, legacy]]));
+
+    const agents = live(['ag-a', 'ag-b']);
+    const result = reconcileWorkspaces(await loadWorkspaces(io, ROOT), agents);
+
+    expectInvariant(result, agents);
+    expect(result).toHaveLength(1);
+    expect(result[0] && paneCount(result[0])).toBe(2);
+    expect(io.files.has(legacyPath)).toBe(false);
+  });
+
+  it('givenNewerDocumentOnDiskShouldNotOverwriteIt', async () => {
+    const path = workspaceFilePath(ROOT);
+    const newer = '{"version":99,"workspaces":[],"somethingNew":true}';
+    const io = memoryWorkspaceFileIO(new Map([[path, newer]]));
+
+    await saveWorkspaces(io, ROOT, [makeGroupedWorkspace()]);
+
+    expect(io.files.get(path)).toBe(newer);
+  });
+
+  it('givenActiveWorkspaceShouldRecordItForTheCLI', async () => {
+    const io = memoryWorkspaceFileIO();
+    await saveWorkspaces(io, ROOT, [makeGroupedWorkspace()], 'ws-ag-a');
+    const document = decodeWorkspaceDocument(io.files.get(workspaceFilePath(ROOT)) ?? '');
+    expect(document?.activeWorkspaceId).toBe('ws-ag-a');
+  });
+
+  it('givenMissingLayoutFileShouldLoadEmptyRatherThanFail', async () => {
+    expect(await loadWorkspaces(memoryWorkspaceFileIO(), ROOT)).toEqual([]);
+  });
 
   // MARK: - Spawn placement
 

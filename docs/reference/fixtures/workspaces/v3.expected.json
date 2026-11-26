@@ -1,0 +1,46 @@
+{
+  "version" : 4,
+  "workspaces" : [
+    {
+      "focusedLeafId" : 1,
+      "id" : "ws-ag-a",
+      "nextLeafId" : 2,
+      "nextSurfaceId" : 3,
+      "tree" : {
+        "axis" : "vertical",
+        "first" : {
+          "activeTabId" : 2,
+          "leafId" : 0,
+          "tabs" : [
+            {
+              "agentId" : "ag-a",
+              "id" : 0,
+              "kind" : "agent"
+            },
+            {
+              "id" : 2,
+              "kind" : "file",
+              "path" : "\/Users\/dev\/project\/README.md"
+            }
+          ],
+          "type" : "leaf"
+        },
+        "ratio" : 0.5,
+        "second" : {
+          "activeTabId" : 1,
+          "leafId" : 1,
+          "tabs" : [
+            {
+              "agentId" : "ag-b",
+              "id" : 1,
+              "kind" : "agent"
+            }
+          ],
+          "type" : "leaf"
+        },
+        "type" : "split"
+      },
+      "worktreeId" : "wt-1"
+    }
+  ]
+}
