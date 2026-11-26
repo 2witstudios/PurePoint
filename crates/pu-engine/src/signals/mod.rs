@@ -13,28 +13,16 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// The launch's signal endpoint: a datagram socket at
+/// `$TMP/pu-signal-<launch>/s` on Unix, a per-launch token-guarded named pipe
+/// (`\\.\pipe\purepoint-<hash16>-signal-<launch>`, one frame per
+/// connection) on Windows. Both hand the intake whole `{"token","payload"}`
+/// frames through `recv`.
 #[cfg(unix)]
-use tokio::net::UnixDatagram;
-
-/// Stand-in for the launch signal socket so the shared intake loop compiles.
-// WIN-3.9: replace with the Windows signal endpoint (named pipe / AF_UNIX).
+pub(crate) type SignalSocket = tokio::net::UnixDatagram;
 #[cfg(windows)]
-pub(crate) struct UnixDatagram {
-    _private: (),
-}
-
-#[cfg(windows)]
-impl UnixDatagram {
-    pub(crate) fn bind(_path: impl AsRef<Path>) -> std::io::Result<Self> {
-        // WIN-3.9: bind the Windows signal endpoint.
-        Err(crate::os::unsupported("agent signal socket"))
-    }
-
-    pub(crate) async fn recv(&self, _buf: &mut [u8]) -> std::io::Result<usize> {
-        // WIN-3.9: receive one signal datagram.
-        std::future::pending().await
-    }
-}
+pub(crate) type SignalSocket = pu_transport::signal::SignalListener;
 
 pub(crate) type SignalStates = Arc<Mutex<HashMap<String, Arc<LaunchState>>>>;
 
@@ -267,7 +255,7 @@ impl LaunchState {
 }
 
 pub(crate) struct Prepared {
-    socket: UnixDatagram,
+    socket: SignalSocket,
     token: String,
     tool: String,
     version: String,
@@ -330,13 +318,14 @@ fn limits() -> SignalLimits {
 }
 
 fn helper(env: &[(String, String)]) -> Option<PathBuf> {
-    let sibling = std::env::current_exe().ok()?.with_file_name("pu");
+    let name = format!("pu{}", std::env::consts::EXE_SUFFIX);
+    let sibling = std::env::current_exe().ok()?.with_file_name(&name);
     if sibling.is_file() {
         return Some(sibling);
     }
     let path = env.iter().rev().find(|(k, _)| k == "PATH")?.1.clone();
-    path.split(':')
-        .map(|p| Path::new(p).join("pu"))
+    std::env::split_paths(&path)
+        .map(|p| p.join(&name))
         .find(|p| p.is_absolute() && p.is_file())
 }
 
@@ -468,7 +457,7 @@ pub(crate) async fn prepare(
         .flatten()
         .unwrap_or_else(|| "unknown".into());
     let _ = std::fs::remove_dir(&home);
-    let socket = UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
+    let socket = artifacts.bind_signal().ok()?;
     let token = format!("{}{}", pu_core::id::session_id(), pu_core::id::session_id());
     let identity = SignalIdentity {
         agent_id: agent.into(),
@@ -493,14 +482,7 @@ pub(crate) async fn prepare(
     args.extend(config);
     env.extend([
         ("PU_SIGNAL_TOKEN".into(), token.clone()),
-        (
-            "PU_SIGNAL_SOCKET".into(),
-            artifacts
-                .socket_directory
-                .join("s")
-                .to_string_lossy()
-                .into_owned(),
-        ),
+        ("PU_SIGNAL_SOCKET".into(), artifacts.signal_address.clone()),
         (
             "PU_SIGNAL_HELPER".into(),
             helper.to_string_lossy().into_owned(),
@@ -792,6 +774,85 @@ fn token_matches(expected: &[u8], received: &[u8]) -> bool {
         == 0
 }
 
+/// Cross-crate test support: a hook-fed launch intake bound exactly like a
+/// production launch's, so `pu`'s helper can be driven end to end.
+#[doc(hidden)]
+pub mod testing {
+    use super::*;
+
+    pub struct HookIntake {
+        /// `PU_SIGNAL_SOCKET` for the helper.
+        pub address: String,
+        /// `PU_SIGNAL_TOKEN` for the helper.
+        pub token: String,
+        states: SignalStates,
+        _exit: tokio::sync::watch::Sender<Option<i32>>,
+        _project: tempfile::TempDir,
+    }
+
+    impl HookIntake {
+        /// Bind and activate a `tool` launch (`"claude"` or `"pi"`) owned by
+        /// `pid`. Call inside a multi-threaded Tokio runtime.
+        pub fn start(tool: &str, session: Option<&str>, pid: u32) -> std::io::Result<Self> {
+            let project = tempfile::tempdir()?;
+            let launch = pu_core::id::session_id();
+            let artifacts = install::Artifacts::new(project.path(), &launch)?;
+            let socket = artifacts.bind_signal()?;
+            let address = artifacts.signal_address.clone();
+            let token = format!("{}{}", pu_core::id::session_id(), pu_core::id::session_id());
+            let identity = SignalIdentity {
+                agent_id: "ag-hook".into(),
+                worktree_id: None,
+                launch_id: launch,
+                generation: 1,
+                native_session_id: session.unwrap_or("").into(),
+            };
+            let reducer = session
+                .map(|_| SignalReducer::new(identity.clone(), limits()))
+                .transpose()
+                .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
+            let prepared = Prepared {
+                socket,
+                token: token.clone(),
+                tool: tool.into(),
+                version: "test".into(),
+                state: Arc::new(LaunchState {
+                    reducer: Mutex::new(reducer),
+                    identity: Mutex::new(identity),
+                    native_snapshot: Mutex::new(None),
+                    macos_qualification: None,
+                    _artifacts: artifacts,
+                }),
+                observer: None,
+                output: None,
+            };
+            let states = SignalStates::default();
+            let (exit, rx) = tokio::sync::watch::channel(None);
+            prepared.activate_with_sources(
+                &states,
+                "project",
+                "/owned",
+                pid,
+                rx,
+                Arc::default(),
+                Arc::default(),
+            );
+            Ok(Self {
+                address,
+                token,
+                states,
+                _exit: exit,
+                _project: project,
+            })
+        }
+
+        /// The launch's current observed state.
+        pub fn snapshot(&self) -> Option<SignalSnapshot> {
+            self.states.lock().unwrap()["ag-hook"].snapshot()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,7 +861,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let launch = pu_core::id::session_id();
         let artifacts = install::Artifacts::new(tmp.path(), &launch).unwrap();
-        let socket = UnixDatagram::bind(artifacts.socket_directory.join("s")).unwrap();
+        let socket = artifacts.bind_signal().unwrap();
         let identity = SignalIdentity {
             agent_id: "ag-test".into(),
             worktree_id: Some("wt-test".into()),
@@ -828,28 +889,30 @@ mod tests {
             tmp,
         )
     }
-    #[cfg(unix)]
     async fn settle() {
-        tokio::time::sleep(Duration::from_millis(30)).await;
+        tokio::time::sleep(Duration::from_millis(if cfg!(windows) { 100 } else { 30 })).await;
     }
-    #[cfg(unix)]
-    fn send(
-        socket: &std::os::unix::net::UnixDatagram,
-        path: &Path,
-        token: &str,
-        mut payload: Value,
-    ) {
+    /// Deliver one frame to the launch endpoint the way the helper does: a
+    /// datagram on Unix, one pipe connection on Windows.
+    fn send(address: &str, token: &str, mut payload: Value) {
         payload
             .as_object_mut()
             .unwrap()
             .entry("occurred_at_ms")
             .or_insert_with(|| now_ms().into());
-        socket
-            .send_to(
-                &serde_json::to_vec(&json!({"token":token,"payload":payload})).unwrap(),
-                path,
-            )
+        let frame = serde_json::to_vec(&json!({"token":token,"payload":payload})).unwrap();
+        #[cfg(unix)]
+        std::os::unix::net::UnixDatagram::unbound()
+            .unwrap()
+            .send_to(&frame, address)
             .unwrap();
+        #[cfg(windows)]
+        pu_transport::signal::send_frame(
+            address,
+            &frame,
+            std::time::Instant::now() + Duration::from_secs(2),
+        )
+        .unwrap();
     }
     #[tokio::test(start_paused = true)]
     async fn given_long_idle_unbound_reader_should_not_force_scans_after_startup() {
@@ -1015,19 +1078,19 @@ mod tests {
         assert!(!publication.should_publish(None, start + Duration::from_secs(100)));
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
+    // The Windows writer blocks its thread; the pipe's accept loop needs a
+    // free worker.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn given_private_launch_intake_should_reject_foreign_session_child_and_token_then_invalidate_on_exit()
      {
         let (prepared, _tmp) = fixture("claude", Some("root"));
-        let path = prepared.state._artifacts.socket_directory.join("s");
+        let path = prepared.state._artifacts.signal_address.clone();
         let states = SignalStates::default();
         let channels = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
         let (status, mut updates) = tokio::sync::broadcast::channel(64);
         channels.lock().await.insert("project".into(), status);
         let (tx, rx) = tokio::sync::watch::channel(None);
         prepared.activate(&states, "project", "/owned", 123, rx, channels);
-        let socket = std::os::unix::net::UnixDatagram::unbound().unwrap();
         for (token, payload) in [
             (
                 "wrong",
@@ -1042,7 +1105,7 @@ mod tests {
                 json!({"session_id":"root","agent_id":"child","hook_event_name":"UserPromptSubmit"}),
             ),
         ] {
-            send(&socket, &path, token, payload);
+            send(&path, token, payload);
         }
         settle().await;
         assert_eq!(
@@ -1054,7 +1117,6 @@ mod tests {
             ObservationState::Unavailable
         );
         send(
-            &socket,
             &path,
             "private-fixture-token",
             json!({"session_id":"root","hook_event_name":"UserPromptSubmit"}),
@@ -1064,13 +1126,11 @@ mod tests {
         assert_eq!(state.snapshot().unwrap().activity, SignalActivity::Unknown);
         assert!(updates.try_recv().is_ok());
         send(
-            &socket,
             &path,
             "private-fixture-token",
             json!({"session_id":"root","hook_event_name":"PermissionRequest"}),
         );
         send(
-            &socket,
             &path,
             "private-fixture-token",
             json!({"session_id":"root","hook_event_name":"Stop"}),
@@ -1086,17 +1146,81 @@ mod tests {
         );
         assert!(state.snapshot().unwrap().outcome.is_none());
     }
-    #[cfg(unix)]
-    #[tokio::test]
+    /// The shipped `pi.mjs` writes straight to the pipe (`net.connect`) on
+    /// Windows; drive it with a stub `pi` host under Node.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn given_pi_extension_under_node_should_write_frames_to_the_pipe() {
+        use tokio::io::AsyncWriteExt;
+        let Ok(node) = which_node() else {
+            eprintln!("node not found; skipping");
+            return;
+        };
+        let (prepared, tmp) = fixture("pi", None);
+        let address = prepared.state._artifacts.signal_address.clone();
+        let extension = tmp.path().join("pi.mjs");
+        std::fs::write(
+            &extension,
+            include_bytes!("../../assets/agent-signals/pi.mjs"),
+        )
+        .unwrap();
+        let script = r#"
+            const { pathToFileURL } = await import('node:url');
+            const ext = (await import(pathToFileURL(process.argv[1]).href)).default;
+            const on = {};
+            ext({ on: (name, f) => { on[name] = f; } });
+            const ctx = { sessionManager: { getSessionId: () => 'root' } };
+            process.stdin.once('data', () => {
+              on.session_start({}, ctx);
+              setTimeout(() => on.agent_start({}, ctx), 300);
+              setTimeout(() => process.exit(0), 900);
+            });
+        "#;
+        let mut child = tokio::process::Command::new(node)
+            .args(["--input-type=module", "-e", script])
+            .arg(&extension)
+            .env("PU_SIGNAL_SOCKET", &address)
+            .env("PU_SIGNAL_TOKEN", "private-fixture-token")
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let states = SignalStates::default();
+        let (_tx, rx) = tokio::sync::watch::channel(None);
+        prepared.activate(
+            &states,
+            "project",
+            "/owned",
+            child.id().unwrap(),
+            rx,
+            Arc::default(),
+        );
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"go\n")
+            .await
+            .unwrap();
+        assert!(child.wait().await.unwrap().success());
+        let snapshot = states.lock().unwrap()["ag-test"].snapshot().unwrap();
+        assert_eq!(snapshot.activity, SignalActivity::Working);
+    }
+    #[cfg(windows)]
+    fn which_node() -> Result<PathBuf, ()> {
+        std::env::split_paths(&std::env::var_os("PATH").ok_or(())?)
+            .map(|dir| dir.join("node.exe"))
+            .find(|p| p.is_file())
+            .ok_or(())
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn given_pi_registration_should_require_owned_pid_and_detect_dropped_observations() {
         let (prepared, _tmp) = fixture("pi", None);
-        let path = prepared.state._artifacts.socket_directory.join("s");
+        let path = prepared.state._artifacts.signal_address.clone();
         let states = SignalStates::default();
         let (_tx, rx) = tokio::sync::watch::channel(None);
         prepared.activate(&states, "project", "/owned", 123, rx, Arc::default());
-        let socket = std::os::unix::net::UnixDatagram::unbound().unwrap();
         send(
-            &socket,
             &path,
             "private-fixture-token",
             json!({"session_id":"foreign","native_pid":999,"sequence":1,"type":"observer_bound"}),
@@ -1104,13 +1228,11 @@ mod tests {
         settle().await;
         assert!(states.lock().unwrap()["ag-test"].snapshot().is_none());
         send(
-            &socket,
             &path,
             "private-fixture-token",
             json!({"session_id":"root","native_pid":123,"sequence":1,"type":"observer_bound"}),
         );
         send(
-            &socket,
             &path,
             "private-fixture-token",
             json!({"session_id":"root","native_pid":123,"sequence":2,"type":"agent_start"}),
@@ -1124,7 +1246,6 @@ mod tests {
             SignalActivity::Working
         );
         send(
-            &socket,
             &path,
             "private-fixture-token",
             json!({"session_id":"root","native_pid":123,"sequence":4,"type":"agent_settled","outcome":"completed","aborted":false}),

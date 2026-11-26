@@ -23,6 +23,9 @@ notify = "8"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tempfile = "3"
 
+[target.'cfg(windows)'.dependencies]
+pu-transport = { path = "../pu-transport" }
+
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["term", "signal", "process", "fs", "resource", "user"] }
 

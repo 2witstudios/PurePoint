@@ -28,6 +28,8 @@ use unix as imp;
 #[cfg(windows)]
 pub mod naming;
 #[cfg(windows)]
+pub mod signal;
+#[cfg(windows)]
 mod win_sys;
 #[cfg(windows)]
 mod windows;

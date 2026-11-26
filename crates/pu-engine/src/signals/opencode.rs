@@ -190,11 +190,7 @@ pub(super) fn prepare(
         get("XDG_STATE_HOME").or_else(|| get("HOME").map(|p| p.join(".local/state")))?;
     let launch = pu_core::id::session_id();
     let artifacts = install::Artifacts::new(Path::new(project), &launch).ok()?;
-    #[cfg(unix)]
-    let socket = tokio::net::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
-    // WIN-3.9: the Windows signal endpoint.
-    #[cfg(windows)]
-    let socket = super::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
+    let socket = artifacts.bind_signal().ok()?;
     let identity = SignalIdentity {
         agent_id: agent.into(),
         worktree_id: worktree,

@@ -77,11 +77,7 @@ pub(super) fn prepare(
     }
     let launch = pu_core::id::session_id();
     let artifacts = install::Artifacts::new(Path::new(project), &launch).ok()?;
-    #[cfg(unix)]
-    let socket = tokio::net::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
-    // WIN-3.9: the Windows signal endpoint.
-    #[cfg(windows)]
-    let socket = super::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
+    let socket = artifacts.bind_signal().ok()?;
     Some(Prepared {
         socket,
         token: String::new(),
