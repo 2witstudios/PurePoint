@@ -81,7 +81,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/FileTreeWatcher.swift` | 96 | `src-tauri/src/watchers/file_tree.rs` | WIN-5.6 | ported | One recursive `notify` watch per root (not one source per expanded dir), skipping `FileTreeState` hidden names; `file-tree-changed {root, paths}` via `ui/src/services/watchers.ts` |
 | `Services/GitService.swift` | 891 | `src-tauri/src/git/{service,review,pr,patch,runner,model,commands}.rs`, `ui/src/services/git.ts` | WIN-8.1 | ported | — |
 | `Services/HotkeyMonitor+iOS.swift` | 136 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Services/HotkeyMonitor.swift` | 49 | `ui/src/services/hotkeys.ts` (DOM key handling) | WIN-7.6 | todo | — |
+| `Services/HotkeyMonitor.swift` | 49 | `ui/src/services/hotkeys.ts` (one window `keydown` handler runs every action, menu commands included; bubble phase, so a control that handled a key keeps it; WebView2 browser keys and zoom off in every build, `src-tauri/src/webview.rs`) | WIN-7.6 | ported | — |
 | `Services/MachineConnection+iOS.swift` | 380 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/MachineConnection.swift` | 650 | `src-tauri/src/daemon/machine.rs` (relayed `health` probe, exit 69/127/9009/255 verdicts, Start daemon), `src-tauri/src/daemon/relay.rs` (argv), `ui/src/services/machines.ts` (`MachineConnection` supervision; no forward, `forward.lock` or pid file, WINAPP-013) | WIN-8.14 | ported | — |
 | `Services/MachineRegistryWatcher.swift` | 146 | `src-tauri/src/watchers/machine_registry.rs` | WIN-5.6 | ported | Watches the parent dir by name (no re-open after rename), 1 s retry while absent; `machines-changed` |
@@ -249,8 +249,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Sidebar/SidebarOutlineView+Callbacks.swift` | 124 | `ui/src/views/sidebar/sidebarOutlineViewCallbacks.ts` | WIN-7.2 | ported | — |
 | `Views/Sidebar/SidebarOutlineView+iOS.swift` | 37 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarOutlineView.swift` | 37 | `ui/src/views/sidebar/SidebarOutlineView.tsx` | WIN-7.2 | ported | — |
-| `Views/Sidebar/SidebarOutlineViewController+Actions.swift` | 128 | `ui/src/views/sidebar/sidebarOutlineViewControllerActions.ts` | WIN-7.8 | todo | — |
-| `Views/Sidebar/SidebarOutlineViewController+ProjectDrag.swift` | 54 | `ui/src/views/sidebar/sidebarOutlineViewControllerProjectDrag.ts` | WIN-7.8 | todo | — |
+| `Views/Sidebar/SidebarOutlineViewController+Actions.swift` | 128 | `ui/src/views/sidebar/sidebarOutlineViewControllerActions.ts`, `ui/src/views/sidebar/SidebarContextMenu.tsx` (in-page context and worktree add menus; right-click, the menu key or Shift+F10) | WIN-7.8 | ported | — |
+| `Views/Sidebar/SidebarOutlineViewController+ProjectDrag.swift` | 54 | `ui/src/views/sidebar/sidebarOutlineViewControllerProjectDrag.ts` (HTML5 drag and drop; a project row's top or bottom half drops before or after it) | WIN-7.8 | ported | — |
 | `Views/Sidebar/SidebarOutlineViewController+iOS.swift` | 593 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarOutlineViewController+iOSCells.swift` | 344 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarOutlineViewController+iOSKeys.swift` | 109 | — | — | excluded | `+iOS` file (iPad build only) |

@@ -531,3 +531,30 @@
   margin: 8px 0;
   font: 12px var(--pp-font-ui);
 }
+
+/* Context menus and the worktree add menu (WIN-7.8): the menu bar's dropdown, at the pointer. */
+.sidebar-context-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+}
+
+/* Project drag (WIN-7.8): a line where the dragged project lands. */
+.sidebar-row[data-drop-position]::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--sidebar-accent);
+  pointer-events: none;
+}
+
+.sidebar-row[data-drop-position='before']::after {
+  top: -1px;
+}
+
+.sidebar-row[data-drop-position='after']::after {
+  bottom: -1px;
+}

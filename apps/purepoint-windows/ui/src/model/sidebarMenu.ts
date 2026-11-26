@@ -89,6 +89,8 @@ export interface SidebarMenuContext {
   readonly isPointGuardFolder?: (root: string) => boolean;
   /** `MachineState.unsavedFileNames(in:)` for a remote project. */
   readonly unsavedFileNames?: (project: ProjectSnapshot) => readonly string[];
+  /** `MachineState.unsavedFileNames`: unsaved files across a machine's projects. */
+  readonly machineUnsavedFileNames?: (machine: MachineSnapshot) => readonly string[];
 }
 
 /** A row's context menu, top to bottom. Empty for rows without one. */

@@ -17,20 +17,25 @@
 //   wrote down from `NSOutlineView`), Enter, F2 (rename) and Delete. Delete runs the destructive
 //   item of the row's menu — Kill Agent / Close Workspace, Delete Worktree, Remove Project,
 //   Remove Machine — with the confirmation that menu item asks for.
-// - Context menus, the worktree add menu and project drag are WIN-7.8; the add buttons open the
-//   command palette directly (`onShowCommandPalette`). Until the menus land, a machine row shows
-//   its two actions inline (WIN-8.14): Start Daemon while its daemon is stopped, and an add
-//   button (Open Remote Project) while it runs.
+// - Context menus (right-click, the menu key or Shift+F10) and the worktree add menu are in-page
+//   menus (SidebarContextMenu.tsx) offering exactly `SidebarMenuModel`'s entries; what each does
+//   is sidebarOutlineViewControllerActions.ts (WIN-7.8). Project rows drag to reorder with HTML5
+//   drag and drop (sidebarOutlineViewControllerProjectDrag.ts). A machine row also shows its two
+//   actions inline (WIN-8.14): Start Daemon while its daemon is stopped, and an add button (Open
+//   Remote Project) while it runs.
 // - The agent signal pill is `AgentModel.signalPresentation` (WIN-7.7) read when the row draws;
 //   callers can pass their own `presentSignal`.
 
 import {
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from 'zustand';
 import {
   type MachineSnapshot,
@@ -45,8 +50,11 @@ import {
 } from '../../model/sidebarItem.ts';
 import {
   type SidebarConfirmation,
+  type SidebarMenuAction,
   type SidebarMenuContext,
-  sidebarConfirmation,
+  type SidebarMenuEntry,
+  contextMenu,
+  worktreeAddMenu,
 } from '../../model/sidebarMenu.ts';
 import {
   type WorkspaceRenderState,
@@ -63,7 +71,7 @@ import {
   targetId,
   workspaceRenderState,
 } from '../../model/sidebarOutline.ts';
-import { type Workspace, primaryAgentId, workspaceAgentIds } from '../../model/workspace.ts';
+import { primaryAgentId } from '../../model/workspace.ts';
 import { signalAccessibilityDescription } from '../../model/agentSignalSnapshot.ts';
 import { agentSignalPresentation, structurallyEqual } from '../../model/workspaceModel.ts';
 import {
@@ -71,6 +79,21 @@ import {
   useSidebarExpansionStore,
 } from '../../state/sidebarExpansionStore.ts';
 import { Icon } from '../../theme/Icon.tsx';
+import { type SidebarMenuPosition, SidebarContextMenu } from './SidebarContextMenu.tsx';
+import {
+  type SidebarActionContext,
+  destructiveAction,
+  findWorkspace,
+  performSidebarMenuAction,
+} from './sidebarOutlineViewControllerActions.ts';
+import {
+  type ProjectDropTarget,
+  dropPositionAt,
+  draggedProjectId,
+  isProjectDrag,
+  projectDropTarget,
+  startProjectDrag,
+} from './sidebarOutlineViewControllerProjectDrag.ts';
 import './sidebar.css';
 
 /** `PurePointTheme.sidebarRowHeight`. */
@@ -135,6 +158,19 @@ export interface SidebarOutlineCallbacks {
   readonly onStartDaemon?: (machineId: string) => void;
   /** A machine row's add button: choose a folder on it to open as a project. */
   readonly onOpenRemoteProject?: (machineId: string) => void;
+  /** The worktree add menu's New Terminal: (project, worktree). */
+  readonly onAddTerminal?: (projectId: string, worktreeId: string) => void;
+  readonly onKillWorktreeAgents?: (projectId: string, worktreeId: string) => void;
+  readonly onKillAllProjectAgents?: (projectId: string) => void;
+  /** Hide on This PC: a remote project leaves this PC's sidebar only. */
+  readonly onHideProject?: (projectId: string) => void;
+  readonly onRetryLayout?: (projectId: string) => void;
+  /** Move a project to `index` among its siblings (Move Up/Down, and a drag). */
+  readonly onMoveProject?: (projectId: string, index: number) => void;
+  readonly onConnectMachine?: (machineId: string) => void;
+  readonly onDisconnectMachine?: (machineId: string) => void;
+  readonly onShowHiddenProjects?: (machineId: string) => void;
+  readonly onDismissMachineError?: (machineId: string) => void;
 }
 
 export interface SidebarOutlineViewControllerProps extends SidebarOutlineCallbacks {
@@ -270,17 +306,6 @@ function owningProject(nodes: readonly SidebarNode[], node: SidebarNode): Projec
   return null;
 }
 
-function findWorkspace(
-  workspacesByProject: WorkspacesByProject,
-  workspaceId: string,
-): { projectId: string; workspace: Workspace } | null {
-  for (const [projectId, list] of Object.entries(workspacesByProject)) {
-    const workspace = list?.find((candidate) => candidate.id === workspaceId);
-    if (workspace !== undefined) return { projectId, workspace };
-  }
-  return null;
-}
-
 function rowDomId(rowKey: string): string {
   return 'sidebar-row-' + rowKey.replace(/[^\w-]/g, '_');
 }
@@ -337,7 +362,7 @@ function Badge({
   );
 }
 
-function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
+function AddButton({ label, onClick }: { label: string; onClick: (anchor: DOMRect) => void }) {
   return (
     <button
       type="button"
@@ -350,7 +375,7 @@ function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
       }}
       onClick={(event) => {
         event.stopPropagation();
-        onClick();
+        onClick(event.currentTarget.getBoundingClientRect());
       }}
     >
       <Icon name="plus.circle" size={14} />
@@ -364,7 +389,7 @@ interface CellProps {
   readonly workspace: WorkspaceRenderState | null;
   readonly presentSignal: (signal: WorkspaceSignal) => SignalPill;
   readonly renameEditor: ReactNode;
-  readonly onAdd: (node: SidebarNode) => void;
+  readonly onAdd: (node: SidebarNode, anchor: DOMRect) => void;
   readonly onStartDaemon: (machineId: string) => void;
 }
 
@@ -426,8 +451,8 @@ function cellFor({
             )}
             <AddButton
               label="Add"
-              onClick={() => {
-                onAdd(node);
+              onClick={(anchor) => {
+                onAdd(node, anchor);
               }}
             />
           </>
@@ -482,8 +507,8 @@ function cellFor({
             {isDaemonRunning(machine.state) && (
               <AddButton
                 label="Open Remote Project"
-                onClick={() => {
-                  onAdd(node);
+                onClick={(anchor) => {
+                  onAdd(node, anchor);
                 }}
               />
             )}
@@ -502,8 +527,8 @@ function cellFor({
             <span className="sidebar-row-spacer" />
             <AddButton
               label="Add"
-              onClick={() => {
-                onAdd(node);
+              onClick={(anchor) => {
+                onAdd(node, anchor);
               }}
             />
             {worktree.agents.length > 0 && (
@@ -725,6 +750,17 @@ export function SidebarOutlineViewController({
   const [pick, setPick] = useState<Pick | null>(null);
   const [renaming, setRenaming] = useState<{ workspaceId: string; original: string } | null>(null);
   const [pending, setPending] = useState<PendingConfirmation | null>(null);
+  const [menu, setMenu] = useState<{
+    entries: SidebarMenuEntry[];
+    position: SidebarMenuPosition;
+    label: string;
+  } | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<{
+    rowKey: string;
+    position: 'before' | 'after';
+  } | null>(null);
+  /** The project being dragged from this outline (`getData` is empty until the drop). */
+  const dragging = useRef<string | null>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
   const scroller = useRef<HTMLDivElement>(null);
   const lastRevealedKey = useRef<string | null>(null);
@@ -819,60 +855,121 @@ export function SidebarOutlineViewController({
     setPending({ confirmation, action });
   };
 
-  const showCommandPalette = (node: SidebarNode) => {
-    if (node.kind === 'machine') {
-      callbacks.onOpenRemoteProject?.(node.machine.id);
-    } else if (node.kind === 'project') {
-      callbacks.onShowCommandPalette?.(node.project.projectId, null, true);
-    } else if (node.kind === 'worktree') {
-      callbacks.onShowCommandPalette?.(
-        node.projectId,
-        { kind: 'worktree', id: node.worktree.id },
-        false,
-      );
-    }
-  };
-
-  /** Delete: the destructive item of the row's menu (Swift `perform(_:on:)`). */
-  const deleteRow = (node: SidebarNode) => {
-    switch (node.kind) {
-      case 'workspace': {
-        const found = findWorkspace(workspacesByProject, node.workspace.id);
-        if (found === null) return;
-        const kill = () => {
-          callbacks.onKillWorkspace?.(found.projectId, node.workspace.id);
-        };
-        const agentCount = workspaceAgentIds(node.workspace).length;
-        if (agentCount > 1) confirm(sidebarConfirmation.closeWorkspace(agentCount), kill);
-        else kill();
-        return;
-      }
-      case 'worktree':
-        confirm(sidebarConfirmation.deleteWorktree(node.worktree), () => {
-          callbacks.onDeleteWorktree?.(node.projectId, node.worktree.id);
-        });
-        return;
-      case 'project':
-        confirm(sidebarConfirmation.removeProject(node.project, menuContext), () => {
-          callbacks.onRemoveProject?.(node.project.projectId);
-        });
-        return;
-      case 'machine':
-        confirm(sidebarConfirmation.removeMachine(node.machine), () => {
-          callbacks.onRemoveMachine?.(node.machine.id);
-        });
-        return;
-      case 'sectionHeader':
-        return;
-    }
-  };
-
   const beginRename = (node: SidebarNode) => {
     if (node.kind !== 'workspace') return;
     const project = owningProject(nodes, node);
     const title =
       project === null ? node.workspace.id : workspaceRenderState(node.workspace, project).title;
     setRenaming({ workspaceId: node.workspace.id, original: title });
+  };
+
+  const actionContext: SidebarActionContext = {
+    callbacks,
+    nodes,
+    workspacesByProject,
+    menuContext,
+    confirm,
+    beginRename: (workspaceId) => {
+      const node = findNode(
+        nodes,
+        (candidate) => candidate.kind === 'workspace' && candidate.workspace.id === workspaceId,
+      );
+      if (node !== null) beginRename(node);
+    },
+  };
+
+  /** Swift `perform(_:on:)`. */
+  const perform = (action: SidebarMenuAction) => {
+    performSidebarMenuAction(action, actionContext);
+  };
+
+  // MARK: Menus
+
+  const openMenu = (entries: SidebarMenuEntry[], position: SidebarMenuPosition, label: string) => {
+    if (entries.length === 0) return;
+    setMenu({ entries, position, label });
+  };
+
+  /** Swift `menuNeedsUpdate(_:)`: a row's context menu. */
+  const openContextMenu = (node: SidebarNode, position: SidebarMenuPosition) => {
+    openMenu(contextMenu(node, menuContext), position, 'Row actions');
+  };
+
+  /** The keyboard's menu key or Shift+F10: the selected row's menu, under the row. */
+  const openContextMenuForSelection = (node: SidebarNode) => {
+    const element = scroller.current?.querySelector(`#${CSS.escape(rowDomId(node.rowKey))}`);
+    const rect = element?.getBoundingClientRect();
+    openContextMenu(
+      node,
+      rect === undefined ? { x: 0, y: 0 } : { x: rect.left + 16, y: rect.bottom },
+    );
+  };
+
+  const closeMenu = useCallback((refocus: boolean) => {
+    setMenu(null);
+    if (refocus) scroller.current?.focus();
+  }, []);
+
+  /** The add buttons: a project's opens the palette, a worktree's its add menu (Swift `worktreeAddClicked`). */
+  const add = (node: SidebarNode, anchor: DOMRect) => {
+    if (node.kind === 'machine') {
+      callbacks.onOpenRemoteProject?.(node.machine.id);
+    } else if (node.kind === 'project') {
+      callbacks.onShowCommandPalette?.(node.project.projectId, null, true);
+    } else if (node.kind === 'worktree') {
+      openMenu(
+        worktreeAddMenu(node.projectId, node.worktree.id),
+        { x: anchor.left, y: anchor.bottom },
+        'Add',
+      );
+    }
+  };
+
+  /** Delete: the destructive item of the row's menu. */
+  const deleteRow = (node: SidebarNode) => {
+    const action = destructiveAction(node);
+    if (action !== null) perform(action);
+  };
+
+  // MARK: Project drag (Swift `SidebarOutlineViewController+ProjectDrag`)
+
+  const dropTargetFor = (
+    event: ReactDragEvent<HTMLElement>,
+    node: SidebarNode,
+  ): ProjectDropTarget | null => {
+    const projectId = dragging.current ?? draggedProjectId(event.dataTransfer);
+    if (projectId === null) return null;
+    const rect = event.currentTarget.getBoundingClientRect();
+    return projectDropTarget(
+      projectId,
+      node,
+      dropPositionAt(event.clientY, rect.top, rect.height),
+      nodes,
+    );
+  };
+
+  const onRowDragOver = (event: ReactDragEvent<HTMLElement>, node: SidebarNode) => {
+    if (!isProjectDrag(event.dataTransfer)) return;
+    const target = dropTargetFor(event, node);
+    if (target === null) {
+      setDropIndicator(null);
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    if (dropIndicator?.rowKey !== target.rowKey || dropIndicator.position !== target.position) {
+      setDropIndicator({ rowKey: target.rowKey, position: target.position });
+    }
+  };
+
+  const onRowDrop = (event: ReactDragEvent<HTMLElement>, node: SidebarNode) => {
+    if (!isProjectDrag(event.dataTransfer)) return;
+    const target = dropTargetFor(event, node);
+    setDropIndicator(null);
+    dragging.current = null;
+    if (target === null) return;
+    event.preventDefault();
+    callbacks.onMoveProject?.(target.drop.project.projectId, target.drop.index);
   };
 
   const endRename = (value: string | null) => {
@@ -892,9 +989,20 @@ export function SidebarOutlineViewController({
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
+    const current = selectedIndex === null || selectedIndex < 0 ? null : selectedIndex;
+    // The menu key and Shift+F10 open the selected row's menu (Swift: a menu with no clicked row
+    // uses the selection).
+    const menuKey =
+      event.key === 'ContextMenu' ||
+      (event.key === 'F10' && event.shiftKey && !event.ctrlKey && !event.altKey);
+    if (menuKey) {
+      event.preventDefault();
+      const node = current === null ? undefined : rows[current]?.node;
+      if (node !== undefined) openContextMenuForSelection(node);
+      return;
+    }
     // Plain keys only: a modified key belongs to the app's commands.
     if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
-    const current = selectedIndex === null || selectedIndex < 0 ? null : selectedIndex;
     const arrow = ARROW_KEYS[event.key];
     if (arrow !== undefined) {
       event.preventDefault();
@@ -963,7 +1071,7 @@ export function SidebarOutlineViewController({
             }}
           />
         ) : null,
-      onAdd: showCommandPalette,
+      onAdd: add,
       onStartDaemon: (machineId) => {
         callbacks.onStartDaemon?.(machineId);
       },
@@ -993,9 +1101,34 @@ export function SidebarOutlineViewController({
           height: SIDEBAR_ROW_HEIGHT,
           paddingLeft: 4 + row.depth * INDENTATION_PER_LEVEL,
         }}
+        data-drop-position={
+          dropIndicator?.rowKey === node.rowKey ? dropIndicator.position : undefined
+        }
+        draggable={node.kind === 'project' && renaming === null ? true : undefined}
         onMouseDown={(event) => {
           if (event.button !== 0) return;
           choose(node, event.ctrlKey);
+        }}
+        onContextMenu={(event) => {
+          // The row's menu, not WebView2's; the selection stays as it was, as on the Mac.
+          event.preventDefault();
+          event.stopPropagation();
+          openContextMenu(node, { x: event.clientX, y: event.clientY });
+        }}
+        onDragStart={(event) => {
+          if (node.kind !== 'project') return;
+          dragging.current = node.project.projectId;
+          startProjectDrag(event.dataTransfer, node.project.projectId);
+        }}
+        onDragEnd={() => {
+          dragging.current = null;
+          setDropIndicator(null);
+        }}
+        onDragOver={(event) => {
+          onRowDragOver(event, node);
+        }}
+        onDrop={(event) => {
+          onRowDrop(event, node);
         }}
       >
         {expandable ? (
@@ -1042,6 +1175,11 @@ export function SidebarOutlineViewController({
           setViewport({ top: element.scrollTop, height: element.clientHeight });
         }}
         onKeyDown={onKeyDown}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setDropIndicator(null);
+          }
+        }}
       >
         <div
           className="sidebar-outline-canvas"
@@ -1050,6 +1188,20 @@ export function SidebarOutlineViewController({
           {rendered}
         </div>
       </div>
+      {menu !== null &&
+        createPortal(
+          <SidebarContextMenu
+            entries={menu.entries}
+            position={menu.position}
+            label={menu.label}
+            onClose={closeMenu}
+            onChoose={(action) => {
+              closeMenu(true);
+              perform(action);
+            }}
+          />,
+          document.body,
+        )}
       {pending !== null && (
         <SidebarConfirmationDialog
           confirmation={pending.confirmation}
