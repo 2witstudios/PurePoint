@@ -86,6 +86,5 @@ describe('app actions', () => {
       stub();
     }
     expect(PENDING_ACTIONS.newAgent.name).toBe('newAgent');
-    expect(PENDING_ACTIONS.closeAgent.name).toBe('closeTab');
   });
 });

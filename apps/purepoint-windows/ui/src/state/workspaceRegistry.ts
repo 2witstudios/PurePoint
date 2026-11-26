@@ -30,6 +30,7 @@ import {
   containsAgent,
   contentAgentId,
   cycleTab,
+  dropTabOnEdge,
   fileContent,
   focusedAgentId,
   focusedSurface,
@@ -62,6 +63,7 @@ import {
   workspacesEqual,
   type FocusDirection,
   type LiveAgent,
+  type PaneEdge,
   type SurfaceContent,
   type Workspace,
   type WorkspaceContainer,
@@ -363,6 +365,11 @@ export class WorkspaceRegistry {
 
   set pendingPaletteSurfaceId(id: number | null) {
     this.store.setState({ pendingPaletteSurfaceId: id });
+  }
+
+  /** The setter as a method, for views that may not assign to a prop's fields. */
+  markPendingPalette(surfaceId: number | null): void {
+    this.pendingPaletteSurfaceId = surfaceId;
   }
 
   private setWorkspaces(projectRoot: string, list: readonly Workspace[] | null): void {
@@ -836,6 +843,16 @@ export class WorkspaceRegistry {
 
   breakTab(workspaceId: string, surfaceId: number, axis: PaneAxis): void {
     this.mutate(workspaceId, (w) => breakTab(w, surfaceId, axis).workspace);
+  }
+
+  /** Move a tab into a new pane split off a pane's edge: a tab dropped on that edge. */
+  dropTabOnEdge(
+    workspaceId: string,
+    surfaceId: number,
+    targetLeafId: number,
+    edge: PaneEdge,
+  ): void {
+    this.mutate(workspaceId, (w) => dropTabOnEdge(w, surfaceId, targetLeafId, edge).workspace);
   }
 
   /** Show the file navigator in a tab (optionally opened on a file). No daemon involved. */

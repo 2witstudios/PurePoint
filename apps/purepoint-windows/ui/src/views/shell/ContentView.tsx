@@ -8,7 +8,8 @@
 //
 // Differences from Swift:
 // - Point Guard's working directory (`pointGuardService`) is WIN-9.x; spawn selection
-//   (`pendingSelectAgentId`) and the session's workspace restore follow the pane grid (WIN-7.4).
+//   (`pendingSelectAgentId`) and the session's workspace restore come with the command
+//   palette's spawns (WIN-7.5).
 // - Agent signals (WIN-7.7) are projected by `startAgentSignals` (bootstrap), not a view task;
 //   the shell only consumes `pendingSignalDestination`.
 // - The menu commands' accelerators are handled here, for every command (Mac menus handle theirs
@@ -16,7 +17,7 @@
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import { type SidebarSelection, selection as sidebarSelection } from '../../model/sidebarItem.ts';
-import { isPointGuard, workspaceAgentIds } from '../../model/workspace.ts';
+import { isPointGuard } from '../../model/workspace.ts';
 import type { AppState } from '../../state/appState.ts';
 import { useKeyBindingStore } from '../../state/keyBindingStore.ts';
 import { SIDEBAR_KEY, useSidebarVisibilityStore } from '../../state/sidebarVisibilityStore.ts';
@@ -24,7 +25,11 @@ import { Icon } from '../../theme/Icon.tsx';
 import { runWindowAction } from '../../services/windowChrome.ts';
 import { DetailView, ScreenPlaceholder } from '../detail/DetailView.tsx';
 import { SidebarView } from '../sidebar/SidebarView.tsx';
-import { useAgentSelection } from '../terminal/agentSelection.ts';
+import { createPaneActions } from '../panegrid/paneCommands.ts';
+import {
+  TabCloseConfirmationDialog,
+  closeConfirmationSource,
+} from '../panegrid/tabCloseConfirmation.tsx';
 import { useAppState } from './appContext.ts';
 import { type AppCommand, createAppActions } from './appCommands.ts';
 import { appLifecycleHooks } from '../../services/appLifecycle.ts';
@@ -72,24 +77,6 @@ function followSelection(app: AppState, selection: SidebarSelection | null): voi
     if (selection?.kind === 'workspace') registry.activate(selection.id);
     else registry.activeWorkspaceId = null;
   }
-}
-
-/**
- * What a sidebar pick does to the terminals on screen until the pane grid (WIN-7.4): a workspace
- * row shows its agents' terminals (Ctrl+click adds them to, or takes them from, those shown, as
- * the interim agent list did); any other row clears them so its screen shows.
- */
-export function selectSidebarAgents(
-  app: AppState,
-  selection: SidebarSelection | null,
-  additive: boolean,
-): void {
-  const agentSelection = useAgentSelection.getState();
-  const workspace =
-    selection?.kind === 'workspace' ? (app.registry?.workspace(selection.id) ?? null) : null;
-  const agentIds = workspace === null ? [] : workspaceAgentIds(workspace);
-  if (!additive || agentIds.length === 0) agentSelection.clear();
-  for (const agentId of agentIds) agentSelection.select(agentId, true);
 }
 
 /** The drag handle between the sidebar and the detail. */
@@ -223,13 +210,22 @@ export function ContentView() {
     followSelection(app, selection);
   }, [app, selection]);
 
-  const selectFromSidebar = useCallback(
-    (next: SidebarSelection | null, options?: { readonly additive?: boolean }) => {
-      selectSidebarAgents(app, next, options?.additive === true);
-      setSelection(next);
-    },
-    [app],
-  );
+  // A workspace row picks that workspace's pane grid; Ctrl+click has nothing to add to it.
+  const selectFromSidebar = useCallback((next: SidebarSelection | null) => {
+    setSelection(next);
+  }, []);
+
+  // A workspace that closed (its last tab went) falls back to the dashboard, as the Mac's
+  // `workspacesByProject` observer does.
+  useEffect(() => {
+    const registry = app.registry;
+    if (registry === null || selection?.kind !== 'workspace') return;
+    const check = () => {
+      if (registry.workspace(selection.id) === null)
+        setSelection(sidebarSelection.nav('dashboard'));
+    };
+    return registry.store.subscribe(check);
+  }, [app, selection]);
 
   // Swift `.onChange(of: appState.pendingSelectWorktreeId)`.
   useEffect(
@@ -256,7 +252,7 @@ export function ContentView() {
           workspace !== null && isPointGuard(workspace)
             ? sidebarSelection.nav('dashboard')
             : sidebarSelection.workspace(target.workspaceId);
-        selectSidebarAgents(app, next, false);
+        // takeSignalDestination already selected the agent's tab and focused its pane.
         setSelection(next);
       }),
     [app],
@@ -266,7 +262,6 @@ export function ContentView() {
     (command: AppCommand) => {
       const actions = createAppActions({
         selectNav: (item) => {
-          useAgentSelection.getState().clear();
           setSelection(sidebarSelection.nav(item));
         },
         toggleSidebar: (action) => {
@@ -295,6 +290,9 @@ export function ContentView() {
         checkForUpdates: () => {
           void checkForUpdates();
         },
+        ...(app.registry === null
+          ? {}
+          : { pane: createPaneActions(app.registry, closeConfirmationSource(app)) }),
       });
       actions[command]();
     },
@@ -355,6 +353,7 @@ export function ContentView() {
           </button>
         </WindowChrome>
         <ShellBanners />
+        <TabCloseConfirmationDialog />
         {showSettings && (
           <SettingsOverlay
             onClose={() => {

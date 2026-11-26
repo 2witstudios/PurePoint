@@ -150,7 +150,40 @@ export interface AppActionDeps {
   closeWindow: () => void;
   /** Check for Updates… (Swift `CheckForUpdatesViewModel.checkForUpdates`, WIN-10.3). */
   checkForUpdates: () => void;
+  /** The pane grid's split, focus and tab commands (views/panegrid/paneCommands.ts). */
+  pane?: PaneActions;
 }
+
+/** The commands the pane grid runs on the workspace on screen (WIN-7.4). */
+export const PANE_COMMANDS = [
+  'closeAgent',
+  'splitBelow',
+  'splitRight',
+  'closePane',
+  'focusUp',
+  'focusDown',
+  'focusLeft',
+  'focusRight',
+  'newTab',
+  'nextTab',
+  'previousTab',
+  'selectTab1',
+  'selectTab2',
+  'selectTab3',
+  'selectTab4',
+  'selectTab5',
+  'selectTab6',
+  'selectTab7',
+  'selectTab8',
+  'selectLastTab',
+  'breakTab',
+] as const satisfies readonly AppCommand[];
+
+export type PaneActions = Readonly<Record<(typeof PANE_COMMANDS)[number], () => void>>;
+
+const noPaneActions = Object.fromEntries(
+  PANE_COMMANDS.map((command) => [command, () => undefined]),
+) as PaneActions;
 
 // Commands whose screens are later leaves. Each is a named no-op until its leaf replaces it.
 
@@ -176,50 +209,6 @@ export const openCommandPalette: (request: CommandPaletteRequest | null) => void
 function newAgent(): void {
   // Pending WIN-7.5.
 }
-/** WIN-7.4: close the focused tab (Swift `.closeAgent` + `TabCloseConfirmation`). */
-function closeTab(): void {
-  // Pending WIN-7.4.
-}
-/** WIN-7.4: the pane grid's splits, focus moves and tab commands. */
-function splitBelow(): void {
-  // Pending WIN-7.4.
-}
-function splitRight(): void {
-  // Pending WIN-7.4.
-}
-function closePane(): void {
-  // Pending WIN-7.4.
-}
-function focusUp(): void {
-  // Pending WIN-7.4.
-}
-function focusDown(): void {
-  // Pending WIN-7.4.
-}
-function focusLeft(): void {
-  // Pending WIN-7.4.
-}
-function focusRight(): void {
-  // Pending WIN-7.4.
-}
-function newTab(): void {
-  // Pending WIN-7.4.
-}
-function nextTab(): void {
-  // Pending WIN-7.4.
-}
-function previousTab(): void {
-  // Pending WIN-7.4.
-}
-function selectTab(): void {
-  // Pending WIN-7.4 (Go to Tab N).
-}
-function selectLastTab(): void {
-  // Pending WIN-7.4.
-}
-function breakTab(): void {
-  // Pending WIN-7.4.
-}
 /** WIN-9.x: the Point Guard chat sidebar (Swift `.toggleChatSidebar` notification). */
 function toggleChatSidebar(): void {
   // Pending the chat sidebar leaf.
@@ -228,33 +217,13 @@ function toggleChatSidebar(): void {
 /** The named no-ops, by command; exported so tests can tell stubs from real actions. */
 export const PENDING_ACTIONS = {
   newAgent,
-  closeAgent: closeTab,
-  splitBelow,
-  splitRight,
-  closePane,
-  focusUp,
-  focusDown,
-  focusLeft,
-  focusRight,
-  newTab,
-  nextTab,
-  previousTab,
-  selectTab1: selectTab,
-  selectTab2: selectTab,
-  selectTab3: selectTab,
-  selectTab4: selectTab,
-  selectTab5: selectTab,
-  selectTab6: selectTab,
-  selectTab7: selectTab,
-  selectTab8: selectTab,
-  selectLastTab,
-  breakTab,
   toggleChatSidebar,
 } as const satisfies Partial<AppActions>;
 
 export function createAppActions(deps: AppActionDeps): AppActions {
   return {
     ...PENDING_ACTIONS,
+    ...(deps.pane ?? noPaneActions),
     settings: () => {
       deps.showSettings();
     },

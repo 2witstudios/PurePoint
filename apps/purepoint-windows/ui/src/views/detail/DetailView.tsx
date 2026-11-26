@@ -10,8 +10,8 @@ import type { ProjectState } from '../../state/projectState.ts';
 import { useAppState } from '../shell/appContext.ts';
 import { useTitlebarClearance } from '../shell/TitlebarClearance.tsx';
 import { AgentsHubView } from '../agents/AgentsHubView.tsx';
-import { useAgentSelection } from '../terminal/agentSelection.ts';
-import { AgentTerminalsView } from '../terminal/AgentTerminals.tsx';
+import { PaneGridView } from '../panegrid/PaneGridView.tsx';
+import { ShowsWorkspaceSidebarToggleContext } from '../panegrid/PaneTabBar.tsx';
 import { ScheduleView } from '../schedule/ScheduleView.tsx';
 import { ScreenPlaceholder } from './placeholders.tsx';
 import { ProjectChannelView } from '../channel/ProjectChannelView.tsx';
@@ -66,7 +66,7 @@ function SelectedContent({ selection }: { selection: SidebarSelection }) {
       }
       const rootPath = app.fileRoot(selection.id);
       const paneGrid = (
-        <ScreenPlaceholder icon="rectangle.split.2x2" title="Workspace" view="PaneGridView" />
+        <PaneGridView key={selection.id} workspaceId={selection.id} registry={registry} />
       );
       return rootPath === null ? (
         paneGrid
@@ -74,8 +74,11 @@ function SelectedContent({ selection }: { selection: SidebarSelection }) {
         <WorkspaceFilesLayout
           rootPath={rootPath}
           machineId={app.projectStateForWorkspace(selection.id)?.machineId ?? null}
+          reopenInContent={false}
         >
-          {paneGrid}
+          <ShowsWorkspaceSidebarToggleContext value={true}>
+            {paneGrid}
+          </ShowsWorkspaceSidebarToggleContext>
         </WorkspaceFilesLayout>
       );
     }
@@ -131,15 +134,11 @@ function SelectedContent({ selection }: { selection: SidebarSelection }) {
 
 export function DetailView({ selection }: DetailViewProps) {
   const clearance = useTitlebarClearance();
-  // Selected agents show their terminals (WIN-7.3) until the pane grid (WIN-7.4) takes over.
-  const agentIds = useAgentSelection((state) => state.agentIds);
   return (
     // The title bar is a band across the whole window on Windows, so every screen starts below
     // it (the Mac's dashboard and workspaces draw their tab strip in the band instead).
     <div className="detail-view" style={{ paddingTop: clearance.height }}>
-      {agentIds.length > 0 ? (
-        <AgentTerminalsView agentIds={agentIds} />
-      ) : selection === null ? (
+      {selection === null ? (
         <ScreenPlaceholder icon="sidebar.left" title="Select an item" />
       ) : (
         <SelectedContent selection={selection} />

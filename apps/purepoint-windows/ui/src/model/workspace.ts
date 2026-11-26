@@ -515,6 +515,50 @@ export function breakTab(
   return { workspace: fromDraft(d), leafId: newLeafId };
 }
 
+/** A pane edge a dragged tab can be dropped on (WIN-7.4). */
+export type PaneEdge = 'left' | 'right' | 'top' | 'bottom';
+
+/** The split axis an edge drop makes: left and right sit side by side, top and bottom stack. */
+export function edgeAxis(edge: PaneEdge): PaneAxis {
+  return edge === 'left' || edge === 'right' ? 'vertical' : 'horizontal';
+}
+
+/**
+ * Move a tab into a new pane split off `targetLeafId` on `edge`: what dropping a tab on a pane's
+ * edge does. The tab keeps its ID and content and its new pane takes focus; a source pane left
+ * empty collapses. Does nothing when the grid is full, or for a pane's only tab dropped on its
+ * own pane (there would be nothing left to split). `leafId` is the new pane's leaf ID.
+ */
+export function dropTabOnEdge(
+  workspace: Workspace,
+  surfaceId: number,
+  targetLeafId: number,
+  edge: PaneEdge,
+): { workspace: Workspace; leafId: number | null } {
+  const d = toDraft(workspace);
+  const sourceLeafId = draftLeafIdOfSurface(d, surfaceId);
+  const source = sourceLeafId === null ? undefined : d.panes.get(sourceLeafId);
+  if (sourceLeafId === null || source === undefined || !d.panes.has(targetLeafId)) {
+    return { workspace, leafId: null };
+  }
+  if (sourceLeafId === targetLeafId && source.tabs.length <= 1) return { workspace, leafId: null };
+  if (!canSplit(d.root)) return { workspace, leafId: null };
+  const newFirst = edge === 'left' || edge === 'top';
+  const result = splittingLeaf(d.root, targetLeafId, edgeAxis(edge), d.nextLeafId, 0.5, newFirst);
+  d.root = result.root;
+  d.nextLeafId = result.nextId;
+  const newLeafId = d.nextLeafId - 1;
+  const surface = removeFromPane(source, surfaceId);
+  if (surface === null) return { workspace, leafId: null };
+  d.panes.set(newLeafId, { tabs: [surface], activeTabId: surface.id });
+  if (source.tabs.length === 0) {
+    d.panes.delete(sourceLeafId);
+    d.root = removingLeaf(d.root, sourceLeafId) ?? d.root;
+  }
+  d.focusedLeafId = newLeafId;
+  return { workspace: fromDraft(d), leafId: newLeafId };
+}
+
 /** Change what a tab shows: a reservation being fulfilled, or the palette's choice. */
 export function setSurfaceContent(
   workspace: Workspace,
