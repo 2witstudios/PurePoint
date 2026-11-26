@@ -79,7 +79,9 @@ export function canSplit(node: PaneSplitNode): boolean {
 
 /**
  * Split a leaf into two along `axis`. The new leaf takes `nextId`; the returned `nextId` is one
- * past it when the leaf was found (Swift's `inout nextId`).
+ * past it when the leaf was found (Swift's `inout nextId`). The new leaf goes after the old one
+ * (right or below) unless `newFirst` puts it before (left or above): a tab dropped on a pane's
+ * leading or top edge (WIN-7.4).
  */
 export function splittingLeaf(
   node: PaneSplitNode,
@@ -87,13 +89,17 @@ export function splittingLeaf(
   axis: PaneAxis,
   nextId: number,
   ratio = 0.5,
+  newFirst = false,
 ): { root: PaneSplitNode; nextId: number } {
   if (node.type === 'leaf') {
     if (node.id !== targetId) return { root: node, nextId };
-    return { root: split(axis, ratio, leaf(node.id), leaf(nextId)), nextId: nextId + 1 };
+    const root = newFirst
+      ? split(axis, ratio, leaf(nextId), leaf(node.id))
+      : split(axis, ratio, leaf(node.id), leaf(nextId));
+    return { root, nextId: nextId + 1 };
   }
-  const first = splittingLeaf(node.first, targetId, axis, nextId, ratio);
-  const second = splittingLeaf(node.second, targetId, axis, first.nextId, ratio);
+  const first = splittingLeaf(node.first, targetId, axis, nextId, ratio, newFirst);
+  const second = splittingLeaf(node.second, targetId, axis, first.nextId, ratio, newFirst);
   return {
     root: split(node.axis, node.ratio, first.root, second.root),
     nextId: second.nextId,

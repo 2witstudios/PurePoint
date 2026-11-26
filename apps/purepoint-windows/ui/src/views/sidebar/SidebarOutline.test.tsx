@@ -27,9 +27,7 @@ import {
 import { makeWorktreeModel } from '../../model/workspaceModel.ts';
 import { createSidebarExpansionStore } from '../../state/sidebarExpansionStore.ts';
 import { AppStateContext } from '../shell/appContext.ts';
-import { ContentView, selectSidebarAgents } from '../shell/ContentView.tsx';
-import type { AppState } from '../../state/appState.ts';
-import { useAgentSelection } from '../terminal/agentSelection.ts';
+import { ContentView } from '../shell/ContentView.tsx';
 import { makeTestApp } from '../shell/testApp.ts';
 import { SidebarFooter } from './SidebarFooter.tsx';
 import {
@@ -494,32 +492,6 @@ describe('SidebarOutlineViewController', () => {
       sidebarSelection.workspace(worktreeWorkspace.id),
       { additive: true },
     );
-  });
-
-  it("shows a workspace row's agents in the terminals, Ctrl+click adding, other rows clearing", () => {
-    const one = adoptingWorkspace('agent-1', { kind: 'projectRoot' });
-    const two = splitPane(
-      adoptingWorkspace('agent-2', { kind: 'projectRoot' }),
-      0,
-      'horizontal',
-      agentContent('agent-3'),
-    ).workspace;
-    const byId = new Map([one, two].map((workspace) => [workspace.id, workspace]));
-    const app = {
-      registry: { workspace: (id: string) => byId.get(id) ?? null },
-    } as unknown as AppState;
-    const agentIds = () => useAgentSelection.getState().agentIds;
-
-    selectSidebarAgents(app, sidebarSelection.workspace(one.id), false);
-    expect(agentIds()).toEqual(['agent-1']);
-    selectSidebarAgents(app, sidebarSelection.workspace(two.id), true);
-    expect(agentIds()).toEqual(['agent-1', 'agent-2', 'agent-3']);
-    selectSidebarAgents(app, sidebarSelection.workspace(one.id), true);
-    expect(agentIds()).toEqual(['agent-2', 'agent-3']);
-    selectSidebarAgents(app, sidebarSelection.workspace(one.id), false);
-    expect(agentIds()).toEqual(['agent-1']);
-    selectSidebarAgents(app, sidebarSelection.project('/tmp/p'), false);
-    expect(agentIds()).toEqual([]);
   });
 
   it('moves with the arrows, closes and opens with Left and Right', () => {

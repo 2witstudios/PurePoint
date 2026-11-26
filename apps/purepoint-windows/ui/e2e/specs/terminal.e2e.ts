@@ -73,17 +73,44 @@ async function locate(agentId: string, needle: string): Promise<{ x: number; y: 
   return point;
 }
 
-/** Select agents' rows in the sidebar outline: the first replaces, the rest Ctrl+click in. */
-async function showAgents(agentIds: readonly string[]): Promise<void> {
-  await browser.execute((selectors: readonly string[]) => {
-    selectors.forEach((selector, index) => {
-      const row = document.querySelector(selector);
-      // The outline selects on mouse down, as NSOutlineView does.
-      row?.dispatchEvent(
-        new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: index > 0 }),
-      );
+/** Where each further agent's pane splits off: a balanced grid of up to six panes. */
+const SPLITS: readonly (readonly [leaf: number, axis: 'v' | 'h'])[] = [
+  [0, 'v'],
+  [0, 'h'],
+  [1, 'h'],
+  [0, 'v'],
+  [1, 'v'],
+];
+
+/**
+ * Show agents' terminals in one pane grid (WIN-7.4): select the first agent's workspace row, then
+ * split a pane off for each further agent and assign it there with `pu grid` (at most six panes,
+ * with the workspace sidebar hidden so each is wide enough for the fixture's banner).
+ */
+async function showAgents(fixture: DaemonFixture, agentIds: readonly string[]): Promise<void> {
+  const [first, ...rest] = agentIds;
+  if (first === undefined) return;
+  if (rest.length > SPLITS.length) throw new Error('a pane grid holds at most six panes');
+  await browser.execute((selector: string) => {
+    // The outline selects on mouse down, as NSOutlineView does.
+    document
+      .querySelector(selector)
+      ?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+  }, agentRowSelector(first));
+  await expect($('[data-testid="pane-grid"]')).toBeDisplayed();
+  if (rest.length > 0) {
+    const hide = await $('button[aria-label="Hide Workspace Sidebar"]');
+    if (await hide.isExisting()) await hide.click();
+  }
+  for (const [index, id] of rest.entries()) {
+    const [leaf, axis] = SPLITS[index] ?? [0, 'v'];
+    const newLeaf = String(index + 1);
+    await fixture.pu(['grid', 'split', '--axis', axis, '--leaf', String(leaf)]);
+    await expect($(`[data-testid="pane-cell"][data-leaf-id="${newLeaf}"]`)).toBeExisting({
+      wait: 10_000,
     });
-  }, agentIds.map(agentRowSelector));
+    await fixture.pu(['grid', 'assign', id, '--leaf', newLeaf]);
+  }
   for (const id of agentIds) {
     await expect($(`[data-testid="terminal-pane"][data-agent-id="${id}"] .xterm`)).toBeDisplayed();
   }
@@ -177,7 +204,7 @@ describe('Terminal pane', () => {
   });
 
   it('shows the selected agent in an xterm.js terminal on WebGL', async () => {
-    await showAgents([agentId]);
+    await showAgents(fixture, [agentId]);
     await waitForText(agentId, 'ECHO READY');
     const row = await probe(agentId);
     expect(row?.renderer).toBe('webgl');
@@ -333,14 +360,16 @@ describe('Terminal throughput', () => {
     }
   }
 
-  it('streams ten panes at about 1 MB/s each with no long task over 50 ms', async function () {
+  // Six panes: a workspace's grid holds at most six (2 rows x 3 columns, MAX_PANES), and the
+  // terminals now live in the grid (WIN-7.4).
+  it('streams six panes at about 1 MB/s each with no long task over 50 ms', async function () {
     this.timeout(300_000);
     const ids: string[] = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 6; i++) {
       ids.push(await fixture.spawnTerminal(`node ${echoScript} flood 1000000 40000000`));
     }
     for (const id of ids) await waitForAgentRow(id);
-    await showAgents(ids);
+    await showAgents(fixture, ids);
     for (const id of ids) await waitForText(id, 'FLOOD READY');
     // Observe from before the streams start until they have run for a while.
     await browser.execute(() => {
@@ -386,7 +415,7 @@ describe('Terminal throughput', () => {
     const total = 50 * 1024 * 1024;
     const id = await fixture.spawnTerminal(`node ${echoScript} flood 0 ${String(total)}`);
     await waitForAgentRow(id);
-    await showAgents([id]);
+    await showAgents(fixture, [id]);
     await waitForText(id, 'FLOOD READY');
     const tap = await AttachTap.open(fixture, id);
     try {

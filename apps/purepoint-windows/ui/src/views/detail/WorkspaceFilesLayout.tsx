@@ -1,8 +1,8 @@
 // Port of apps/purepoint-macos/purepoint-macos/Views/Detail/WorkspaceFilesLayout.swift (WIN-8.2).
 //
 // A workspace's content beside its files sidebar (WorkspaceFilesSidebar), which the user can
-// resize (240–640 px, 360 ideal) and hide. While hidden, the content carries the button that
-// reopens it (Swift puts it in the top-right pane's tab bar; the pane grid is WIN-7.4).
+// resize (240–640 px, 360 ideal) and hide. While hidden, the button that reopens it sits in the
+// top-right pane's tab bar (the pane grid, `reopenInContent={false}`), or else over the content.
 // One WorkspaceFilesState per root and machine, so changing roots never mixes their files.
 import { type ReactNode, useMemo, useRef, useState } from 'react';
 import { WorkspaceFilesState } from '../../state/workspaceFilesState.ts';
@@ -21,6 +21,8 @@ export interface WorkspaceFilesLayoutProps {
   rootPath: string;
   machineId: string | null;
   children: ReactNode;
+  /** Draw the reopen button over the content; false when the content's tab strip carries it. */
+  reopenInContent?: boolean;
   /** Tests pass a state over a scripted git service. */
   createState?: (rootPath: string, machineId: string | null) => WorkspaceFilesState;
 }
@@ -32,6 +34,7 @@ export function WorkspaceFilesLayout({
   rootPath,
   machineId,
   children,
+  reopenInContent = true,
   createState = defaultCreate,
 }: WorkspaceFilesLayoutProps) {
   const showSidebar = useSidebarVisibilityStore((state) => state.workspaceSidebarShown);
@@ -47,7 +50,7 @@ export function WorkspaceFilesLayout({
     <div className="workspace-files-layout" data-view="WorkspaceFilesLayout">
       <div className="workspace-files-content">
         {children}
-        {!showSidebar && (
+        {!showSidebar && reopenInContent && (
           <div className="workspace-files-reopen">
             <WorkspaceSidebarToggle />
           </div>

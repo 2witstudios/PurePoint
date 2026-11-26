@@ -51,17 +51,3 @@
     animation: none;
   }
 }
-
-/* Interim multi-agent view until the pane grid (WIN-7.4). */
-.agent-terminals {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-auto-rows: minmax(0, 1fr);
-  gap: 1px;
-  background: var(--pp-terminal-ansi-0);
-}
-
-.agent-terminals > .terminal-pane {
-  display: flex;
-}

@@ -1,0 +1,415 @@
+/*
+ * The pane grid (WIN-7.4): nested splits with 1px hairlines and 16px drag handles, a 30px tab
+ * strip per pane, and the tab drag's drop overlay. The strip is always dark, like the Mac's
+ * (it forces the dark color scheme), on the theme's tab bar background.
+ */
+:root {
+  --pane-accent: #4cc2ff; /* controlAccentColor on the dark strip (Windows accent, dark variant) */
+  --pane-separator: rgba(255, 255, 255, 0.1); /* NSColor.separatorColor, dark */
+  --pane-tab-text: rgba(255, 255, 255, 0.85);
+  --pane-tab-secondary: rgba(255, 255, 255, 0.55);
+  --pane-tab-hover: rgba(255, 255, 255, 0.08);
+  --pane-green: #32d74b; /* systemGreen, dark */
+  --pane-red: #ff453a; /* systemRed, dark */
+}
+
+.pane-grid {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  background: var(--pp-terminal-background);
+}
+
+.pane-split {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.pane-split-child {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.pane-split-hairline {
+  flex: 0 0 1px;
+  background: var(--pane-separator);
+}
+
+.pane-split-hairline[data-dragging='true'] {
+  background: var(--pane-accent);
+}
+
+.pane-split-handle {
+  position: absolute;
+  z-index: 2;
+}
+
+.pane-split[data-axis='vertical'] > .pane-split-handle {
+  top: 0;
+  bottom: 0;
+  cursor: ew-resize;
+}
+
+.pane-split[data-axis='horizontal'] > .pane-split-handle {
+  left: 0;
+  right: 0;
+  cursor: ns-resize;
+}
+
+.pane-split-handle:focus-visible {
+  outline: 2px solid var(--pane-accent);
+  outline-offset: -6px;
+}
+
+.pane-cell {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane-cell-content {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--pp-terminal-background);
+  color: var(--pane-tab-text);
+}
+
+.pane-cell-content > .terminal-pane {
+  display: flex;
+}
+
+.pane-terminal-pending {
+  flex: 1;
+  background: var(--pp-terminal-background);
+}
+
+/* MARK: Tab strip */
+
+.pane-tab-bar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  color-scheme: dark;
+  background: var(--pp-tab-bar-background);
+  border-bottom: 1px solid var(--pane-separator);
+  box-sizing: border-box;
+  font-family: var(--pp-font-ui);
+  user-select: none;
+}
+
+.pane-tab-bar[data-drop-targeted='true'] {
+  background: color-mix(in srgb, var(--pane-accent) 12%, var(--pp-tab-bar-background));
+}
+
+.pane-tab-strip {
+  display: flex;
+  /* A narrow pane still shows the start of its active tab. */
+  min-width: 40px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pane-tab {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 84px;
+  max-width: 200px;
+  padding: 0 6px 0 10px;
+  box-sizing: border-box;
+  border-right: 1px solid var(--pane-separator);
+  color: var(--pane-tab-secondary);
+  font-size: 12px;
+  cursor: default;
+}
+
+.pane-tab[data-unseen='true'] {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.pane-tab[data-active='true'] {
+  background: var(--pp-terminal-background);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.pane-tab[data-active='true'][data-focused-pane='true'] {
+  color: #fff;
+}
+
+.pane-tab[data-active='true'][data-focused-pane='true']::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--pane-accent);
+}
+
+.pane-tab[data-drop-targeted='true']::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--pane-accent);
+}
+
+.pane-tab-icon {
+  flex: none;
+  width: 14px;
+}
+
+.pane-tab-icon[data-tint='green'] {
+  color: var(--pane-green);
+}
+
+.pane-tab-icon[data-tint='red'] {
+  color: var(--pane-red);
+}
+
+.pane-tab-icon[data-tint='secondary'] {
+  color: var(--pane-tab-secondary);
+}
+
+.pane-tab-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pane-tab-trailing {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+
+.pane-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--pane-tab-secondary);
+}
+
+.pane-tab-close:hover {
+  background: var(--pane-tab-hover);
+}
+
+.pane-tab-unseen {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pane-accent);
+}
+
+.pane-tab-bar-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.pane-tab-bar-divider {
+  flex: none;
+  width: 1px;
+  background: var(--pane-separator);
+}
+
+.pane-tab-bar-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.pane-tab-bar-button {
+  flex: none;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  margin: 0 4px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--pane-tab-secondary);
+}
+
+.pane-tab-bar-actions .pane-tab-bar-button {
+  margin: 0;
+}
+
+.pane-tab-bar-button:hover,
+.pane-tab-bar-actions .detail-icon-button:hover {
+  background: var(--pane-tab-hover);
+}
+
+.pane-tab-bar-actions .detail-icon-button {
+  color: var(--pane-tab-secondary);
+}
+
+/* MARK: Empty tab */
+
+.pane-empty-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-family: var(--pp-font-ui);
+}
+
+.pane-empty-tab-icon {
+  color: rgba(255, 255, 255, 0.1);
+}
+
+.pane-empty-tab-title {
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.pane-empty-tab-caption {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.1);
+}
+
+.pane-empty-tab-button {
+  padding: 4px 12px;
+  border: 1px solid var(--pane-separator);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--pane-tab-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.pane-empty-tab-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* MARK: Tab drop overlay */
+
+.pane-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+}
+
+.pane-drop-indicator {
+  position: absolute;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--pane-accent) 20%, transparent);
+  border: 2px solid var(--pane-accent);
+  box-sizing: border-box;
+}
+
+.pane-drop-indicator[data-zone='center'] {
+  inset: 0;
+}
+
+.pane-drop-indicator[data-zone='left'] {
+  inset: 0 50% 0 0;
+}
+
+.pane-drop-indicator[data-zone='right'] {
+  inset: 0 0 0 50%;
+}
+
+.pane-drop-indicator[data-zone='top'] {
+  inset: 0 0 50% 0;
+}
+
+.pane-drop-indicator[data-zone='bottom'] {
+  inset: 50% 0 0 0;
+}
+
+/* MARK: Close confirmation (the Mac's warning alert) */
+
+.close-confirmation-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.close-confirmation {
+  width: 280px;
+  padding: 20px;
+  border: 1px solid var(--menu-border);
+  border-radius: 10px;
+  background: var(--menu-background);
+  box-shadow: var(--menu-shadow);
+  color: var(--pp-app-text);
+  font-family: var(--pp-font-ui);
+  text-align: center;
+}
+
+.close-confirmation-icon {
+  color: var(--sidebar-yellow, #ffcc00);
+}
+
+.close-confirmation h2 {
+  margin: 8px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.close-confirmation p {
+  margin: 0 0 16px;
+  font-size: 11px;
+  color: var(--secondary-text);
+}
+
+.close-confirmation-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.close-confirmation-buttons button {
+  padding: 5px 12px;
+  border: 1px solid var(--menu-border);
+  border-radius: 5px;
+  background: var(--pp-system-control-background);
+  color: var(--pp-app-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.close-confirmation-buttons .close-confirmation-confirm {
+  border-color: transparent;
+  background: var(--sidebar-accent, #0067c0);
+  color: #fff;
+}

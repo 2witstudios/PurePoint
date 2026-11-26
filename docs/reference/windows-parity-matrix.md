@@ -213,11 +213,11 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/FilePane/MarkdownPreviewView+iOS.swift` | 98 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/FilePane/MarkdownPreviewView.swift` | 68 | `ui/src/views/filePane/MarkdownPreviewView.tsx` | WIN-8.6 | todo | — |
 | `Views/MockUI/MockWorkspaceComponents.swift` | 101 | — | — | excluded | DEC-11: `Views/MockUI` is unreferenced |
-| `Views/PaneGrid/DraggableSplit.swift` | 160 | `ui/src/views/paneGrid/DraggableSplit.tsx` | WIN-7.4 | todo | — |
-| `Views/PaneGrid/PaneCellView.swift` | 178 | `ui/src/views/paneGrid/PaneCellView.tsx` | WIN-7.4 | todo | — |
-| `Views/PaneGrid/PaneGridView.swift` | 74 | `ui/src/views/paneGrid/PaneGridView.tsx` | WIN-7.4 | todo | — |
+| `Views/PaneGrid/DraggableSplit.swift` | 160 | `ui/src/views/panegrid/DraggableSplit.tsx` (geometry in `ui/src/model/paneSplit.ts`; arrow keys on the handle are the adjustable action) | WIN-7.4 | ported | — |
+| `Views/PaneGrid/PaneCellView.swift` | 178 | `ui/src/views/panegrid/PaneCellView.tsx` (file and Point Guard tabs are placeholders until WIN-8.4/8.5 and WIN-9.x; the empty tab's palette is a WIN-7.5 stub; tab drop overlay for centre and edge drops) | WIN-7.4 | ported | — |
+| `Views/PaneGrid/PaneGridView.swift` | 74 | `ui/src/views/panegrid/PaneGridView.tsx`, `ui/src/views/panegrid/paneCommands.ts` (Panes and Tabs menu commands, Close Tab) | WIN-7.4 | ported | — |
 | `Views/PaneGrid/PaneSplitNode.swift` | 223 | `ui/src/model/paneSplit.ts` | WIN-6.2 | ported | — |
-| `Views/PaneGrid/PaneTabBar.swift` | 439 | `ui/src/views/paneGrid/PaneTabBar.tsx` | WIN-7.4 | todo | — |
+| `Views/PaneGrid/PaneTabBar.swift` | 439 | `ui/src/views/panegrid/PaneTabBar.tsx`, `ui/src/views/panegrid/tabDrag.ts` (HTML5 drag and drop), `ui/src/views/panegrid/tabCloseConfirmation.tsx` (in-page alert), `ui/src/model/workspace.ts` (`dropTabOnEdge`) | WIN-7.4 | ported | — |
 | `Views/PaneGrid/PaneTabDragInteraction+iOS.swift` | 172 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/PaneGrid/WorkspacePersistence.swift` | 562 | `ui/src/model/workspacePersistence.ts`, `ui/src/model/swiftJson.ts`, `ui/src/model/workspaceSelection.ts` | WIN-6.3 | ported | — |
 | `Views/PresentedControlDefaults.swift` | 17 | — | — | excluded | DEC-11: unreferenced |
