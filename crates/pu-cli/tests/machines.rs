@@ -4,6 +4,7 @@
 // Uses a /bin/sh fake ssh, symlinks and Unix sockets.
 #![cfg(unix)]
 
+use pu_core::canon::CanonicalPath;
 use pu_core::protocol::{Request, Response};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -55,7 +56,7 @@ impl Env {
             .prefix("pum")
             .tempdir_in("/tmp")
             .unwrap();
-        let root = tmp.path().canonicalize().unwrap();
+        let root = tmp.path().canonical().unwrap();
         let local_home = root.join("h");
         let remote_home = root.join("r");
         std::fs::create_dir_all(&local_home).unwrap();

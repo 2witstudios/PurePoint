@@ -1,3 +1,4 @@
+use pu_core::canon::CanonicalPath;
 use pu_core::read::Runtime;
 use pu_engine::read_source::{Binding, save_binding};
 use pu_engine::{engine::Engine, ipc_server::IpcServer};
@@ -27,7 +28,7 @@ async fn json(socket: &Path, args: &[&str]) -> serde_json::Value {
 async fn given_native_sources_should_read_all_runtimes_through_real_cli_and_ipc_after_restart() {
     // given
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
+    let root = temp.path().canonical().unwrap();
     let root_s = root.to_str().unwrap();
     let socket = root.join("test.sock");
     let registry = pu_core::paths::project_registry_path(&socket);

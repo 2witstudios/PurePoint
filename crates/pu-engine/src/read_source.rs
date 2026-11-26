@@ -1217,11 +1217,12 @@ mod batched_discovery_tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn given_slow_network_name_resolution_should_still_find_owned_rollouts() {
+        use pu_core::canon::CanonicalPath;
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
         let rollout = temp.path().join("rollout-owned.jsonl");
         let held = std::fs::File::create(&rollout).unwrap();
-        let rollout = rollout.canonicalize().unwrap();
+        let rollout = rollout.canonical().unwrap();
         let wrapper = temp.path().join("lsof-resolution-probe");
         // Reproduce a slow resolver without touching this machine's DNS. The
         // numeric path delegates to the real lsof and real owned descriptor.

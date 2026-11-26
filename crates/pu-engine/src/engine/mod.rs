@@ -1097,6 +1097,7 @@ impl Drop for Engine {
 mod tests {
     use super::*;
     use crate::test_helpers::init_and_spawn;
+    use pu_core::canon::CanonicalPath;
     use pu_core::protocol::{Request, Response};
     use tempfile::TempDir;
 
@@ -1105,7 +1106,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp
             .path()
-            .canonicalize()
+            .canonical()
             .unwrap()
             .to_string_lossy()
             .into_owned();
@@ -1686,6 +1687,7 @@ mod tests {
 #[cfg(all(test, unix))]
 mod workspace_catalog_tests {
     use super::*;
+    use pu_core::canon::CanonicalPath;
     use std::os::unix::fs::PermissionsExt;
 
     fn agent(command: &str) -> pu_core::types::AgentConfig {
@@ -1732,7 +1734,7 @@ mod workspace_catalog_tests {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
         std::fs::create_dir(&project).unwrap();
-        let project = project.canonicalize().unwrap();
+        let project = project.canonical().unwrap();
         for args in [
             vec!["init", "-q"],
             vec![

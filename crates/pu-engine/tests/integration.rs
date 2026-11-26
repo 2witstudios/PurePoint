@@ -1,6 +1,7 @@
 // Drives the daemon over its Unix socket.
 #![cfg(unix)]
 
+use pu_core::canon::CanonicalPath;
 use pu_core::protocol::{GridCommand, PROTOCOL_VERSION, Request, Response};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -346,7 +347,7 @@ async fn given_tab_command_should_be_accepted_and_broadcast_to_grid_subscribers(
         } => {
             assert_eq!(
                 project_root,
-                std::fs::canonicalize(h.project_root())
+                pu_core::canon::canonicalize(h.project_root())
                     .unwrap()
                     .to_string_lossy()
             );
@@ -626,7 +627,7 @@ async fn given_production_daemon_restart_should_restore_registry_without_project
             assert_eq!(report.summary.running, 0);
             assert_eq!(
                 report.projects[0].project_root,
-                project.canonicalize().unwrap().to_string_lossy()
+                project.canonical().unwrap().to_string_lossy()
             );
         }
         other => panic!("expected global inventory, got {other:?}"),
@@ -638,7 +639,7 @@ async fn given_production_daemon_restart_should_restore_registry_without_project
 #[tokio::test(flavor = "current_thread")]
 async fn given_point_guard_folder_without_git_should_spawn_split_agents_in_that_folder() {
     let tmp = TempDir::new().unwrap();
-    let root = tmp.path().canonicalize().unwrap();
+    let root = tmp.path().canonical().unwrap();
     let root_s = root.to_str().unwrap();
     let engine = pu_engine::engine::Engine::new();
     let response = engine

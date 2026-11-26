@@ -18,7 +18,9 @@ const ENGINE_PATH_ENV: &str = "PU_ENGINE_PATH";
 /// must pass [`check_trusted_binary`]; the error names why each one failed.
 pub fn find_daemon_binary() -> Result<PathBuf, String> {
     // Resolve symlinks so a linked `pu` still finds its real neighbors.
-    let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok();
+    let exe = std::env::current_exe()
+        .and_then(pu_core::canon::canonicalize)
+        .ok();
     let home = pu_core::paths::home_dir().ok();
     let explicit = std::env::var_os(ENGINE_PATH_ENV).filter(|value| !value.is_empty());
     find_daemon_binary_in(exe.as_deref(), home.as_deref(), explicit.as_deref())

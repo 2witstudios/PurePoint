@@ -1,4 +1,5 @@
 use super::*;
+use pu_core::canon::CanonicalPath;
 use pu_core::protocol::{KillTarget, Request, Response};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -563,7 +564,7 @@ async fn given_connection_limit_reached_should_reject_new_connection_promptly() 
 async fn given_subscribe_fs_should_stream_coalesced_file_events() {
     let tmp = TempDir::new().unwrap();
     let sock_path = tmp.path().join("test.sock");
-    let project_root = tmp.path().canonicalize().unwrap().join("project");
+    let project_root = tmp.path().canonical().unwrap().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
     let engine = Engine::new();
     let init = engine
@@ -626,7 +627,7 @@ async fn given_subscribe_fs_should_stream_coalesced_file_events() {
 async fn given_subscribe_projects_should_push_the_list_on_add_and_remove() {
     let tmp = TempDir::new().unwrap();
     let sock_path = tmp.path().join("test.sock");
-    let project_root = tmp.path().canonicalize().unwrap().join("project");
+    let project_root = tmp.path().canonical().unwrap().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
     let root = project_root.to_string_lossy().into_owned();
     // A loaded registry is pruned once served, which opens the stream.
@@ -1146,7 +1147,7 @@ async fn initialized_server(
     tokio::task::JoinHandle<std::io::Result<()>>,
 ) {
     let sock_path = tmp.path().join("test.sock");
-    let project_root = tmp.path().canonicalize().unwrap().join("project");
+    let project_root = tmp.path().canonical().unwrap().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
     let engine = Engine::new();
     let init = engine

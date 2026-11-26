@@ -1,3 +1,4 @@
+use pu_core::canon::CanonicalPath;
 use pu_core::protocol::{InventoryKind, KillTarget, Request, Response, SuspendTarget};
 use pu_core::signals::{AttentionKind, OutcomeKind, SignalActivity, SignalSnapshot};
 use pu_engine::engine::Engine;
@@ -433,7 +434,7 @@ fn main() {
         let project = dir.join("project");
         std::fs::create_dir_all(&project).map_err(|e| e.to_string())?;
         let project = project
-            .canonicalize()
+            .canonical()
             .map_err(|e| e.to_string())?
             .to_string_lossy()
             .into_owned();

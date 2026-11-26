@@ -307,7 +307,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("rollout-1.jsonl");
         let _file = std::fs::File::create(&path).unwrap();
-        let canonical = std::fs::canonicalize(&path).unwrap();
+        let canonical = pu_core::canon::canonicalize(&path).unwrap();
         let open = proc_open_files(&[std::process::id() as i32], 100_000).unwrap();
         assert!(open.contains(&canonical), "{open:?}");
     }

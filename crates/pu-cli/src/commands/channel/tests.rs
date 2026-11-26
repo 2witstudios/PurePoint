@@ -45,7 +45,7 @@ fn given_root_subdirectory_and_linked_worktree_should_route_to_primary_project()
     );
     let linked_sub = linked.join("sub");
     std::fs::create_dir(&linked_sub).unwrap();
-    let expected = std::fs::canonicalize(&root)
+    let expected = pu_core::canon::canonicalize(&root)
         .unwrap()
         .to_string_lossy()
         .into_owned();
@@ -78,7 +78,7 @@ fn given_separate_git_dir_should_route_to_primary_worktree() {
         &root,
         &["init", "--separate-git-dir", metadata.to_str().unwrap()],
     );
-    let expected = std::fs::canonicalize(&root)
+    let expected = pu_core::canon::canonicalize(&root)
         .unwrap()
         .to_string_lossy()
         .into_owned();

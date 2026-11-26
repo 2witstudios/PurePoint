@@ -1,3 +1,4 @@
+use pu_core::canon::{CanonicalPath, normalize, same_path};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -41,7 +42,7 @@ impl Engine {
         // Keep the stored order; drop repeats an older daemon may have written.
         let mut ordered = Vec::with_capacity(projects.len());
         for root in projects {
-            if !ordered.contains(&root) {
+            if !ordered.iter().any(|r| same_path(r, &root)) {
                 ordered.push(root);
             }
         }
@@ -118,7 +119,7 @@ impl Engine {
         let added = tokio::task::spawn_blocking(move || -> std::io::Result<bool> {
             // Keep serialization even if the awaiting request is cancelled.
             let _update = update;
-            let root = Path::new(&root).canonicalize()?;
+            let root = Path::new(&root).canonical()?;
             if is_too_broad_project_root(&root, home.as_deref()) {
                 return Ok(false);
             }
@@ -129,7 +130,7 @@ impl Engine {
                 let current = projects
                     .lock()
                     .map_err(|_| std::io::Error::other("project registry lock poisoned"))?;
-                if current.contains(&root) {
+                if current.iter().any(|r| same_path(r, &root)) {
                     return Ok(false);
                 }
                 current.clone()
@@ -173,12 +174,14 @@ impl Engine {
                 let mut next = Vec::with_capacity(current.len());
                 for root in roots {
                     // Accept any spelling of a registered root, as registration does.
-                    let root = match Path::new(&root).canonicalize() {
+                    let root = match Path::new(&root).canonical() {
                         Ok(path) => path.to_string_lossy().into_owned(),
-                        Err(_) => root,
+                        Err(_) => normalize(Path::new(&root)).to_string_lossy().into_owned(),
                     };
-                    if current.contains(&root) && !next.contains(&root) {
-                        next.push(root);
+                    if let Some(registered) = current.iter().find(|r| same_path(r, &root))
+                        && !next.contains(registered)
+                    {
+                        next.push(registered.clone());
                     }
                 }
                 for root in &current {
@@ -229,7 +232,8 @@ impl Engine {
                 .cloned()
                 .collect();
             let (removed, next): (Vec<_>, Vec<_>) = current.into_iter().partition(|root| {
-                roots.contains(root) && (mode == Unregister::Always || was_removed(Path::new(root)))
+                roots.iter().any(|r| same_path(r, root))
+                    && (mode == Unregister::Always || was_removed(Path::new(root)))
             });
             if removed.is_empty() {
                 return Ok(removed);
@@ -262,19 +266,26 @@ impl Engine {
     ) -> Response {
         // A deleted folder can no longer be canonicalized; match it as given.
         let path = PathBuf::from(project_root);
-        let root = tokio::task::spawn_blocking(move || path.canonicalize())
+        let root = tokio::task::spawn_blocking(move || path.canonical())
             .await
             .ok()
             .and_then(Result::ok)
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| project_root.to_string());
+            .unwrap_or_else(|| {
+                normalize(Path::new(project_root))
+                    .to_string_lossy()
+                    .into_owned()
+            });
         let live: Vec<String> = self
             .sessions
             .lock()
             .await
             .iter()
             .filter(|(_, h)| {
-                h.project_root.as_deref() == Some(root.as_str()) && h.exit_rx.borrow().is_none()
+                h.project_root
+                    .as_deref()
+                    .is_some_and(|r| same_path(r, &root))
+                    && h.exit_rx.borrow().is_none()
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -367,9 +378,7 @@ impl Engine {
                 }
             }
             let path = PathBuf::from(&*root);
-            if let Ok(Ok(canonical)) =
-                tokio::task::spawn_blocking(move || path.canonicalize()).await
-            {
+            if let Ok(Ok(canonical)) = tokio::task::spawn_blocking(move || path.canonical()).await {
                 *root = canonical.to_string_lossy().into_owned();
             }
             check_project_root_scope(root, legacy_root_use, self.home.as_deref())?;
@@ -390,12 +399,14 @@ impl Engine {
             Some(root) => {
                 let path = PathBuf::from(&root);
                 Some(
-                    tokio::task::spawn_blocking(move || path.canonicalize())
+                    tokio::task::spawn_blocking(move || path.canonical())
                         .await
                         .ok()
                         .and_then(Result::ok)
                         .map(|p| p.to_string_lossy().into_owned())
-                        .unwrap_or(root),
+                        .unwrap_or_else(|| {
+                            normalize(Path::new(&root)).to_string_lossy().into_owned()
+                        }),
                 )
             }
             None => None,
@@ -469,9 +480,11 @@ impl Engine {
                 }
             };
             let mut add_agent = |agent: &AgentEntry, worktree_id: Option<String>, cwd: &str| {
-                let handle = sessions
-                    .get(&agent.id)
-                    .filter(|h| h.project_root.as_deref() == Some(root.as_str()));
+                let handle = sessions.get(&agent.id).filter(|h| {
+                    h.project_root
+                        .as_deref()
+                        .is_some_and(|r| same_path(r, &root))
+                });
                 if handle.is_some() {
                     observed_sessions.insert(agent.id.clone());
                 }
@@ -849,7 +862,7 @@ mod tests {
 
     async fn init(engine: &Engine, root: &Path) -> String {
         std::fs::create_dir_all(root).unwrap();
-        let root = root.canonicalize().unwrap().to_string_lossy().into_owned();
+        let root = root.canonical().unwrap().to_string_lossy().into_owned();
         assert!(matches!(
             engine
                 .handle_request(Request::Init {
@@ -1027,7 +1040,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("registry.json");
         std::fs::create_dir_all(tmp.path().join("home/.pu")).unwrap();
-        let home = tmp.path().join("home").canonicalize().unwrap();
+        let home = tmp.path().join("home").canonical().unwrap();
         // `~/.pu` doubles as the global dir, so `$HOME` can look initialized.
         manifest::write_manifest(&home, &Manifest::new(home.to_string_lossy().into_owned()))
             .unwrap();
@@ -1048,7 +1061,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("registry.json");
         std::fs::create_dir_all(tmp.path().join("home/.pu")).unwrap();
-        let home = tmp.path().join("home").canonicalize().unwrap();
+        let home = tmp.path().join("home").canonical().unwrap();
         let root = home.to_string_lossy().into_owned();
         // An older version recorded `$HOME` as a project in the global dir.
         manifest::write_manifest(&home, &Manifest::new(root.clone())).unwrap();
@@ -1095,7 +1108,7 @@ mod tests {
     #[test]
     fn given_too_broad_root_should_refuse_creating_ops_but_allow_legacy_cleanup() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let home = tmp.path().canonicalize().unwrap().join("home");
+        let home = tmp.path().canonical().unwrap().join("home");
         std::fs::create_dir_all(&home).unwrap();
         let root = home.to_string_lossy().into_owned();
         let spawn: Request = serde_json::from_value(serde_json::json!({
@@ -1141,7 +1154,7 @@ mod tests {
     #[tokio::test]
     async fn given_registry_listing_a_too_broad_root_should_purge_it_on_load() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let project = tmp.path().canonicalize().unwrap().join("project");
+        let project = tmp.path().canonical().unwrap().join("project");
         let project = project.to_string_lossy().into_owned();
         let path = tmp.path().join("registry.json");
         std::fs::write(&path, serde_json::to_vec(&["/", project.as_str()]).unwrap()).unwrap();
@@ -1177,7 +1190,7 @@ mod tests {
     #[tokio::test]
     async fn given_multiple_projects_should_flatten_agents_and_worktrees_with_consistent_counts() {
         let (engine, live_id, tmp) = crate::test_helpers::init_and_spawn().await;
-        let first = tmp.path().join("project").canonicalize().unwrap();
+        let first = tmp.path().join("project").canonical().unwrap();
         let second = init(&engine, &tmp.path().join("second")).await;
         let source = manifest::read_manifest(&first).unwrap().agents[&live_id].clone();
         let mut m = manifest::read_manifest(Path::new(&second)).unwrap();
@@ -1437,7 +1450,7 @@ mod tests {
     #[tokio::test]
     async fn given_live_session_in_project_without_manifest_should_keep_it() {
         let (engine, id, tmp) = crate::test_helpers::init_and_spawn().await;
-        let root = tmp.path().join("project").canonicalize().unwrap();
+        let root = tmp.path().join("project").canonical().unwrap();
         std::fs::remove_file(pu_core::paths::manifest_path(&root)).unwrap();
 
         let report = inventory(&engine, InventoryKind::Agents).await;
@@ -1542,7 +1555,7 @@ mod tests {
         let root = tmp
             .path()
             .join("project")
-            .canonicalize()
+            .canonical()
             .unwrap()
             .to_string_lossy()
             .into_owned();
@@ -1584,7 +1597,7 @@ mod tests {
         let root = tmp
             .path()
             .join("project")
-            .canonicalize()
+            .canonical()
             .unwrap()
             .to_string_lossy()
             .into_owned();
@@ -1631,7 +1644,7 @@ mod tests {
     #[tokio::test]
     async fn given_unreadable_manifest_should_refuse_removal_rather_than_kill_suspendable_agents() {
         let (engine, id, tmp) = crate::test_helpers::init_and_spawn().await;
-        let root = tmp.path().join("project").canonicalize().unwrap();
+        let root = tmp.path().join("project").canonical().unwrap();
         std::fs::write(pu_core::paths::manifest_path(&root), b"corrupt").unwrap();
         let root = root.to_string_lossy().into_owned();
         let response = engine
@@ -1649,7 +1662,7 @@ mod tests {
     #[tokio::test]
     async fn given_missing_manifest_should_stop_live_sessions_and_report_them_killed() {
         let (engine, id, tmp) = crate::test_helpers::init_and_spawn().await;
-        let root = tmp.path().join("project").canonicalize().unwrap();
+        let root = tmp.path().join("project").canonical().unwrap();
         std::fs::remove_file(pu_core::paths::manifest_path(&root)).unwrap();
         let response = engine
             .handle_request(Request::RemoveProject {

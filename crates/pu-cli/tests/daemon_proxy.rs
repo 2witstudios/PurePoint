@@ -2,6 +2,7 @@
 // Uses a /bin/sh fake engine and Unix sockets.
 #![cfg(unix)]
 
+use pu_core::canon::CanonicalPath;
 use pu_core::protocol::{PROTOCOL_VERSION, Request, Response};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -24,7 +25,7 @@ impl Env {
             .prefix("pup")
             .tempdir_in("/tmp")
             .unwrap();
-        let root = tmp.path().canonicalize().unwrap();
+        let root = tmp.path().canonical().unwrap();
         std::fs::create_dir_all(root.join("h").join(".pu")).unwrap();
         std::fs::create_dir_all(root.join("bin")).unwrap();
         let engine = root.join("bin").join("pu-engine");

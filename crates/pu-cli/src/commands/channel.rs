@@ -53,7 +53,9 @@ fn resolve_root(
     cwd: &Path,
 ) -> Result<String, CliError> {
     if let Some(root) = explicit.or(env_root.filter(|r| !r.is_empty())) {
-        return Ok(std::fs::canonicalize(root)?.to_string_lossy().into_owned());
+        return Ok(pu_core::canon::canonicalize(root)?
+            .to_string_lossy()
+            .into_owned());
     }
     let git = std::process::Command::new("git")
         .current_dir(cwd)
@@ -77,7 +79,7 @@ fn resolve_root(
             .args(["rev-parse", "--show-toplevel"])
             .output()?;
         if top.status.success() {
-            return Ok(std::fs::canonicalize(Path::new(
+            return Ok(pu_core::canon::canonicalize(Path::new(
                 String::from_utf8_lossy(&top.stdout).trim(),
             ))?
             .to_string_lossy()
@@ -97,9 +99,9 @@ fn resolve_root(
             .find_map(|field| field.strip_prefix(b"worktree "))
     {
         let candidate =
-            std::fs::canonicalize(Path::new(&String::from_utf8_lossy(root).into_owned()))?;
+            pu_core::canon::canonicalize(Path::new(&String::from_utf8_lossy(root).into_owned()))?;
         let manifest = pu_core::manifest::read_manifest(&candidate).map_err(|error| CliError::Other(format!("Git cannot identify an initialized primary project ({error}); use --project-root or PU_PROJECT_ROOT")))?;
-        if std::fs::canonicalize(&manifest.project_root)? != candidate {
+        if pu_core::canon::canonicalize(&manifest.project_root)? != candidate {
             return Err(CliError::Other("Git primary checkout does not match its project manifest; use --project-root or PU_PROJECT_ROOT".into()));
         }
         return Ok(candidate.to_string_lossy().into_owned());
