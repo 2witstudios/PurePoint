@@ -991,6 +991,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vt100",
+ "which",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

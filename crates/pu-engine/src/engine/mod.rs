@@ -172,13 +172,21 @@ fn agent_origin(name: &str, ac: &pu_core::types::AgentConfig) -> &'static str {
 /// A worktree-relative command or its arguments may still fail at launch.
 #[cfg(windows)]
 fn catalog_executable_available(
-    _ac: &pu_core::types::AgentConfig,
-    _id: &str,
-    _cwd: &Path,
-    _env: &[(String, String)],
+    ac: &pu_core::types::AgentConfig,
+    id: &str,
+    cwd: &Path,
+    env: &[(String, String)],
 ) -> bool {
-    // WIN-3.6: resolve the command through PATH + PATHEXT instead of mode bits.
-    false
+    let Ok((command, _)) = Engine::parse_agent_command(ac, id) else {
+        return false;
+    };
+    // PATHEXT-aware, so `claude.exe` and npm's `codex.cmd` shims both count.
+    let path = env
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+        .map(|(_, path)| path.as_str());
+    which::which_in(&command, path, cwd).is_ok()
 }
 
 /// Root-cwd executable hint using Spawn parsing and login PATH, without running it.
@@ -297,6 +305,18 @@ impl Engine {
         });
     }
 
+    /// Windows has no login shell to replay: the daemon's environment merged
+    /// with the current registry environment (WINAPP-007).
+    #[cfg(windows)]
+    async fn resolve_login_env() -> Vec<(String, String)> {
+        tokio::task::spawn_blocking(|| {
+            crate::win_env::login_env(crate::win_env::daemon_env(), &crate::win_env::LiveRegistry)
+        })
+        .await
+        .unwrap_or_else(|_| crate::win_env::daemon_env())
+    }
+
+    #[cfg(unix)]
     async fn resolve_login_env() -> Vec<(String, String)> {
         let shell = crate::os::login_shell();
         // Every spawn and resume waits on this one probe (it fills a OnceCell),
@@ -1858,5 +1878,80 @@ mod workspace_catalog_tests {
             root.path(),
             &env
         ));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_catalog_tests {
+    use super::*;
+
+    fn agent(command: &str) -> pu_core::types::AgentConfig {
+        pu_core::types::AgentConfig {
+            name: "Agent".into(),
+            command: command.into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: None,
+            machine_launch_args: None,
+            project_command: None,
+            machine_command: None,
+        }
+    }
+
+    #[test]
+    fn given_cmd_only_agent_in_path_with_spaces_should_be_available() {
+        let root = tempfile::tempdir().unwrap();
+        let tools = root.path().join("Program Files").join("npm tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join("codex.cmd"), "@echo off\r\n").unwrap();
+        let elsewhere = root.path().join("empty dir");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let path = pu_core::env_path::join_unique([elsewhere, tools.clone()]);
+        let env = [("PATH".to_string(), path)];
+
+        assert!(catalog_executable_available(
+            &agent("codex --flag"),
+            "codex",
+            root.path(),
+            &env
+        ));
+        assert!(!catalog_executable_available(
+            &agent("claude"),
+            "claude",
+            root.path(),
+            &env
+        ));
+        // A root-relative command resolves against the cwd, PATHEXT included.
+        std::fs::create_dir(root.path().join("bin")).unwrap();
+        std::fs::write(root.path().join("bin").join("worker.bat"), "@echo off\r\n").unwrap();
+        assert!(catalog_executable_available(
+            &agent(r".\bin\worker"),
+            "custom",
+            root.path(),
+            &[]
+        ));
+        assert!(!catalog_executable_available(
+            &agent(""),
+            "custom",
+            root.path(),
+            &env
+        ));
+    }
+
+    #[test]
+    fn given_shell_sentinel_should_resolve_windows_shell() {
+        let (command, args) =
+            Engine::parse_agent_command(&agent("shell -NoLogo"), "terminal").unwrap();
+        assert_eq!(command, crate::os::login_shell());
+        assert_eq!(args, ["-NoLogo"]);
+        let name = std::path::Path::new(&command)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_lowercase();
+        assert!(
+            ["pwsh.exe", "powershell.exe", "cmd.exe"].contains(&name.as_str()),
+            "{command}"
+        );
     }
 }

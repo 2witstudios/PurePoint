@@ -16,3 +16,6 @@ pub mod screen;
 pub(crate) mod test_helpers;
 
 pub mod signals;
+
+#[cfg(windows)]
+pub(crate) mod win_env;

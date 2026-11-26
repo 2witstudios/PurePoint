@@ -450,25 +450,56 @@ impl Engine {
             .unwrap_or_default();
 
         // Append common fallback dirs (guards against missing-binary issues)
-        let home = pu_core::paths::home_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        let fallbacks = [
-            format!("{home}/.local/bin"),
-            format!("{home}/.cargo/bin"),
-            "/usr/local/bin".to_string(),
-            "/opt/homebrew/bin".to_string(),
-        ];
-        let mut path = login_path;
-        for dir in fallbacks {
-            if !path.split(':').any(|p| p == dir) {
-                path = format!("{path}:{dir}");
+        #[cfg(unix)]
+        let path = {
+            let home = pu_core::paths::home_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let fallbacks = [
+                format!("{home}/.local/bin"),
+                format!("{home}/.cargo/bin"),
+                "/usr/local/bin".to_string(),
+                "/opt/homebrew/bin".to_string(),
+            ];
+            let mut path = login_path;
+            for dir in fallbacks {
+                if !path.split(':').any(|p| p == dir) {
+                    path = format!("{path}:{dir}");
+                }
             }
-        }
-        // Prepend ~/.pu/bin
-        if let Ok(pu_dir) = paths::global_pu_dir() {
-            path = format!("{}:{}", pu_dir.join("bin").display(), path);
-        }
+            // Prepend ~/.pu/bin
+            if let Ok(pu_dir) = paths::global_pu_dir() {
+                path = format!("{}:{}", pu_dir.join("bin").display(), path);
+            }
+            path
+        };
+        // Windows (WINAPP-007): the tool directories, then the registry and
+        // daemon PATH already merged by `resolve_login_env`.
+        #[cfg(windows)]
+        let path = {
+            let tool_dirs = paths::home_dir()
+                .map(|home| {
+                    pu_core::env_path::windows_tool_dirs(&home, |key| {
+                        env.iter()
+                            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                            .map(|(_, v)| v.into())
+                    })
+                })
+                .unwrap_or_default();
+            // Screen heuristics need colour; nested-session markers confuse agents.
+            env.retain(|(k, _)| {
+                let k = k.to_ascii_uppercase();
+                k != "NO_COLOR"
+                    && k != "CLAUDECODE"
+                    && !k.starts_with("CLAUDE_CODE_")
+                    && !k.starts_with("WT_")
+            });
+            pu_core::env_path::join_unique(
+                tool_dirs
+                    .into_iter()
+                    .chain(std::env::split_paths(&login_path)),
+            )
+        };
 
         // Override PATH, TERM, COLORTERM in the env
         env.retain(|(k, _)| k != "PATH" && k != "TERM" && k != "COLORTERM");

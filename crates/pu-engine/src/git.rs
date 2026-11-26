@@ -42,6 +42,7 @@ async fn git_output(args: &[&str], cwd: &Path) -> Result<std::process::Output, s
 /// The daemon may run under launchd with a minimal PATH, so hooks git runs
 /// (e.g. Git LFS's post-checkout calling `git-lfs`) cannot find Homebrew
 /// tools. Append the same fallback dirs agents get.
+#[cfg(unix)]
 fn git_path(current: Option<&str>, home: Option<&str>) -> String {
     let mut dirs: Vec<String> = current
         .unwrap_or_default()
@@ -62,6 +63,20 @@ fn git_path(current: Option<&str>, home: Option<&str>) -> String {
         }
     }
     dirs.join(":")
+}
+
+/// Windows: the current PATH, then the Windows tool directories agents get
+/// (git hooks such as Git LFS's call tools installed there).
+#[cfg(windows)]
+fn git_path(current: Option<&str>, home: Option<&str>) -> String {
+    let current = current
+        .map(|path| std::env::split_paths(path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let tools = home
+        .filter(|h| !h.is_empty())
+        .map(|h| pu_core::env_path::windows_tool_dirs(Path::new(h), |k| std::env::var_os(k)))
+        .unwrap_or_default();
+    pu_core::env_path::join_unique(current.into_iter().chain(tools))
 }
 
 async fn run_git(args: &[&str], cwd: &Path) -> Result<String, std::io::Error> {
@@ -300,6 +315,27 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[cfg(windows)]
+    #[test]
+    fn given_windows_path_with_spaces_should_append_tool_dirs_once() {
+        let path = git_path(
+            Some(r"C:\Program Files\Git\cmd;C:\Users\me\.cargo\bin;C:\WINDOWS\system32"),
+            Some(r"C:\Users\me"),
+        );
+        let dirs: Vec<_> = std::env::split_paths(&path).collect();
+        assert_eq!(dirs[0], Path::new(r"C:\Program Files\Git\cmd"));
+        assert_eq!(dirs[1], Path::new(r"C:\Users\me\.cargo\bin"));
+        assert_eq!(dirs[3], Path::new(r"C:\Users\me\.pu\bin"));
+        assert!(dirs.contains(&Path::new(r"C:\Users\me\.local\bin").to_path_buf()));
+        assert_eq!(
+            dirs.iter().filter(|d| d.ends_with(r".cargo\bin")).count(),
+            1,
+            "{path}"
+        );
+        assert!(!git_path(None, None).contains(":/"));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn given_launchd_path_should_append_homebrew_and_user_bins() {
         let path = git_path(Some("/usr/bin:/bin:/usr/sbin:/sbin"), Some("/Users/me"));
@@ -309,12 +345,14 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_path_with_homebrew_should_keep_order_without_duplicates() {
         let path = git_path(Some("/opt/homebrew/bin:/usr/bin:/bin"), None);
         assert_eq!(path, "/opt/homebrew/bin:/usr/bin:/bin:/usr/local/bin");
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_no_path_should_use_fallbacks() {
         assert_eq!(
