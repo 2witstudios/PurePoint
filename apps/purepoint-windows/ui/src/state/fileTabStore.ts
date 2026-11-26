@@ -37,6 +37,10 @@ export class FileTabSession {
     this.showTree = showTree;
   }
 
+  setShowPreview(showPreview: boolean): void {
+    this.showPreview = showPreview;
+  }
+
   setLoadedRoot(root: string): void {
     this.loadedRoot = root;
   }

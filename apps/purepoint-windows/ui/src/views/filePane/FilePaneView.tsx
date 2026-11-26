@@ -3,8 +3,10 @@
 // editor state live in the tab's FileTabSession (fileTabStore.ts), so they survive the view being
 // unmounted while the tab is hidden; the registry's pruning stops their watchers when it closes.
 //
-// Header: the tree toggle, then the open file's icon, name and unsaved dot (or the root's name).
-// The tree is FileTreeSidebarView; the content is FileEditorContent.
+// Header: the tree toggle, then the open file's icon, name and unsaved dot (or the root's name),
+// and for a Markdown file the Code / Preview picker (WIN-8.6; the session remembers it, Preview
+// first). The tree is FileTreeSidebarView; the content is FileEditorContent, or the
+// MarkdownPreviewView.
 import { useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { detectEditorLanguage } from '../../model/editorLanguage';
@@ -17,6 +19,7 @@ import { FileTreeState } from '../../state/fileTreeState';
 import { Icon } from '../../theme/Icon';
 import { FileTreeSidebarView } from '../filetree/FileTreeSidebarView';
 import { FileEditorContent } from './FileEditorContent';
+import { MarkdownPreviewView } from './MarkdownPreviewView';
 import './filePane.css';
 
 /** The session's editor and tree, created the first time the tab is shown. */
@@ -54,6 +57,12 @@ export function FilePaneView({
   const [{ editor, fileTree }] = useState(() => fileTabStates(session));
   const [showTree, setShowTreeState] = useState(session.showTree);
   const file = useStore(editor.store, (s) => s.currentFile);
+  const [showPreview, setShowPreviewState] = useState(session.showPreview);
+  const isMarkdown = file?.language === 'markdown';
+  const setShowPreview = (shown: boolean) => {
+    session.setShowPreview(shown);
+    setShowPreviewState(shown);
+  };
   const setShowTree = (shown: boolean) => {
     session.setShowTree(shown);
     setShowTreeState(shown);
@@ -116,6 +125,23 @@ export function FilePaneView({
           <span className="file-pane-root-name">{pathName(rootPath)}</span>
         )}
         <span className="file-pane-spacer" />
+        {isMarkdown && (
+          <div className="file-pane-picker" role="radiogroup" aria-label="Markdown view">
+            {[false, true].map((preview) => (
+              <button
+                key={String(preview)}
+                type="button"
+                role="radio"
+                aria-checked={showPreview === preview}
+                onClick={() => {
+                  setShowPreview(preview);
+                }}
+              >
+                {preview ? 'Preview' : 'Code'}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="file-pane-body">
         {showTree && (
@@ -131,7 +157,22 @@ export function FilePaneView({
             />
           </div>
         )}
-        <FileEditorContent editor={editor} emptyText="Select a file" autoFocus={isFocused} />
+        <FileEditorContent
+          editor={editor}
+          emptyText="Select a file"
+          autoFocus={isFocused}
+          renderFile={(shown) =>
+            shown.language === 'markdown' && showPreview ? (
+              <MarkdownPreviewView
+                markdown={shown.content}
+                documentPath={shown.id}
+                onOpenFile={(path) => {
+                  void editor.openFile(path, pathName(path));
+                }}
+              />
+            ) : null
+          }
+        />
       </div>
     </div>
   );

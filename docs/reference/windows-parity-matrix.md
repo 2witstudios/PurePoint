@@ -86,7 +86,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/MachineConnection.swift` | 650 | `src-tauri/src/daemon/machine.rs` (relayed `health` probe, exit 69/127/9009/255 verdicts, Start daemon), `src-tauri/src/daemon/relay.rs` (argv), `ui/src/services/machines.ts` (`MachineConnection` supervision; no forward, `forward.lock` or pid file, WINAPP-013) | WIN-8.14 | ported | — |
 | `Services/MachineRegistryWatcher.swift` | 146 | `src-tauri/src/watchers/machine_registry.rs` | WIN-5.6 | ported | Watches the parent dir by name (no re-open after rename), 1 s retry while absent; `machines-changed` |
 | `Services/ManifestWatcher.swift` | 116 | `src-tauri/src/watchers/manifest.rs` | WIN-5.6 | ported | Watches `.pu` by name, 50 ms debounce, one event per rename burst; `manifest-changed {projectRoot}`; WIN-3.13 release in `watchers/mod.rs` |
-| `Services/MarkdownHTMLRenderer.swift` | 245 | `ui/src/services/markdownHtml.ts` | WIN-8.6 | todo | — |
+| `Services/MarkdownHTMLRenderer.swift` | 245 | `ui/src/services/markdownHtml.ts` (page adds a no-script CSP) | WIN-8.6 | ported | — |
 | `Services/NSView+Constraints+iOS.swift` | 18 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/NSView+Constraints.swift` | 18 | `ui/src/views/shell/layout.css` (CSS layout replaces Auto Layout pinning) | WIN-7.1 | ported | — |
 | `Services/OpenCodeConversationIndex.swift` | 116 | `src-tauri/src/conversations/opencode.rs` | WIN-8.12 | ported | — |
@@ -211,7 +211,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Editor/LineNumberRulerView.swift` | 135 | `ui/src/views/editor/LineNumberRulerView.ts` (CodeMirror line-number gutter) | WIN-8.5 | ported | — |
 | `Views/FilePane/FilePaneView.swift` | 171 | `ui/src/views/filePane/FilePaneView.tsx` (in `PaneCellView`'s file tabs) | WIN-8.5 | ported | — |
 | `Views/FilePane/MarkdownPreviewView+iOS.swift` | 98 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/FilePane/MarkdownPreviewView.swift` | 68 | `ui/src/views/filePane/MarkdownPreviewView.tsx` | WIN-8.6 | todo | — |
+| `Views/FilePane/MarkdownPreviewView.swift` | 68 | `ui/src/views/filePane/MarkdownPreviewView.tsx` (iframe sandboxed without scripts; links through the opener or into the pane; relative images not loaded) | WIN-8.6 | ported | — |
 | `Views/MockUI/MockWorkspaceComponents.swift` | 101 | — | — | excluded | DEC-11: `Views/MockUI` is unreferenced |
 | `Views/PaneGrid/DraggableSplit.swift` | 160 | `ui/src/views/panegrid/DraggableSplit.tsx` (geometry in `ui/src/model/paneSplit.ts`; arrow keys on the handle are the adjustable action) | WIN-7.4 | ported | — |
 | `Views/PaneGrid/PaneCellView.swift` | 178 | `ui/src/views/panegrid/PaneCellView.tsx` (file and Point Guard tabs are placeholders until WIN-8.4/8.5 and WIN-9.x; the empty tab's palette is a WIN-7.5 stub; tab drop overlay for centre and edge drops) | WIN-7.4 | ported | — |
@@ -313,7 +313,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `KeyBindingStateTests.swift` | all | `ui/src/state/keyBindingStore.test.ts` | WIN-6.7 | ported | — |
 | `LocalFilePresenterIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `MachinesTests.swift` | all | `ui/src/model/machine.test.ts`, `ui/src/state/machineState.test.ts`, `src-tauri/src/daemon/machine.rs` and `src-tauri/src/daemon/relay.rs` (#[cfg(test)]); `ProjectKeyTests` are `ui/src/model/projectKey.test.ts`, the remote layout cases `ui/src/model/workspacePersistence.test.ts`; the forward, pid-file and `forward.lock` cases have no Windows counterpart (WINAPP-013) | WIN-8.14 | ported | — |
-| `MarkdownHTMLRendererTests.swift` | all | `ui/src/services/markdownHtml.test.ts` | WIN-8.6 | todo | — |
+| `MarkdownHTMLRendererTests.swift` | all | `ui/src/services/markdownHtml.test.ts`, `ui/src/views/filePane/MarkdownPreviewView.test.tsx` | WIN-8.6 | ported | — |
 | `PaneTabDragIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `PaneTabStackTests.swift` | all | `ui/src/state/workspaceRegistry.tabs.test.ts` | WIN-6.2 | ported | — |
 | `PointGuardAttachmentIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
