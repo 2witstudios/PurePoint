@@ -63,6 +63,22 @@ async fn given_no_daemon_should_fail_to_connect() {
     assert!(connect(&endpoint(&dir)).await.is_err());
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn given_missing_home_connect_should_not_create_it_but_bind_should() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("absent").join(".pu");
+    let ep = Endpoint::for_socket(&home.join("daemon.sock")).unwrap();
+    assert!(connect(&ep).await.is_err());
+    assert!(!dir.path().join("absent").exists(), "client created a dir");
+    let _peers = spawn_echo(Listener::bind(&ep).unwrap());
+    assert!(home.is_dir());
+    // The name computed before the directory existed is the bound one.
+    let again = Endpoint::for_socket(&home.join("daemon.sock")).unwrap();
+    assert_eq!(again, ep);
+    connect(&again).await.unwrap();
+}
+
 #[tokio::test]
 async fn given_peer_hangs_up_should_report_closed_without_consuming() {
     let dir = tempfile::tempdir().unwrap();
@@ -148,6 +164,53 @@ async fn given_pid_file_naming_this_process_should_connect() {
     let _peers = spawn_echo(Listener::bind(&ep).unwrap());
     std::fs::write(ep.pid_path(), std::process::id().to_string()).unwrap();
     connect(&ep).await.unwrap();
+}
+
+#[test]
+fn given_peer_uid_should_allow_only_the_daemon_user() {
+    assert!(same_user(Some(501), 501));
+    assert!(!same_user(Some(502), 501));
+    assert!(!same_user(Some(0), 501), "root is not the daemon user");
+    assert!(!same_user(None, 501), "unknown peer");
+}
+
+#[cfg(windows)]
+#[test]
+fn given_server_token_trust_should_refuse_lower_integrity_and_sandboxed_servers() {
+    use win_sys::{TokenTrust, untrusted_server_reason};
+    const LOW: u32 = 0x1000;
+    const MEDIUM: u32 = 0x2000;
+    const HIGH: u32 = 0x3000;
+    let plain = |integrity| TokenTrust {
+        integrity,
+        app_container: false,
+        restricted: false,
+    };
+    assert_eq!(untrusted_server_reason(plain(MEDIUM), MEDIUM), None);
+    assert_eq!(untrusted_server_reason(plain(HIGH), MEDIUM), None);
+    assert!(untrusted_server_reason(plain(LOW), MEDIUM).is_some());
+    assert!(untrusted_server_reason(plain(MEDIUM), HIGH).is_some());
+    let sandboxed = TokenTrust {
+        app_container: true,
+        ..plain(HIGH)
+    };
+    assert!(untrusted_server_reason(sandboxed, MEDIUM).is_some());
+    let restricted = TokenTrust {
+        restricted: true,
+        ..plain(HIGH)
+    };
+    assert!(untrusted_server_reason(restricted, MEDIUM).is_some());
+}
+
+#[cfg(windows)]
+#[test]
+fn given_own_process_should_pass_server_trust_check() {
+    let me = win_sys::current_token_trust().unwrap();
+    let same = win_sys::process_trust(std::process::id()).unwrap();
+    assert_eq!(me, same);
+    assert!(!me.app_container && !me.restricted, "{me:?}");
+    assert!(me.integrity >= 0x2000, "{me:?}");
+    assert_eq!(win_sys::untrusted_server_reason(same, me.integrity), None);
 }
 
 #[tokio::test]

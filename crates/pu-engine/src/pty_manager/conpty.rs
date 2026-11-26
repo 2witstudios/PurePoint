@@ -390,7 +390,11 @@ pub(super) fn spawn(
     buffer: Arc<OutputBuffer>,
     exit_tx: watch::Sender<Option<i32>>,
 ) -> io::Result<Arc<ConPty>> {
-    let env = agent_environment(std::env::vars(), &config.env_remove, &config.env);
+    let env = agent_environment(
+        crate::win_env::daemon_env(),
+        &config.env_remove,
+        &config.env,
+    );
     let cwd = (!config.cwd.is_empty()).then(|| PathBuf::from(&config.cwd));
     let program = resolve_program(&config.command, &env, cwd.as_deref())?;
     let cmdline = command_line(&program, &config.args, &env)?;
@@ -591,7 +595,13 @@ fn env_get<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
 fn env_block(env: &[(String, String)]) -> io::Result<Vec<u16>> {
     let mut block = Vec::new();
     for (k, v) in env {
-        if k.is_empty() || k[1..].contains('=') || k.contains('\0') || v.contains('\0') {
+        // A leading `=` is legal (`=C:` drive cwds); one after it is not.
+        // `char_indices` keeps a multi-byte first character from splitting.
+        if k.is_empty()
+            || k.char_indices().skip(1).any(|(_, c)| c == '=')
+            || k.contains('\0')
+            || v.contains('\0')
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("invalid environment variable {k:?}"),
@@ -694,7 +704,10 @@ fn command_line(program: &Path, args: &[String], env: &[(String, String)]) -> io
             inner.push(' ');
             inner.push_str(&quote_cmd_arg(arg)?);
         }
-        return Ok(format!("\"{}\" /d /s /c \"{inner}\"", comspec.display()));
+        return Ok(format!(
+            "\"{}\" /d /v:off /s /c \"{inner}\"",
+            comspec.display()
+        ));
     }
     // A script for cmd.exe itself (`shell_command_args`): cmd parses its own
     // command line, so the script goes inside one pair of quotes as written
@@ -709,7 +722,10 @@ fn command_line(program: &Path, args: &[String], env: &[(String, String)]) -> io
         if script.contains(['\r', '\n', '\0']) {
             return Err(invalid_arg("a cmd.exe script contains a newline or NUL"));
         }
-        return Ok(format!("\"{}\" /d /s /c \"{script}\"", program.display()));
+        return Ok(format!(
+            "\"{}\" /d /v:off /s /c \"{script}\"",
+            program.display()
+        ));
     }
     msvc_command_line(program, args)
 }
@@ -758,7 +774,7 @@ fn quote_msvc_arg(arg: &str) -> io::Result<String> {
     Ok(out)
 }
 
-/// One argument on a `cmd.exe /d /s /c "…"` line (WIN-1.1 section 3). `"`
+/// One argument on a `cmd.exe /d /v:off /s /c "…"` line (WIN-1.1 section 3). `"`
 /// becomes `""` (never CRT-style `\"`, which is injectable) and `%` becomes
 /// `%%cd:~,%`, which expands to nothing, so `%PATH%` arrives literally.
 fn quote_cmd_arg(arg: &str) -> io::Result<String> {
@@ -908,7 +924,7 @@ mod tests {
         assert_eq!(
             line,
             format!(
-                "\"C:\\Windows\\system32\\cmd.exe\" /d /s /c \"\"{}\" \"a b\" \"x&y\"\"",
+                "\"C:\\Windows\\system32\\cmd.exe\" /d /v:off /s /c \"\"{}\" \"a b\" \"x&y\"\"",
                 shim.display()
             )
         );
@@ -922,7 +938,7 @@ mod tests {
         let args: Vec<String> = ["/d", "/s", "/c", script].map(String::from).into();
         assert_eq!(
             command_line(cmd, &args, &[]).unwrap(),
-            format!("\"{}\" /d /s /c \"{script}\"", cmd.display())
+            format!("\"{}\" /d /v:off /s /c \"{script}\"", cmd.display())
         );
         let two = ["/d", "/s", "/c", "a\r\nb"].map(String::from);
         assert!(command_line(cmd, &two, &[]).is_err());
@@ -1035,6 +1051,15 @@ mod tests {
         let block = env_block(&out).unwrap();
         assert_eq!(&block[block.len() - 2..], &[0, 0]);
         assert_eq!(env_block(&[]).unwrap(), vec![0, 0]);
+    }
+
+    #[test]
+    fn given_multibyte_first_char_in_env_name_should_build_block_without_panicking() {
+        let block = env_block(&env(&[("ÄRGER", "ü"), ("=C:", r"C:\x")])).unwrap();
+        let text = String::from_utf16(&block).unwrap();
+        assert_eq!(text, "ÄRGER=ü\0=C:=C:\\x\0\0");
+        assert!(env_block(&env(&[("Ä=B", "x")])).is_err());
+        assert!(env_block(&env(&[("Ä", "a\0b")])).is_err());
     }
 
     #[test]
@@ -1216,6 +1241,31 @@ mod tests {
             "{text}"
         );
         assert!(!text.lines().any(|l| l.trim() == "INJECTED"), "{text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn given_bang_variable_argument_should_reach_cmd_shim_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("bang.cmd");
+        std::fs::write(
+            &shim,
+            "@echo bang-ran [%1] [%2]
+",
+        )
+        .unwrap();
+        let line = command_line(&shim, &["!PATH!".into()], &[]).unwrap();
+        assert!(line.contains(" /d /v:off /s /c "), "{line}");
+        let handle = NativePtyHost::new()
+            .spawn(config(
+                &shim.display().to_string(),
+                &["!PATH!", "x!y!z"],
+                dir.path(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(wait_exit(&handle).await, Some(0));
+        let text = screen_text(&handle);
+        assert!(text.contains(r#"bang-ran ["!PATH!"] ["x!y!z"]"#), "{text}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

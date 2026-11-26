@@ -120,7 +120,7 @@ Keychain items, registry location and the overflow-connection rule are specified
 
 ### Windows relay (MACH-012)
 
-The Windows app and `pu --machine` run `ssh.exe -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 <ssh_host> <relay>` per daemon connection, where `<relay>` is the iPad relay command above for a Unix machine, or `pu daemon proxy` for a Windows machine. No `-L` forward, `forward.lock`, `cli-<pid>.sock` or stale-forward sweep exists on Windows. Exit codes are the relay's (0, 69, 1), plus 127 or 9009 when `pu` is missing. Full contract: [windows-app.md](windows-app.md) (Interfaces, Remote relay).
+The Windows app and `pu --machine` run `ssh.exe -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 <ssh_host> <relay>` per daemon connection (`pu --machine` also passes `-o ControlMaster=no -o ControlPath=none`, which matter only when `PU_SSH` or `PATH` names a non-Win32 ssh that multiplexes), where `<relay>` is the iPad relay command above for a Unix machine, or `pu daemon proxy` for a Windows machine. No `-L` forward, `forward.lock`, `cli-<pid>.sock` or stale-forward sweep exists on Windows. Exit codes are the relay's (0, 69, 1), plus 127 or 9009 when `pu` is missing. Full contract: [windows-app.md](windows-app.md) (Interfaces, Remote relay).
 
 ### Daemon file and git requests (protocol version 9)
 

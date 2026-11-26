@@ -10,6 +10,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
     GetNamedSecurityInfoW, GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT, SetNamedSecurityInfoW,
+    SetSecurityInfo,
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
@@ -21,6 +22,7 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+const ACCESS_DENIED_ACE_TYPE: u8 = 1;
 
 pub(crate) fn wide(s: &OsStr) -> Vec<u16> {
     s.encode_wide().chain(std::iter::once(0)).collect()
@@ -161,8 +163,8 @@ impl SecurityDescriptor {
     }
 }
 
-fn apply_sddl(path: &Path, sddl: &str) -> io::Result<()> {
-    let sd = sd_from_sddl(sddl)?;
+/// The DACL inside `sd`, valid while `sd` lives.
+fn sd_dacl(sd: &Sd) -> io::Result<*mut ACL> {
     let mut present = 0;
     let mut defaulted = 0;
     let mut dacl: *mut ACL = null_mut();
@@ -170,6 +172,44 @@ fn apply_sddl(path: &Path, sddl: &str) -> io::Result<()> {
     if unsafe { GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted) } == 0 {
         return Err(io::Error::last_os_error());
     }
+    Ok(dacl)
+}
+
+/// The owner-only descriptor for a new file or directory, for
+/// `SECURITY_ATTRIBUTES` at creation, so it never has an inherited DACL.
+pub fn private_descriptor(is_dir: bool) -> io::Result<SecurityDescriptor> {
+    let user = current_user_sid()?.to_string_sid()?;
+    SecurityDescriptor::from_sddl(&private_sddl(&user, is_dir))
+}
+
+/// Replace an open file's or directory's DACL with the owner-only DACL. The
+/// handle needs WRITE_DAC; no path is resolved, so no link is followed.
+pub fn set_private_dacl_handle(file: &std::fs::File, is_dir: bool) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    let handle = file.as_raw_handle() as HANDLE;
+    let sd = private_descriptor(is_dir)?;
+    let dacl = sd_dacl(&sd.0)?;
+    // SAFETY: handle is live; dacl points into sd which outlives the call.
+    let rc = unsafe {
+        SetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            dacl,
+            null_mut(),
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::from_raw_os_error(rc as i32));
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_sddl(path: &Path, sddl: &str) -> io::Result<()> {
+    let sd = sd_from_sddl(sddl)?;
+    let dacl = sd_dacl(&sd)?;
     let name = wide(path.as_os_str());
     // SAFETY: name is NUL-terminated, dacl points into sd which outlives the call.
     let rc = unsafe {
@@ -324,8 +364,12 @@ unsafe fn check_descriptor(path: &Path, owner: PSID, dacl: *mut ACL) -> io::Resu
         }
         let header = ace as *const ACE_HEADER;
         // SAFETY: every ACE starts with an ACE_HEADER.
-        if unsafe { (*header).AceType } != ACCESS_ALLOWED_ACE_TYPE {
-            continue;
+        match unsafe { (*header).AceType } {
+            ACCESS_ALLOWED_ACE_TYPE => {}
+            ACCESS_DENIED_ACE_TYPE => continue,
+            // Object, callback and conditional ACEs: fail closed rather
+            // than guess whom they grant.
+            _ => return Err(denied(path, "has an access entry of an unsupported type")),
         }
         let allowed = ace as *const ACCESS_ALLOWED_ACE;
         // SAFETY: allow ACEs carry their SID at SidStart.
@@ -457,8 +501,12 @@ pub fn check_trusted_file(path: &Path) -> Result<(), &'static str> {
         let header = ace as *const ACE_HEADER;
         // SAFETY: every ACE starts with an ACE_HEADER.
         let (ace_type, flags) = unsafe { ((*header).AceType, (*header).AceFlags) };
-        if ace_type != ACCESS_ALLOWED_ACE_TYPE || flags & INHERIT_ONLY_ACE != 0 {
+        if flags & INHERIT_ONLY_ACE != 0 || ace_type == ACCESS_DENIED_ACE_TYPE {
             continue;
+        }
+        if ace_type != ACCESS_ALLOWED_ACE_TYPE {
+            // Object, callback and conditional ACEs: fail closed.
+            return Err("has an access entry of an unsupported type");
         }
         let allowed = ace as *const ACCESS_ALLOWED_ACE;
         // SAFETY: allow ACEs carry their mask and SID at SidStart.
@@ -526,6 +574,39 @@ mod tests {
         );
         apply_sddl(&path, &sddl).unwrap();
         assert_eq!(check_trusted_binary(&path), Ok(()));
+    }
+
+    /// A conditional (callback) allow ACE: type 9, not type 0.
+    const CONDITIONAL_ALLOW_EVERYONE: &str = "(XA;;FA;;;WD;(Member_of {SID(BA)}))";
+
+    #[test]
+    fn given_conditional_allow_ace_should_not_be_private() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let user = current_user_sid().unwrap().to_string_sid().unwrap();
+        apply_sddl(&path, &private_sddl(&user, false)).unwrap();
+        check_private(&path).unwrap();
+        let deny = format!("D:P(D;;FA;;;AN){}", &private_sddl(&user, false)[3..]);
+        apply_sddl(&path, &deny).unwrap();
+        check_private(&path).unwrap();
+        let sddl = format!("{}{CONDITIONAL_ALLOW_EVERYONE}", private_sddl(&user, false));
+        apply_sddl(&path, &sddl).unwrap();
+        let err = check_private(&path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+    }
+
+    #[test]
+    fn given_exe_with_conditional_allow_ace_should_not_be_trusted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = exe(tmp.path());
+        let user = current_user_sid().unwrap().to_string_sid().unwrap();
+        let sddl = format!("{}{CONDITIONAL_ALLOW_EVERYONE}", private_sddl(&user, false));
+        apply_sddl(&path, &sddl).unwrap();
+        assert_eq!(
+            check_trusted_binary(&path),
+            Err("has an access entry of an unsupported type")
+        );
     }
 
     #[test]

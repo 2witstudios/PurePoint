@@ -115,7 +115,12 @@ pub(crate) fn agent_path(
 /// The daemon's environment as UTF-8 pairs (non-UTF-8 entries are skipped,
 /// where `std::env::vars` would panic).
 pub(crate) fn daemon_env() -> Vec<(String, String)> {
-    std::env::vars_os()
+    utf8_env(std::env::vars_os())
+}
+
+/// The UTF-8 entries of `vars`; the rest are dropped rather than panicking.
+fn utf8_env(vars: impl IntoIterator<Item = (OsString, OsString)>) -> Vec<(String, String)> {
+    vars.into_iter()
         .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
         .collect()
 }
@@ -224,6 +229,25 @@ fn read_string_values(root: HKEY, subkey: &str) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_non_unicode_env_entry_should_skip_it_without_panicking() {
+        // A lone surrogate is a legal Windows string but not UTF-8.
+        let bad = OsString::from_wide(&[0xD800, u16::from(b'x')]);
+        let vars = vec![
+            (OsString::from("ÄRGER"), OsString::from("ok")),
+            (OsString::from("BAD_VALUE"), bad.clone()),
+            (bad, OsString::from("bad key")),
+            (OsString::from("KEEP"), OsString::from("yes")),
+        ];
+        assert_eq!(
+            utf8_env(vars),
+            vec![
+                ("ÄRGER".to_string(), "ok".to_string()),
+                ("KEEP".to_string(), "yes".to_string()),
+            ]
+        );
+    }
 
     struct FakeRegistry {
         user: Vec<(String, String)>,

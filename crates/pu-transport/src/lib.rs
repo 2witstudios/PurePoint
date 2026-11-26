@@ -47,8 +47,8 @@ pub struct Endpoint {
 impl Endpoint {
     /// The endpoint for a daemon whose socket path is `socket_path`.
     ///
-    /// On Windows this creates the socket's parent directory if needed, since
-    /// the pipe name hashes its canonical path.
+    /// On Windows the pipe name hashes the socket's canonical path; this
+    /// never creates anything (see `naming`); only [`Listener::bind`] does.
     pub fn for_socket(socket_path: &Path) -> io::Result<Self> {
         Ok(Self {
             socket_path: socket_path.to_path_buf(),
@@ -103,6 +103,13 @@ impl PeerIdentity {
     pub fn is_same_user(&self) -> bool {
         self.same_user
     }
+}
+
+/// The Unix peer rule: a peer is the daemon's own user only when its uid is
+/// known and equals the daemon's effective uid. Root peers are not exempt.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) fn same_user(peer_uid: Option<u32>, euid: u32) -> bool {
+    peer_uid == Some(euid)
 }
 
 /// Who serves the client end `pipe` of a named pipe: its process id and

@@ -91,23 +91,30 @@ impl Engine {
         // Write manifest entry (worktree only, no agents)
         let cwd = wt_path.to_string_lossy().to_string();
         let wt_id_clone = wt_id.clone();
-        let manifest_result = manifest::update_manifest(root_path, move |mut m| {
-            m.worktrees
-                .entry(wt_id_clone.clone())
-                .or_insert_with(|| WorktreeEntry {
-                    id: wt_id_clone,
-                    name: worktree_name.clone(),
-                    path: cwd,
-                    branch,
-                    base_branch: Some(base_branch.clone()),
-                    status: WorktreeStatus::Active,
-                    agents: IndexMap::new(),
-                    created_at: chrono::Utc::now(),
-                    merged_at: None,
-                    error: None,
-                });
-            m
-        });
+        // Off the runtime: on Windows the rename retries while the manifest
+        // is locked (`pu_core::fs_retry`).
+        let manifest_root = root_path.to_path_buf();
+        let manifest_result = tokio::task::spawn_blocking(move || {
+            manifest::update_manifest(&manifest_root, move |mut m| {
+                m.worktrees
+                    .entry(wt_id_clone.clone())
+                    .or_insert_with(|| WorktreeEntry {
+                        id: wt_id_clone,
+                        name: worktree_name.clone(),
+                        path: cwd,
+                        branch,
+                        base_branch: Some(base_branch.clone()),
+                        status: WorktreeStatus::Active,
+                        agents: IndexMap::new(),
+                        created_at: chrono::Utc::now(),
+                        merged_at: None,
+                        error: None,
+                    });
+                m
+            })
+        })
+        .await
+        .unwrap_or_else(|e| Err(std::io::Error::other(e).into()));
 
         if let Err(e) = manifest_result {
             // Rollback: remove worktree + branch
