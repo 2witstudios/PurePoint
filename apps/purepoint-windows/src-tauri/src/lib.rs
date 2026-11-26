@@ -29,6 +29,7 @@ pub fn protocol_version() -> u32 {
 pub fn run() {
     tauri::Builder::default()
         .manage(git::commands::GitState::default())
+        .manage(attach::AttachState::default())
         .invoke_handler(tauri::generate_handler![
             files::index::file_index,
             conversations::conversations_list,
@@ -56,6 +57,12 @@ pub fn run() {
             subscriptions::subscriptions_start_projects,
             subscriptions::subscriptions_stop_projects,
             subscriptions::subscriptions_grid_command,
+            attach::attach_open,
+            attach::attach_input,
+            attach::attach_resize,
+            attach::attach_claim_size,
+            attach::attach_blur,
+            attach::attach_close,
             watchers::commands::watch_manifest,
             watchers::commands::watch_worktree,
             watchers::commands::watch_file_tree,

@@ -66,7 +66,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/ClaudeConversationIndex.swift` | 497 | `src-tauri/src/conversations/claude.rs`, `src-tauri/src/conversations/util.rs`, `ui/src/services/conversations.ts` | WIN-8.12 | ported | — |
 | `Services/ClaudeProcess.swift` | 168 | — | — | excluded | DEC-11: legacy chat; WIN-8.12 grep found no caller outside `State/ChatState.swift` (which declares `ClaudeProcessProvider`) and `ClaudeProcessTests`, and nothing constructs it |
 | `Services/CodexConversationIndex.swift` | 160 | `src-tauri/src/conversations/codex.rs` | WIN-8.12 | ported | — |
-| `Services/DaemonAttachSession.swift` | 354 | `src-tauri/src/attach/session.rs` | WIN-5.4 | todo | — |
+| `Services/DaemonAttachSession.swift` | 354 | `src-tauri/src/attach/session.rs`, `src-tauri/src/attach/mod.rs`, `ui/src/services/attach.ts` | WIN-5.4 | ported | — |
 | `Services/DaemonClient.swift` | 138 | `src-tauri/src/daemon/client.rs`, `src-tauri/src/daemon/relay.rs`, `ui/src/services/daemon.ts` | WIN-5.3 | ported | — |
 | `Services/DaemonConnection.swift` | 80 | `ui/src/services/daemonConnection.ts` | WIN-6.0 | todo | — |
 | `Services/DaemonGridSubscription.swift` | 127 | `src-tauri/src/subscriptions/grid.rs`, `ui/src/state/gridCommands.ts` | WIN-6.4 | todo | WIN-5.5 ported the stream (`grid.rs`: same backoff, 20 retries, commands on the subscription connection; `grid-event {projectRoot, command}`, `subscriptions_grid_command`); WIN-6.4 applies commands to the registry (`handleRemoteCommand`) |
