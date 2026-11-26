@@ -11,6 +11,11 @@ import { createDaemons } from "./daemon.js";
 import { terminalConnection } from "./terminals.js";
 import { serve } from "./network.js";
 import { openTrustStore } from "./trust.js";
+import { daemonEndpoint } from "./pipe-name.js";
+// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
+};
 
 async function until(fn) {
   for (let i = 0; i < 300; i++) {
@@ -81,7 +86,8 @@ async function fixture(t) {
     });
   });
   await new Promise((resolve) =>
-    server.listen(path.join(home, "daemon.sock"), resolve),
+    // Windows: the pipe the bridge derives from the socket path.
+    server.listen(daemonEndpoint(path.join(home, "daemon.sock")), resolve),
   );
   t.after(async () => {
     for (const socket of sockets) socket.destroy();
@@ -517,7 +523,7 @@ test("incremental UTF-8 preserves split bytes and resync discards old partial se
 });
 
 // Real TLS/WebSocket + Unix socket boundary, including durable trust changes.
-test("authenticated WebSocket fences inventory/input on immediate trust downgrade and revocation", async (t) => {
+test("authenticated WebSocket fences inventory/input on immediate trust downgrade and revocation", unixOnly, async (t) => {
   const f = await fixture(t);
   const trust = await openTrustStore({ directory: path.join(f.home, "trust") });
   t.after(() => trust.close());

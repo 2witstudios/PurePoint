@@ -11,8 +11,12 @@ import {
 import path from "node:path";
 import os from "node:os";
 import { acquirePrivateLock } from "./lock-helper.js";
+// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
+};
 const helperPath = process.env.POINT_GUARD_LOCK_HELPER_PATH;
-test("given owned helper crash should retain kernel exclusion until owner IO drains and releases", async () => {
+test("given owned helper crash should retain kernel exclusion until owner IO drains and releases", unixOnly, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pointguard-ofd-"));
   let first;
   try {
@@ -53,7 +57,7 @@ test("given owned helper crash should retain kernel exclusion until owner IO dra
     await rm(directory, { recursive: true, force: true });
   }
 });
-test("given symlink or public inode should refuse without repair", async () => {
+test("given symlink or public inode should refuse without repair", unixOnly, async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "pointguard-lock-private-"),
   );

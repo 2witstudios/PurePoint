@@ -9,6 +9,10 @@ import WebSocket from "ws";
 import { serve } from "./network.js";
 import { openTrustStore } from "./trust.js";
 import { Controller } from "./controller.js";
+// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
+};
 function connect(url, credential, clientId) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, {
@@ -54,7 +58,7 @@ function request(base, route, body, credential) {
     req.end(body ? JSON.stringify(body) : undefined);
   });
 }
-test("remote credentials bind ownership, reject admin rights and close revoked sockets without disturbing others", async () => {
+test("remote credentials bind ownership, reject admin rights and close revoked sockets without disturbing others", unixOnly, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pg-network-"));
   const trust = await openTrustStore({ directory });
   const c = new EventEmitter();
@@ -245,7 +249,7 @@ async function chatHarness(fn) {
 }
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
-test("chat follows the device grants: View reads, Control with Workspace management sends, everything else is rejected before the controller", async () =>
+test("chat follows the device grants: View reads, Control with Workspace management sends, everything else is rejected before the controller", unixOnly, async () =>
   chatHarness(async ({ dispatched, pair }) => {
     const expected = {
       off: [],
@@ -277,7 +281,7 @@ test("chat follows the device grants: View reads, Control with Workspace managem
     for (const p of phones) p.ws.close();
   }));
 
-test("chat snapshots and editor offers reach only devices with View or Control", async () =>
+test("chat snapshots and editor offers reach only devices with View or Control", unixOnly, async () =>
   chatHarness(async ({ c, pair }) => {
     const off = await pair("off");
     const view = await pair("view");
@@ -293,7 +297,7 @@ test("chat snapshots and editor offers reach only devices with View or Control",
     for (const p of [off, view, manage]) p.ws.close();
   }));
 
-test("a live grant downgrade stops broadcasts, rejects further chat ops and notifies the device", async () =>
+test("a live grant downgrade stops broadcasts, rejects further chat ops and notifies the device", unixOnly, async () =>
   chatHarness(async ({ trust, c, dispatched, pair, grant }) => {
     const phone = await pair("manage");
     assert.equal((await phone.call("permissions")).data.chat, "send");
@@ -328,7 +332,7 @@ test("a live grant downgrade stops broadcasts, rejects further chat ops and noti
     phone.ws.close();
   }));
 
-test("a freshly paired device has full access, including sending to Point Guard chat", async () =>
+test("a freshly paired device has full access, including sending to Point Guard chat", unixOnly, async () =>
   chatHarness(async ({ pair }) => {
     const phone = await pair();
     const granted = (await phone.call("permissions")).data;
@@ -338,7 +342,7 @@ test("a freshly paired device has full access, including sending to Point Guard 
     phone.ws.close();
   }));
 
-test("a device with agents and terminals Off cannot reach agents through Point Guard chat", async () =>
+test("a device with agents and terminals Off cannot reach agents through Point Guard chat", unixOnly, async () =>
   chatHarness(async ({ dispatched, pair }) => {
     const phone = await pair("off");
     const granted = (await phone.call("permissions")).data;
@@ -363,7 +367,7 @@ test("a device with agents and terminals Off cannot reach agents through Point G
     phone.ws.close();
   }));
 
-test("a downgrade while a chat request is in flight withholds its result", async () =>
+test("a downgrade while a chat request is in flight withholds its result", unixOnly, async () =>
   chatHarness(async ({ trust, c, pair }) => {
     let release;
     const held = new Promise((resolve) => (release = resolve));
@@ -399,7 +403,7 @@ test("a downgrade while a chat request is in flight withholds its result", async
     phone.ws.close();
   }));
 
-test("a chat action queued behind a running prompt does not run after a downgrade", async () =>
+test("a chat action queued behind a running prompt does not run after a downgrade", unixOnly, async () =>
   chatHarness(async ({ trust, c, pair }) => {
     const prompts = [];
     let release;

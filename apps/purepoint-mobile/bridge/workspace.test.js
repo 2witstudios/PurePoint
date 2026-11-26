@@ -12,6 +12,11 @@ import { workspaceConnection, projectMetadata } from "./workspace.js";
 import { terminalConnection } from "./terminals.js";
 import { openTrustStore } from "./trust.js";
 import { serve } from "./network.js";
+import { daemonEndpoint } from "./pipe-name.js";
+// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
+};
 
 async function fixture(t) {
   const home = await mkdtemp(path.join(os.tmpdir(), "mw-"));
@@ -155,7 +160,8 @@ async function fixture(t) {
     });
   });
   await new Promise((resolve) =>
-    server.listen(path.join(home, "daemon.sock"), resolve),
+    // Windows: the pipe the bridge derives from the socket path.
+    server.listen(daemonEndpoint(path.join(home, "daemon.sock")), resolve),
   );
   t.after(async () => {
     for (const s of sockets) s.destroy();
@@ -646,7 +652,7 @@ test("spawn instructions are optional; blank launches bare and plan mode needs i
   assert.match(f.requests.at(-1).prompt, /\S/);
 });
 
-test("real authenticated TLS WS old grants deny management, off leaks no fleet, downgrade events fence and reconnect reconciles", async (t) => {
+test("real authenticated TLS WS old grants deny management, off leaks no fleet, downgrade events fence and reconnect reconciles", unixOnly, async (t) => {
   const f = await fixture(t),
     directory = path.join(f.home, "trust");
   const trust = await openTrustStore({ directory });
