@@ -12,8 +12,8 @@
 //   once the manifest delivers it (`pendingSelectAgentId`), as on the Mac.
 // - Agent signals (WIN-7.7) are projected by `startAgentSignals` (bootstrap), not a view task;
 //   the shell only consumes `pendingSignalDestination`.
-// - The menu commands' accelerators are handled here, for every command (Mac menus handle theirs
-//   and `HotkeyMonitor` the rest; WIN-7.6 ports the monitor for terminal-focus rules).
+// - Every shortcut runs through `startHotkeyMonitor` (services/hotkeys.ts, WIN-7.6), menu
+//   commands included: the Mac's menus handle theirs and `HotkeyMonitor` the rest.
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import { type SidebarSelection, selection as sidebarSelection } from '../../model/sidebarItem.ts';
@@ -22,6 +22,7 @@ import type { AppState } from '../../state/appState.ts';
 import { useKeyBindingStore } from '../../state/keyBindingStore.ts';
 import { SIDEBAR_KEY, useSidebarVisibilityStore } from '../../state/sidebarVisibilityStore.ts';
 import { Icon } from '../../theme/Icon.tsx';
+import { startHotkeyMonitor } from '../../services/hotkeys.ts';
 import { runWindowAction } from '../../services/windowChrome.ts';
 import { DetailView, ScreenPlaceholder } from '../detail/DetailView.tsx';
 import { SidebarView } from '../sidebar/SidebarView.tsx';
@@ -336,24 +337,15 @@ export function ContentView() {
     [app],
   );
 
-  // Menu accelerators from the key binding store.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat) return;
-      const bindings = useKeyBindingStore.getState();
-      if (bindings.recordingAction !== null) return;
-      const target = event.target instanceof Element ? event.target : null;
-      const focusInTerminal = target?.closest('.xterm') != null;
-      const action = bindings.actionFor(event, focusInTerminal);
-      if (action === null) return;
-      event.preventDefault();
-      runCommand(action);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [runCommand]);
+  // Every shortcut, from the key binding store (Swift `HotkeyMonitor`, services/hotkeys.ts).
+  useEffect(
+    () =>
+      startHotkeyMonitor({
+        bindings: () => useKeyBindingStore.getState(),
+        run: runCommand,
+      }),
+    [runCommand],
+  );
 
   const style = { '--sidebar-width': `${String(sidebarWidth)}px` } as CSSProperties;
 

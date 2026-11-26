@@ -90,7 +90,7 @@ What the types mean:
 - Tauri 2.12 needs Rust 1.90, so the app pins `tauri ~2.11`, `tauri-build ~2.6`, `@tauri-apps/api ~2.11` and `@tauri-apps/cli ~2.11` to stay on the repository toolchain (1.89). `rust-version = "1.89"` in `src-tauri/Cargo.toml` makes Cargo's MSRV-aware resolver keep the rest of `Cargo.lock` on versions that build with it. Lift the pins when `rust-toolchain.toml` moves to 1.90.
 - `webview2-com` and `windows-core` match the versions Tauri 2.11 links, so the COM types `src-tauri/src/webview.rs` uses are the ones Tauri hands out.
 - typescript-eslint supports TypeScript below 6.1, so TypeScript stays on 6.0.
-- Release builds turn off WebView2's browser accelerator keys (reload, print, find, DevTools), its default context menu and DevTools; debug builds keep them.
+- Every build turns off WebView2's browser accelerator keys (F5/Ctrl+R reload, Ctrl+P print, Ctrl+F find, F12/Ctrl+Shift+I DevTools, Ctrl+N, Ctrl+W) and its zoom (Ctrl+Plus/Minus, Ctrl+wheel), so those keys reach the page and a terminal (REQ-WINAPP-065); the debug e2e build therefore checks the release key behaviour (`hotkeys.e2e.ts`). Under msedgedriver, Ctrl+Shift+I/J/C still open DevTools (its keys arrive through the debugger), so that spec checks those three for no reload, print, find or zoom only. Release builds also turn off the default context menu and DevTools; debug builds keep both (right-click › Inspect).
 
 ## Syntax highlighting
 
