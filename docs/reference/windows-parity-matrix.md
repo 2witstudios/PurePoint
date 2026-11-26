@@ -8,7 +8,7 @@ Maps every macOS app source file to its planned counterpart in the Windows app (
 - `node scripts/check-parity-matrix.mjs` fails when a Swift file, a test file or an SF Symbol in the source is missing here, or a non-excluded row lacks a leaf. `--no-todo` also fails on any `todo` row (the WIN-10.5 and WIN-11.1 gate).
 - Keep the tables in this exact format: one row per line, cells separated by `|`, file names in backticks.
 
-Summary: 256 source files, 67 excluded, 188 todo, 1 ported. 69 test files (23 iOS-only). 104 SF Symbols.
+Summary: 256 source files, 67 excluded, 186 todo, 3 ported. 69 test files (23 iOS-only). 104 SF Symbols.
 
 ## Source files
 
@@ -32,7 +32,7 @@ Summary: 256 source files, 67 excluded, 188 todo, 1 ported. 69 test files (23 iO
 | `Models/EditorTab.swift` | 142 | `ui/src/model/editorTab.ts` | WIN-8.5 | todo | — |
 | `Models/FileNode.swift` | 38 | `ui/src/model/fileNode.ts` | WIN-8.4 | todo | — |
 | `Models/KeyBinding+iOS.swift` | 128 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Models/KeyBinding.swift` | 449 | `ui/src/model/keyBinding.ts` | WIN-6.7 | todo | — |
+| `Models/KeyBinding.swift` | 449 | `ui/src/model/keyBinding.ts` | WIN-6.7 | ported | — |
 | `Models/Machine.swift` | 278 | `ui/src/model/machine.ts` | WIN-8.14 | todo | — |
 | `Models/ManifestModel.swift` | 100 | `ui/src/protocol/generated/` (replaced by generated types) | WIN-6.0 | todo | — |
 | `Models/PRModel.swift` | 33 | `ui/src/model/pr.ts` | WIN-6.0 | todo | — |
@@ -122,7 +122,7 @@ Summary: 256 source files, 67 excluded, 188 todo, 1 ported. 69 test files (23 iO
 | `State/EditorState.swift` | 263 | `ui/src/state/editorState.ts` | WIN-8.5 | todo | — |
 | `State/FileTabStore.swift` | 62 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | todo | — |
 | `State/FileTreeState.swift` | 208 | `ui/src/state/fileTreeState.ts` | WIN-8.4 | todo | — |
-| `State/KeyBindingState.swift` | 138 | `ui/src/state/keyBindingState.ts` | WIN-6.7 | todo | — |
+| `State/KeyBindingState.swift` | 138 | `ui/src/state/keyBindingStore.ts` | WIN-6.7 | ported | — |
 | `State/MachineState+OpenProject.swift` | 67 | `ui/src/state/machineStateOpenProject.ts` | WIN-8.14 | todo | — |
 | `State/MachineState.swift` | 515 | `ui/src/state/machineState.ts` | WIN-8.14 | todo | — |
 | `State/PiChatModel.swift` | 827 | `ui/src/state/piChat.ts` | WIN-9.4 | todo | — |
@@ -309,7 +309,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `HotkeyKeyCommandTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `HotkeyRecorderTests.swift` | all | — | — | ios-only | Windows recorder gets new tests in WIN-8.11 |
 | `IPadWindowingTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `KeyBindingStateTests.swift` | all | `ui/src/state/keyBindingState.test.ts` | WIN-6.7 | todo | — |
+| `KeyBindingStateTests.swift` | all | `ui/src/state/keyBindingStore.test.ts` | WIN-6.7 | ported | — |
 | `LocalFilePresenterIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `MachinesTests.swift` | all | `ui/src/model/machine.test.ts`, `src-tauri/src/daemon/machine.rs` (#[cfg(test)]) | WIN-8.14 | todo | — |
 | `MarkdownHTMLRendererTests.swift` | all | `ui/src/services/markdownHtml.test.ts` | WIN-8.6 | todo | — |
