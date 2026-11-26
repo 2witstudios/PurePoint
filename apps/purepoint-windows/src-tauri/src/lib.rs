@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod files;
 pub mod git;
 pub mod installer;
+pub mod navigation;
 pub mod pointguard;
 pub mod secrets;
 pub mod subscriptions;
@@ -64,6 +65,8 @@ pub fn run() {
         })
         // Links from terminals and chat open in the user's browser (WIN-7.3).
         .plugin(tauri_plugin_opener::init())
+        // The window only ever shows the app: other navigations are refused.
+        .plugin(navigation::plugin())
         // Open Project's folder picker (WIN-8.15).
         .plugin(tauri_plugin_dialog::init())
         // Agent signal toasts (WIN-7.7).
