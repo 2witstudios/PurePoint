@@ -22,13 +22,24 @@ Run from `apps/purepoint-windows`:
 | `npm run lint`                               | ESLint, then a Prettier check. `npm run format` rewrites files with Prettier.      |
 | `npm test`                                   | Vitest with jsdom and Testing Library.                                             |
 | `npm run gen:protocol`                       | Regenerate the daemon protocol types in `ui/src/protocol/generated`.               |
-| `npm run e2e`                                | Placeholder until WIN-5.7 adds end-to-end tests.                                   |
+| `npm run e2e`                                | End-to-end tests against a real daemon (see below).                                |
 | `npm run tauri build -- --debug --no-bundle` | Build the debug app at `src-tauri/target/debug/purepoint-windows.exe`, as CI does. |
 | `npm run tauri build`                        | Build the release app and its NSIS and MSI installers.                             |
 
 Backend checks run from `apps/purepoint-windows/src-tauri`: `cargo fmt -- --check`, `cargo clippy --all-targets` and `cargo test`.
 
 CI runs all of these in `.github/workflows/windows-app.yml`.
+
+## End-to-end tests
+
+`npm run e2e` (`ui/e2e/run.mjs`) drives the real app with WebdriverIO through [`tauri-driver`](https://v2.tauri.app/develop/tests/webdriver/) and `msedgedriver`:
+
+1. `ui/e2e/setup-drivers.ps1` downloads the `msedgedriver` matching the installed WebView2 runtime and runs `cargo install tauri-driver --locked` into `.e2e-tools/` (gitignored; reused on later runs).
+2. It builds `pu.exe` and `pu-engine.exe` at the repository root and the debug app (`tauri build --debug --no-bundle`) when they are missing (`PU_E2E_REBUILD=1` rebuilds the app), then stages a copy of the app with `pu.exe`, `pu-engine.exe` and the plugin beside it, as the installer lays them out, in a temp run folder.
+3. Each spec gets a fixture (`ui/e2e/fixtures/daemon.ts`): a temp `HOME`/`USERPROFILE` with a git repository, `pu init`, a `pu-engine.exe` on that HOME's socket and a `terminal` agent from `pu spawn --root --agent terminal`. tauri-driver, and so the app, start with that environment, so the app talks to the fixture daemon's pipe and its startup installer installs into the temp HOME. `PU_INSTALLER_SANDBOX=1` (honored by debug builds only) keeps the installer off the registry `PATH` and away from `claude`, and `WEBVIEW2_USER_DATA_FOLDER` keeps the WebView2 profile out of `%LOCALAPPDATA%`.
+4. Every test saves a screenshot, and each spec its `pu-engine.log` and `tauri-driver.log`, to `ui/e2e/artifacts/` (gitignored), which CI uploads. Afterwards the run kills anything it started that is still alive and deletes the temp folder (`PU_E2E_KEEP=1` keeps it).
+
+Specs live in `ui/e2e/specs/*.e2e.ts`; `npm run e2e -- --spec ui/e2e/specs/smoke.e2e.ts` runs one.
 
 ## Protocol types
 

@@ -16,7 +16,7 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "gen:protocol": "node scripts/gen-protocol.mjs",
-    "e2e": "node -e \"console.log('WIN-5.7: end-to-end tests are not wired up yet')\"",
+    "e2e": "node ui/e2e/run.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -36,6 +36,12 @@
     "@types/react": "^19.3.3",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
+    "@wdio/cli": "~10.2.0",
+    "@wdio/globals": "~10.2.0",
+    "@wdio/local-runner": "~10.2.0",
+    "@wdio/mocha-framework": "~10.2.0",
+    "@wdio/spec-reporter": "~10.2.0",
+    "@wdio/types": "~10.2.0",
     "eslint": "^10.15.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.14.0",

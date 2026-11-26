@@ -112,8 +112,8 @@ impl InstallerService {
         }
     }
 
-    /// Run the install with the real registry and `claude`, then restart the daemon if its
-    /// binary was replaced while running. `restart` is the daemon lifecycle's restart.
+    /// Run the install with the real registry and `claude` (unless [`SANDBOX_ENV`] is set),
+    /// then restart the daemon if its binary was replaced while running. `restart` is the daemon lifecycle's restart.
     pub async fn run<F, Fut>(&self, restart: F) -> InstallerStatus
     where
         F: FnOnce() -> Fut,
@@ -128,7 +128,17 @@ impl InstallerService {
             return status;
         };
         let sources = self.sources.clone();
+        let sandboxed = sandboxed();
         self.run_with(restart, move || {
+            if sandboxed {
+                return Installer {
+                    home,
+                    sources,
+                    env: &user_path::MemoryEnvironment::default(),
+                    claude: &NoClaude,
+                }
+                .run();
+            }
             Installer {
                 home: home.clone(),
                 sources,
@@ -168,6 +178,27 @@ impl InstallerService {
         };
         self.set_status(status.clone());
         status
+    }
+}
+
+/// Set by the end-to-end tests (WIN-5.7): the install still targets `HOME`, but leaves the
+/// user `PATH` in the registry alone and never runs `claude`. Debug builds only.
+pub const SANDBOX_ENV: &str = "PU_INSTALLER_SANDBOX";
+
+fn sandboxed() -> bool {
+    cfg!(debug_assertions) && std::env::var_os(SANDBOX_ENV).is_some_and(|v| v == "1")
+}
+
+/// No `claude` to register with (the sandboxed install).
+struct NoClaude;
+
+impl cli::ClaudeCli for NoClaude {
+    fn find(&self) -> Option<PathBuf> {
+        None
+    }
+
+    fn run(&self, _exe: &Path, _args: &[std::ffi::OsString]) -> std::io::Result<bool> {
+        Ok(false)
     }
 }
 

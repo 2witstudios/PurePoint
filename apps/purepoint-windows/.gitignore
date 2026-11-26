@@ -1,2 +1,4 @@
 node_modules/
 dist/
+.e2e-tools/
+ui/e2e/artifacts/
