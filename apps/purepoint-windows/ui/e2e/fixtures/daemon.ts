@@ -8,7 +8,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, closeSync, realpathSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { killTree, waitForExit } from './processes.ts';
@@ -42,6 +42,19 @@ export class DaemonFixture {
     this.projectRoot = join(this.home, projectName);
     this.socket = join(this.home, '.pu', 'daemon.sock');
     this.daemonLog = join(root, 'pu-engine.log');
+  }
+
+  /**
+   * The fixture of the running spec, for specs that drive the daemon or the repository
+   * themselves: wdio.conf.ts creates it in `beforeSession` and exports its HOME and project.
+   */
+  static current(): DaemonFixture {
+    const home = process.env.PU_E2E_HOME;
+    const projectRoot = process.env.PU_E2E_PROJECT_ROOT;
+    if (home === undefined || projectRoot === undefined) {
+      throw new Error('PU_E2E_HOME and PU_E2E_PROJECT_ROOT are not set');
+    }
+    return new DaemonFixture(dirname(home), basename(projectRoot));
   }
 
   /** Make the temp HOME and the git repository; nothing runs yet. */
@@ -91,8 +104,13 @@ export class DaemonFixture {
     };
   }
 
-  private async git(...args: string[]): Promise<CommandResult> {
-    return run('git', args, { cwd: this.projectRoot, env: this.env, windowsHide: true });
+  /** Run git in the project, or in `cwd` (a worktree). */
+  async git(...args: string[]): Promise<CommandResult> {
+    return this.gitIn(this.projectRoot, ...args);
+  }
+
+  async gitIn(cwd: string, ...args: string[]): Promise<CommandResult> {
+    return run('git', args, { cwd, env: this.env, windowsHide: true });
   }
 
   /** Run the workspace-built `pu.exe` against this fixture's daemon. */
@@ -163,6 +181,14 @@ export class DaemonFixture {
       ...(command === undefined ? [] : ['--command', command]),
       '--json',
     ]);
+    const match = /"(?:agent_id|id)"\s*:\s*"([^"]+)"/.exec(stdout);
+    if (!match?.[1]) throw new Error(`pu spawn printed no agent id: ${stdout}`);
+    return match[1];
+  }
+
+  /** Spawn a `terminal` agent in a new worktree called `name`; resolves its agent ID. */
+  async spawnWorktreeTerminal(name: string): Promise<string> {
+    const { stdout } = await this.pu(['spawn', '--agent', 'terminal', '--name', name, '--json']);
     const match = /"(?:agent_id|id)"\s*:\s*"([^"]+)"/.exec(stdout);
     if (!match?.[1]) throw new Error(`pu spawn printed no agent id: ${stdout}`);
     return match[1];

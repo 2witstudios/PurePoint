@@ -180,21 +180,21 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Detail/CoreTextBodyView+iOS.swift` | 290 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Detail/CoreTextLayout+iOS.swift` | 252 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Detail/DetailView.swift` | 104 | `ui/src/views/detail/DetailView.tsx` | WIN-7.1 | ported | — |
-| `Views/Detail/DiffCardView.swift` | 202 | `ui/src/views/detail/DiffCardView.tsx` | WIN-8.3 | todo | — |
+| `Views/Detail/DiffCardView.swift` | 202 | `ui/src/views/diff/DiffCardView.tsx`, `ui/src/views/diff/reviewPageWindow.ts` | WIN-8.3 | ported | — |
 | `Views/Detail/DiffContentNSView+iOS.swift` | 75 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Detail/DiffContentNSView.swift` | 105 | `ui/src/views/detail/DiffContentNSView.tsx` | WIN-8.3 | todo | — |
-| `Views/Detail/DiffListView.swift` | 115 | `ui/src/views/detail/DiffListView.tsx` | WIN-8.3 | todo | — |
-| `Views/Detail/DiffTextRendering.swift` | 190 | `ui/src/views/detail/DiffTextRendering.tsx` | WIN-8.3 | todo | — |
+| `Views/Detail/DiffContentNSView.swift` | 105 | `ui/src/views/diff/DiffContentView.tsx`, `ui/src/views/diff/diffLayout.ts` | WIN-8.3 | ported | — |
+| `Views/Detail/DiffListView.swift` | 115 | `ui/src/views/diff/DiffListView.tsx` | WIN-8.3 | ported | — |
+| `Views/Detail/DiffTextRendering.swift` | 190 | `ui/src/views/diff/diffTextRendering.ts` | WIN-8.3 | ported | — |
 | `Views/Detail/InlineCodeView+iOS.swift` | 80 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Detail/InlineCodeView.swift` | 121 | `ui/src/views/detail/InlineCodeView.tsx` | WIN-8.3 | todo | — |
-| `Views/Detail/PRRowView.swift` | 132 | `ui/src/views/detail/PRRowView.tsx` | WIN-8.3 | todo | — |
-| `Views/Detail/ProjectDetailView.swift` | 105 | `ui/src/views/detail/ProjectDetailView.tsx` | WIN-8.2 | todo | — |
-| `Views/Detail/ReviewChangesView.swift` | 95 | `ui/src/views/detail/ReviewChangesView.tsx` | WIN-8.3 | todo | — |
-| `Views/Detail/RootCheckoutDetailView.swift` | 246 | `ui/src/views/detail/RootCheckoutDetailView.tsx` | WIN-8.2 | todo | — |
-| `Views/Detail/WorkspaceFilesLayout.swift` | 80 | `ui/src/views/detail/WorkspaceFilesLayout.tsx` | WIN-8.2 | todo | — |
-| `Views/Detail/WorkspaceFilesSidebar.swift` | 268 | `ui/src/views/detail/WorkspaceFilesSidebar.tsx` | WIN-8.2 | todo | — |
+| `Views/Detail/InlineCodeView.swift` | 121 | `ui/src/views/diff/InlineCodeView.tsx` | WIN-8.3 | ported | — |
+| `Views/Detail/PRRowView.swift` | 132 | `ui/src/views/diff/PRRowView.tsx` | WIN-8.3 | ported | — |
+| `Views/Detail/ProjectDetailView.swift` | 105 | `ui/src/views/detail/ProjectDetailView.tsx` | WIN-8.2 | ported | — |
+| `Views/Detail/ReviewChangesView.swift` | 95 | `ui/src/views/diff/ReviewChangesView.tsx` | WIN-8.3 | ported | — |
+| `Views/Detail/RootCheckoutDetailView.swift` | 246 | `ui/src/views/detail/RootCheckoutDetailView.tsx` | WIN-8.2 | ported | — |
+| `Views/Detail/WorkspaceFilesLayout.swift` | 80 | `ui/src/views/detail/WorkspaceFilesLayout.tsx` | WIN-8.2 | ported | — |
+| `Views/Detail/WorkspaceFilesSidebar.swift` | 268 | `ui/src/views/detail/WorkspaceFilesSidebar.tsx` | WIN-8.2 | ported | — |
 | `Views/Detail/WorkspaceFilesSplit+iOS.swift` | 125 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Detail/WorktreeDetailView.swift` | 285 | `ui/src/views/detail/WorktreeDetailView.tsx` | WIN-8.2 | todo | — |
+| `Views/Detail/WorktreeDetailView.swift` | 285 | `ui/src/views/detail/WorktreeDetailView.tsx` | WIN-8.2 | ported | — |
 | `Views/Editor/EditorNSView+iOS.swift` | 138 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Editor/EditorNSView.swift` | 134 | `ui/src/views/editor/EditorNSView.tsx` | WIN-8.5 | todo | — |
 | `Views/Editor/EditorNoticeBanners.swift` | 54 | `ui/src/views/editor/EditorNoticeBanners.tsx` | WIN-8.5 | todo | — |
@@ -298,7 +298,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `DaemonClientParseTests.swift` | all | `ui/src/services/daemonConnection.test.ts` | WIN-6.0 | ported | The attach request case is asserted by `src-tauri/src/attach/session_tests.rs`; the three AppKit `ScrollableTerminal` cases are `it.todo` for the terminal view leaf |
 | `DaemonTransportTests.swift` | all | `ui/src/services/daemonConnection.test.ts` | WIN-6.0 | ported | Platform-neutral cases only (`sendBlocking` as `send`); Unix-socket and macOS endpoint cases are the named-pipe tests in `src-tauri/src/daemon/client.rs`; stream cases in `src-tauri/src/subscriptions/tests.rs` and `src-tauri/src/attach/session_tests.rs` |
 | `DaemonWorkspaceServiceTests.swift` | all | `ui/src/services/workspaceService.test.ts` | WIN-6.0 | ported | — |
-| `DiffLayoutTests.swift` | all | `ui/src/views/detail/diffLayout.test.ts` | WIN-8.3 | todo | — |
+| `DiffLayoutTests.swift` | all | `ui/src/views/diff/diffLayout.test.ts` | WIN-8.3 | ported | — |
 | `DiffRenderingIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `DraggableSplitTests.swift` | all | `ui/src/model/paneSplit.test.ts` | WIN-6.2 | ported | — |
 | `EditorIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |

@@ -1,0 +1,145 @@
+// Port of apps/purepoint-macos/purepoint-macos/Views/Detail/WorktreeDetailView.swift (WIN-8.2).
+//
+// A worktree: its header (name, branch, file tree / Files / Channel / changes / Refresh), the
+// file tree on the left, the review changes or the open file in the middle, and the project
+// channel on the right. DiffState loads for the worktree and is stopped when the screen goes.
+//
+// Differences from Swift, until their leaves land: the file tree is FileTreeSidebarView (WIN-8.4),
+// the editor and its banners (current file breadcrumb, external change, save error) are
+// EditorState and EditorContentRepresentable (WIN-8.5), and the channel is ProjectChannelView
+// (WIN-8.10). Until then the editor shows its empty state, "Select a file to edit".
+import { useState } from 'react';
+import type { WorktreeModel } from '../../model/workspaceModel.ts';
+import type { DiffState } from '../../state/diffState.ts';
+import type { ProjectState } from '../../state/projectState.ts';
+import { Icon } from '../../theme/Icon.tsx';
+import { ChangesContent } from './ChangesContent.tsx';
+import {
+  EditorPlaceholder,
+  FileTreeSidebarPlaceholder,
+  ScreenPlaceholder,
+} from './placeholders.tsx';
+import { useDiffState } from './useDiffState.ts';
+import './detail.css';
+
+export interface WorktreeDetailViewProps {
+  worktree: WorktreeModel;
+  project: ProjectState | null;
+  /** Tests pass a DiffState over a scripted git service. */
+  createDiffState?: () => DiffState;
+}
+
+export function WorktreeDetailView({
+  worktree,
+  project,
+  createDiffState,
+}: WorktreeDetailViewProps) {
+  const diffState = useDiffState(
+    {
+      path: worktree.path,
+      branch: worktree.branch,
+      baseBranch: worktree.baseBranch,
+      machineId: project?.machineId ?? null,
+    },
+    createDiffState,
+  );
+  const [showChannel, setShowChannel] = useState(false);
+  const [showFileTree, setShowFileTree] = useState(false);
+  // Swift `EditorState.showChanges` starts true.
+  const [showChanges, setShowChanges] = useState(true);
+
+  return (
+    <div className="detail-screen" data-view="WorktreeDetailView">
+      <div className="detail-header">
+        {!showFileTree && (
+          <button
+            type="button"
+            className="detail-icon-button"
+            aria-label="Show file tree"
+            title="Show file tree"
+            onClick={() => {
+              setShowFileTree(true);
+              setShowChanges(false);
+            }}
+          >
+            <Icon name="sidebar.left" size={14} />
+          </button>
+        )}
+        <Icon name="arrow.triangle.branch" size={14} className="detail-header-icon" />
+        <span className="detail-title">{worktree.name}</span>
+        <span className="detail-branch-chip">{worktree.branch}</span>
+        <span className="detail-spacer" />
+        <button
+          type="button"
+          className="detail-button"
+          onClick={() => {
+            const next = !showFileTree;
+            setShowFileTree(next);
+            setShowChanges(!next);
+          }}
+        >
+          <Icon name="doc.text" size={13} />
+          Files
+        </button>
+        {project !== null && (
+          <button
+            type="button"
+            className="detail-button"
+            aria-pressed={showChannel}
+            onClick={() => {
+              setShowChannel((shown) => !shown);
+            }}
+          >
+            <Icon name="bubble.left.and.bubble.right" size={13} />
+            Channel
+          </button>
+        )}
+        <button
+          type="button"
+          className="detail-icon-button"
+          aria-label="Toggle changes view"
+          title="Toggle changes view"
+          aria-pressed={showChanges}
+          onClick={() => {
+            setShowChanges((shown) => !shown);
+          }}
+        >
+          <Icon name="doc.badge.plus" size={13} />
+        </button>
+        <button
+          type="button"
+          className="detail-icon-button"
+          aria-label="Refresh"
+          title="Refresh"
+          onClick={() => {
+            // Swift also refreshes FileTreeState (WIN-8.4).
+            diffState.refresh();
+          }}
+        >
+          <Icon name="arrow.clockwise" size={13} />
+        </button>
+      </div>
+      <div className="detail-body">
+        {showFileTree && (
+          <FileTreeSidebarPlaceholder
+            onHide={() => {
+              setShowFileTree(false);
+            }}
+          />
+        )}
+        <div className="detail-content">
+          {showChanges ? <ChangesContent state={diffState} /> : <EditorPlaceholder />}
+        </div>
+        {showChannel && project !== null && (
+          <div className="detail-channel">
+            <ScreenPlaceholder
+              icon="bubble.left.and.bubble.right"
+              title="Project channel"
+              view="ProjectChannelView"
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
