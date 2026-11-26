@@ -24,6 +24,7 @@ qrcode = { version = "0.14", default-features = false }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Console",
+    "Win32_System_Registry",
     "Win32_System_Threading",
 ] }
 

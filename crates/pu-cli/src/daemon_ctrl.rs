@@ -358,7 +358,7 @@ async fn wait_for_healthy(socket: &Path) -> Result<Option<()>, CliError> {
     }
 }
 
-fn spawn_detached_daemon(socket: &Path) -> Result<(), CliError> {
+pub(crate) fn spawn_detached_daemon(socket: &Path) -> Result<(), CliError> {
     let binary = find_daemon_binary().map_err(|reasons| CliError::Other(format!(
         "no usable pu-engine ({reasons}) — install PurePoint (see docs/guide/linux-server.md), `cargo install --path crates/pu-engine`, or set PU_ENGINE_PATH"
     )))?;
