@@ -190,27 +190,76 @@ impl Connector for LocalConnector {
     }
 }
 
+/// The longest reply line read. The largest reply the daemon sends is `git_exec` with its
+/// 8 MiB stdout and stderr caps, base64 (about 22 MiB of JSON); a longer line means a broken
+/// or hostile peer (a machine's daemon is reached over ssh), and is refused instead of
+/// growing the buffer without bound.
+pub const MAX_REPLY_LINE: usize = 32 * 1024 * 1024;
+
+/// A line buffer that grew past this is released after its line, so one large reply does
+/// not pin its memory for the life of a stream.
+const KEEP_LINE_CAPACITY: usize = 1024 * 1024;
+
 /// Reads newline-delimited replies off a long-lived connection (`DaemonLineReader`).
 pub struct LineReader {
     reader: BufReader<BoxRead>,
     line: Vec<u8>,
+    max_line: usize,
 }
 
 impl LineReader {
     pub fn new(read: BoxRead) -> Self {
+        Self::with_max_line(read, MAX_REPLY_LINE)
+    }
+
+    /// A reader that refuses lines longer than `max_line` bytes.
+    pub fn with_max_line(read: BoxRead, max_line: usize) -> Self {
         Self {
             reader: BufReader::new(read),
             line: Vec::new(),
+            max_line,
         }
     }
 
+    /// The line buffer's capacity (tests).
+    pub fn buffer_capacity(&self) -> usize {
+        self.line.capacity()
+    }
+
     /// The next line without its newline, or `None` once the daemon closes the stream.
-    /// A final line without a newline is discarded, as on the Mac.
+    /// A final line without a newline is discarded, as on the Mac. A line longer than the
+    /// limit is an `InvalidData` error; the stream cannot be read further.
     pub async fn next_line(&mut self) -> io::Result<Option<&[u8]>> {
-        self.line.clear();
-        let read = self.reader.read_until(b'\n', &mut self.line).await?;
-        if read == 0 || self.line.last() != Some(&b'\n') {
-            return Ok(None);
+        if self.line.capacity() > KEEP_LINE_CAPACITY {
+            self.line = Vec::new();
+        } else {
+            self.line.clear();
+        }
+        loop {
+            let available = self.reader.fill_buf().await?;
+            if available.is_empty() {
+                // Closed, possibly mid-line.
+                return Ok(None);
+            }
+            let (taken, complete) = match available.iter().position(|&b| b == b'\n') {
+                Some(end) => (end + 1, true),
+                None => (available.len(), false),
+            };
+            // The newline (and a CR before it) does not count against the limit.
+            if self.line.len() + taken > self.max_line + 2 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "the daemon sent a reply longer than {} bytes",
+                        self.max_line
+                    ),
+                ));
+            }
+            self.line.extend_from_slice(&available[..taken]);
+            self.reader.consume(taken);
+            if complete {
+                break;
+            }
         }
         self.line.pop();
         if self.line.last() == Some(&b'\r') {
@@ -512,5 +561,50 @@ pub(crate) mod tests {
         assert_eq!(timeout_for(&input(true)), DELIVERY_TIMEOUT);
         assert_eq!(timeout_for(&input(false)), REQUEST_TIMEOUT);
         assert_eq!(timeout_for(&Request::Health), REQUEST_TIMEOUT);
+    }
+
+    fn reader_over(bytes: Vec<u8>, max_line: usize) -> LineReader {
+        LineReader::with_max_line(Box::new(std::io::Cursor::new(bytes)), max_line)
+    }
+
+    #[tokio::test]
+    async fn given_a_line_over_the_limit_should_refuse_it() {
+        let mut bytes = b"short\r\n".to_vec();
+        bytes.extend(std::iter::repeat_n(b'x', 100));
+        bytes.extend(b"\nnever\n");
+        let mut reader = reader_over(bytes, 64);
+        assert_eq!(reader.next_line().await.unwrap(), Some(&b"short"[..]));
+        let error = reader.next_line().await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn given_a_line_at_the_limit_should_read_it() {
+        let mut bytes = vec![b'y'; 64];
+        bytes.extend(b"\r\n");
+        let mut reader = reader_over(bytes, 64);
+        assert_eq!(reader.next_line().await.unwrap().map(<[u8]>::len), Some(64));
+        assert_eq!(reader.next_line().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn given_a_large_line_should_release_its_buffer_after() {
+        let mut bytes = vec![b'z'; 3 * 1024 * 1024];
+        bytes.extend(b"\nsmall\n");
+        let mut reader = reader_over(bytes, MAX_REPLY_LINE);
+        assert_eq!(
+            reader.next_line().await.unwrap().map(<[u8]>::len),
+            Some(3 * 1024 * 1024)
+        );
+        assert!(reader.buffer_capacity() > KEEP_LINE_CAPACITY);
+        assert_eq!(reader.next_line().await.unwrap(), Some(&b"small"[..]));
+        assert!(reader.buffer_capacity() <= KEEP_LINE_CAPACITY);
+    }
+
+    #[tokio::test]
+    async fn given_a_final_line_without_newline_should_discard_it() {
+        let mut reader = reader_over(b"one\ntwo".to_vec(), 64);
+        assert_eq!(reader.next_line().await.unwrap(), Some(&b"one"[..]));
+        assert_eq!(reader.next_line().await.unwrap(), None);
     }
 }
