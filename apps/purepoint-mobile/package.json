@@ -24,5 +24,8 @@
     "@types/ws": "8.18.2",
     "prettier": "3.9.10",
     "typescript": "7.0.2"
+  },
+  "overrides": {
+    "undici": "^8.13.1"
   }
 }
