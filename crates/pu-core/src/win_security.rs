@@ -280,6 +280,129 @@ pub fn check_private(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// The TrustedInstaller service SID, which owns OS-installed files.
+const TRUSTED_INSTALLER_SID: &str =
+    "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+const INHERIT_ONLY_ACE: u8 = 0x08;
+/// Rights that let a principal change what an executable runs: its data, its
+/// DACL or owner, or deleting it to put another file in its place.
+const BINARY_WRITE_RIGHTS: u32 = 0x0002 // FILE_WRITE_DATA
+    | 0x0004 // FILE_APPEND_DATA
+    | 0x0001_0000 // DELETE
+    | 0x0004_0000 // WRITE_DAC
+    | 0x0008_0000 // WRITE_OWNER
+    | 0x1000_0000 // GENERIC_ALL
+    | 0x4000_0000; // GENERIC_WRITE
+
+/// # Safety
+/// `sid` must point to a valid SID.
+unsafe fn sid_string(sid: PSID) -> Option<String> {
+    let mut out: *mut u16 = null_mut();
+    // SAFETY: valid SID; out receives a LocalAlloc'd string we free.
+    if unsafe { ConvertSidToStringSidW(sid, &mut out) } == 0 {
+        return None;
+    }
+    let s = unsafe { wide_ptr_to_string(out) };
+    unsafe { LocalFree(out as _) };
+    Some(s)
+}
+
+/// # Safety
+/// `sid` must point to a valid SID.
+unsafe fn is_binary_trustee(user: &OwnedSid, sid: PSID) -> bool {
+    // SAFETY: valid SIDs.
+    unsafe {
+        user.equals(sid)
+            || is_system_or_admins(sid)
+            || sid_string(sid).is_some_and(|s| s == TRUSTED_INSTALLER_SID)
+    }
+}
+
+/// Whether `path` is an executable this user may start without handing
+/// control to someone else: owned by this user, SYSTEM, Administrators or
+/// TrustedInstaller, and with no allow entry that grants another principal
+/// a right to modify or replace it. Read and execute grants to others
+/// (e.g. `Users` on an installed program) are fine.
+pub fn check_trusted_binary(path: &Path) -> Result<(), &'static str> {
+    let meta = std::fs::metadata(path).map_err(|_| "not found")?;
+    if !meta.is_file() {
+        return Err("not a file");
+    }
+    if !path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+    {
+        return Err("not an .exe");
+    }
+    let user = current_user_sid().map_err(|_| "cannot read the current user")?;
+    let name = wide(path.as_os_str());
+    let mut owner: PSID = null_mut();
+    let mut dacl: *mut ACL = null_mut();
+    let mut psd: PSECURITY_DESCRIPTOR = null_mut();
+    // SAFETY: out-pointers are valid; psd is freed by Sd.
+    let rc = unsafe {
+        GetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut psd,
+        )
+    };
+    if rc != 0 {
+        return Err("cannot read its security descriptor");
+    }
+    let _sd = Sd(psd);
+    // SAFETY: owner lives in psd.
+    if owner.is_null() || !unsafe { is_binary_trustee(&user, owner) } {
+        return Err("owned by another user");
+    }
+    if dacl.is_null() {
+        return Err("writable by other users (no DACL)");
+    }
+    let mut info = ACL_SIZE_INFORMATION {
+        AceCount: 0,
+        AclBytesInUse: 0,
+        AclBytesFree: 0,
+    };
+    // SAFETY: dacl is valid; info sized correctly.
+    if unsafe {
+        GetAclInformation(
+            dacl,
+            &mut info as *mut _ as _,
+            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+    {
+        return Err("cannot read its DACL");
+    }
+    for i in 0..info.AceCount {
+        let mut ace: *mut core::ffi::c_void = null_mut();
+        // SAFETY: i < AceCount.
+        if unsafe { GetAce(dacl, i, &mut ace) } == 0 {
+            return Err("cannot read its DACL");
+        }
+        let header = ace as *const ACE_HEADER;
+        // SAFETY: every ACE starts with an ACE_HEADER.
+        let (ace_type, flags) = unsafe { ((*header).AceType, (*header).AceFlags) };
+        if ace_type != ACCESS_ALLOWED_ACE_TYPE || flags & INHERIT_ONLY_ACE != 0 {
+            continue;
+        }
+        let allowed = ace as *const ACCESS_ALLOWED_ACE;
+        // SAFETY: allow ACEs carry their mask and SID at SidStart.
+        let (mask, sid) = unsafe { ((*allowed).Mask, &(*allowed).SidStart as *const u32 as PSID) };
+        // SAFETY: sid points into the ACE inside the live DACL.
+        if mask & BINARY_WRITE_RIGHTS != 0 && !unsafe { is_binary_trustee(&user, sid) } {
+            return Err("writable by other users");
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +418,58 @@ mod tests {
         let sid = current_user_sid().unwrap().to_string_sid().unwrap();
         SecurityDescriptor::from_sddl(&private_sddl(&sid, true)).unwrap();
         SecurityDescriptor::from_sddl(&private_sddl(&sid, false)).unwrap();
+    }
+
+    fn exe(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join("pu-engine.exe");
+        std::fs::write(&path, b"MZ").unwrap();
+        set_private_dacl(&path, false).unwrap();
+        path
+    }
+
+    #[test]
+    fn given_private_exe_should_be_trusted() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(check_trusted_binary(&exe(tmp.path())), Ok(()));
+    }
+
+    #[test]
+    fn given_exe_others_can_write_should_not_be_trusted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = exe(tmp.path());
+        for trustee in ["WD", "BU", "AU"] {
+            grant_for_test(&path, trustee).unwrap();
+            assert_eq!(
+                check_trusted_binary(&path),
+                Err("writable by other users"),
+                "{trustee}"
+            );
+        }
+    }
+
+    #[test]
+    fn given_exe_others_can_only_read_should_be_trusted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = exe(tmp.path());
+        let user = current_user_sid().unwrap().to_string_sid().unwrap();
+        let sddl = format!(
+            "{}(A;;GRGX;;;BU)(A;;FA;;;{TRUSTED_INSTALLER_SID})",
+            private_sddl(&user, false)
+        );
+        apply_sddl(&path, &sddl).unwrap();
+        assert_eq!(check_trusted_binary(&path), Ok(()));
+    }
+
+    #[test]
+    fn given_missing_or_non_exe_should_not_be_trusted() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_trusted_binary(&tmp.path().join("pu-engine.exe")),
+            Err("not found")
+        );
+        let script = tmp.path().join("pu-engine.cmd");
+        std::fs::write(&script, b"@echo off").unwrap();
+        assert_eq!(check_trusted_binary(&script), Err("not an .exe"));
+        assert_eq!(check_trusted_binary(tmp.path()), Err("not a file"));
     }
 }
