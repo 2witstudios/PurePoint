@@ -1,5 +1,7 @@
 # Swift App Inventory
 
+> **Out of date.** This inventory covers 121 of the 256 Swift files in `apps/purepoint-macos/purepoint-macos/` (at `b275081`). For the complete file list, with each file's Windows counterpart, see the [Windows parity matrix](windows-parity-matrix.md), which `scripts/check-parity-matrix.mjs` keeps in step with the source.
+
 Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 
 ## App Lifecycle
