@@ -5,8 +5,8 @@
 //
 // Differences from Swift:
 // - The command palette is WIN-7.5: New calls the named `openCommandPalette` stub with the
-//   project it would open for. Open runs the menu's pending Open Project command (the folder
-//   picker needs the dialog plugin).
+//   project it would open for. Open runs the menu's Open Project command (the folder picker,
+//   `appLifecycleHooks.openProject`, WIN-8.15).
 // - Add Machine (the `desktopcomputer` button and `AddMachineSheet`) arrives with the machines
 //   port (WIN-8.14).
 
@@ -17,7 +17,8 @@ import { useKeyBindingStore } from '../../state/keyBindingStore.ts';
 import { Icon } from '../../theme/Icon.tsx';
 import { isPointGuard } from '../../model/workspace.ts';
 import { useAppState } from '../shell/appContext.ts';
-import { PENDING_ACTIONS, openCommandPalette } from '../shell/appCommands.ts';
+import { openCommandPalette } from '../shell/appCommands.ts';
+import { appLifecycleHooks } from '../../services/appLifecycle.ts';
 
 /** The project New opens the palette for (Swift `activeProject`). */
 export function footerActiveProjectId(
@@ -101,7 +102,7 @@ export function SidebarFooter({
         className="sidebar-footer-button"
         aria-label="Open"
         onClick={() => {
-          PENDING_ACTIONS.openProject();
+          appLifecycleHooks.openProject(app);
         }}
       >
         <span>Open</span>

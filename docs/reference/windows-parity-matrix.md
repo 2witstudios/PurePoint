@@ -50,7 +50,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/WorkspaceModel.swift` | 73 | `ui/src/model/workspaceModel.ts` | WIN-6.1 | ported | — |
 | `Platform/AppActivity+iOS.swift` | 97 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Platform/AppKitShims+iOS.swift` | 81 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Platform/AppLifecycleHooks.swift` | 27 | `ui/src/services/appLifecycle.ts` | WIN-8.15 | todo | — |
+| `Platform/AppLifecycleHooks.swift` | 27 | `ui/src/services/appLifecycle.ts` (Open Project defaults to the folder picker, `ui/src/services/dialog.ts`; reveal and open-in-default-app are `ui/src/services/opener.ts`; `scenePhaseChanged` and `presentPalette` are iPad-only) | WIN-8.15 | ported | — |
 | `Platform/HSplitView+iOS.swift` | 25 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Platform/LocalFilePresenter+iOS.swift` | 113 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Platform/MacControlStyles+iOS.swift` | 299 | — | — | excluded | `+iOS` file (iPad build only) |

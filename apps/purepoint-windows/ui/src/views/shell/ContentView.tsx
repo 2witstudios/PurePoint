@@ -27,6 +27,7 @@ import { SidebarView } from '../sidebar/SidebarView.tsx';
 import { useAgentSelection } from '../terminal/agentSelection.ts';
 import { useAppState } from './appContext.ts';
 import { type AppCommand, createAppActions } from './appCommands.ts';
+import { appLifecycleHooks } from '../../services/appLifecycle.ts';
 import { MenuBar } from './MenuBar.tsx';
 import { ShellBanners } from './ShellBanners.tsx';
 import {
@@ -265,6 +266,9 @@ export function ContentView() {
         },
         showSettings: () => {
           app.setShowSettings(true);
+        },
+        openProject: () => {
+          appLifecycleHooks.openProject(app);
         },
         focusSidebar: () => {
           const visibility = useSidebarVisibilityStore.getState();

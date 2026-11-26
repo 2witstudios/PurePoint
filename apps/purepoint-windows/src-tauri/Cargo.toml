@@ -38,6 +38,8 @@ notify = "8.2"
 uuid = { version = "1", features = ["v4"] }
 # Ctrl+click on a terminal link opens it outside the app (WIN-7.3).
 tauri-plugin-opener = "~2.5"
+# Open Project's folder picker (WIN-8.15, REQ-WINAPP-074); 2.8 needs Rust 1.90.
+tauri-plugin-dialog = "~2.7"
 # Agent signal toasts (WIN-7.7, REQ-WINAPP-078); 2.4 builds on Tauri 2.11 and Rust 1.89.
 tauri-plugin-notification = "~2.4"
 # Point Guard runtime seal: SHA-256 of every bundled file (WIN-9.3); the version pu-core uses.

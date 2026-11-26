@@ -16,6 +16,7 @@ function deps(): AppActionDeps {
     selectNav: vi.fn(),
     toggleSidebar: vi.fn(),
     showSettings: vi.fn(),
+    openProject: vi.fn(),
     focusSidebar: vi.fn(),
     focusContent: vi.fn(),
     closeWindow: vi.fn(),
@@ -63,6 +64,8 @@ describe('app actions', () => {
     actions.focusContent();
     actions.focusSidebar();
     actions.exit();
+    actions.openProject();
+    expect(d.openProject).toHaveBeenCalledOnce();
     expect(d.selectNav).toHaveBeenCalledWith('agents');
     expect(d.toggleSidebar).toHaveBeenCalledWith('toggleWorkspaceSidebar');
     expect(d.showSettings).toHaveBeenCalledOnce();

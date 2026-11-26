@@ -34,6 +34,8 @@ pub fn run() {
     tauri::Builder::default()
         // Links from terminals and chat open in the user's browser (WIN-7.3).
         .plugin(tauri_plugin_opener::init())
+        // Open Project's folder picker (WIN-8.15).
+        .plugin(tauri_plugin_dialog::init())
         // Agent signal toasts (WIN-7.7).
         .plugin(tauri_plugin_notification::init())
         .manage(git::commands::GitState::default())
