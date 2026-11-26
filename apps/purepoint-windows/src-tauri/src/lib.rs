@@ -30,6 +30,8 @@ pub fn protocol_version() -> u32 {
 
 pub fn run() {
     tauri::Builder::default()
+        // Links from terminals and chat open in the user's browser (WIN-7.3).
+        .plugin(tauri_plugin_opener::init())
         .manage(git::commands::GitState::default())
         .manage(attach::AttachState::default())
         .invoke_handler(tauri::generate_handler![

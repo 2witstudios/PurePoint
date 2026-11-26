@@ -1,0 +1,86 @@
+/* Terminal panes (WIN-7.3): the pane fills its slot on the terminal background. */
+.terminal-pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--pp-terminal-background);
+}
+
+.terminal-pane-view {
+  position: absolute;
+  inset: 0;
+  /* SwiftTerm's inset from the pane edge. */
+  padding: 4px 0 0 6px;
+  box-sizing: border-box;
+}
+
+.terminal-surface {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.terminal-surface .xterm {
+  height: 100%;
+}
+
+.terminal-spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 2px solid var(--pp-terminal-ansi-8);
+  border-top-color: var(--pp-terminal-foreground);
+  border-radius: 50%;
+  animation: terminal-spin 0.8s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes terminal-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-spinner {
+    animation: none;
+  }
+}
+
+/* Interim multi-agent view until the pane grid (WIN-7.4). */
+.agent-terminals {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 1px;
+  background: var(--pp-terminal-ansi-0);
+}
+
+.agent-terminals > .terminal-pane {
+  display: flex;
+}
+
+.sidebar-agent-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-agent-list .sidebar-nav-row {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-agent-list .sidebar-nav-row[aria-pressed='true'] {
+  background: var(--control-pressed);
+}

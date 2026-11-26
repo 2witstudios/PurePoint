@@ -28,6 +28,8 @@ import { SIDEBAR_KEY, useSidebarVisibilityStore } from '../../state/sidebarVisib
 import { Icon } from '../../theme/Icon.tsx';
 import { runWindowAction } from '../../services/windowChrome.ts';
 import { DetailView, ScreenPlaceholder } from '../detail/DetailView.tsx';
+import { useAgentSelection } from '../terminal/agentSelection.ts';
+import { AgentListPlaceholder } from '../terminal/AgentTerminals.tsx';
 import { useAppState } from './appContext.ts';
 import { type AppCommand, createAppActions } from './appCommands.ts';
 import { MenuBar } from './MenuBar.tsx';
@@ -161,6 +163,7 @@ function SidebarPlaceholder({
         );
       })}
       <ProjectListPlaceholder />
+      <AgentListPlaceholder />
       <span className="sidebar-placeholder-view">SidebarView</span>
     </nav>
   );
@@ -262,6 +265,7 @@ export function ContentView() {
     (command: AppCommand) => {
       const actions = createAppActions({
         selectNav: (item) => {
+          useAgentSelection.getState().clear();
           setSelection(sidebarSelection.nav(item));
         },
         toggleSidebar: (action) => {
@@ -317,7 +321,13 @@ export function ContentView() {
         {sidebarShown && (
           <>
             <aside className="sidebar-column" ref={sidebarRef} tabIndex={-1}>
-              <SidebarPlaceholder selection={selection} onSelect={setSelection} />
+              <SidebarPlaceholder
+                selection={selection}
+                onSelect={(next) => {
+                  useAgentSelection.getState().clear();
+                  setSelection(next);
+                }}
+              />
             </aside>
             <SidebarResizer />
           </>
