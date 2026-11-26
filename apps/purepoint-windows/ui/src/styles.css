@@ -1,17 +1,17 @@
+/* App styles; colors, fonts and metrics come from theme/tokens.css (WIN-5.8). */
 :root {
-  color-scheme: light dark;
   --title-bar-height: 32px;
-  --surface: #ffffff;
-  --text: #1f1f1f;
   --control-hover: rgba(0, 0, 0, 0.06);
   --close-hover: #c42b1c;
-  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  font-family: var(--pp-font-ui);
+}
+
+:root[data-theme='dark'] {
+  --control-hover: rgba(255, 255, 255, 0.08);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --surface: #202020;
-    --text: #f3f3f3;
+  :root:not([data-theme='light']) {
     --control-hover: rgba(255, 255, 255, 0.08);
   }
 }
@@ -28,8 +28,8 @@ body,
 }
 
 body {
-  background: var(--surface);
-  color: var(--text);
+  background: var(--pp-app-background);
+  color: var(--pp-app-text);
   overflow: hidden;
   user-select: none;
 }

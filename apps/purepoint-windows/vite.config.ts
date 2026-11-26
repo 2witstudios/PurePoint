@@ -4,6 +4,8 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 const uiRoot = fileURLToPath(new URL('./ui', import.meta.url));
+// Tests read the macOS theme sources and docs/reference from outside the app (WIN-5.8).
+const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const outDir = fileURLToPath(new URL('./dist', import.meta.url));
 
 // Tauri loads the dev server from a fixed port and the production bundle from
@@ -16,6 +18,7 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     watch: { ignored: ['**/src-tauri/**'] },
+    ...(process.env.VITEST ? { fs: { allow: [repoRoot] } } : {}),
   },
   envPrefix: ['VITE_', 'TAURI_ENV_'],
   build: {
@@ -30,5 +33,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // Keep tokens.css real so tokens.test.ts can read it with ?raw (Vitest empties CSS by default).
+    css: { include: [/tokens.css/] },
   },
 });
