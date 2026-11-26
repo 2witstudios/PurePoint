@@ -79,6 +79,24 @@ impl WatcherState {
         guard.map_or(0, ReleaseGuard::restore)
     }
 
+    /// Stops every watcher and forgets every release (the page reloaded or its renderer
+    /// crashed, so nothing will restore them or unwatch). The watchers stop emitting before
+    /// this returns; their handles close on the blocking pool. Returns how many were stopped.
+    pub fn reset(&self) -> usize {
+        let stopped = self.0.watchers.stop_all();
+        self.releases().guards.clear();
+        let count = stopped.len();
+        if !stopped.is_empty() {
+            std::thread::spawn(move || stopped.join());
+        }
+        count
+    }
+
+    /// The release tokens still held.
+    pub fn pending_releases(&self) -> usize {
+        self.releases().guards.len()
+    }
+
     /// Forgets a release, leaving its watchers stopped; false for an unknown token.
     pub fn discard(&self, token: u64) -> bool {
         self.releases().guards.remove(&token).is_some()

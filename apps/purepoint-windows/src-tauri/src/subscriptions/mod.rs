@@ -466,6 +466,20 @@ impl Subscriptions {
         }
     }
 
+    /// Stops every project's subscriptions and the projects list (the page that started them
+    /// reloaded or its renderer crashed). Returns how many project subscriptions stopped.
+    pub fn stop_all(&self) -> usize {
+        let (projects, list) = {
+            let mut running = self.running();
+            let projects: Vec<_> = running.projects.drain().collect();
+            (projects, running.list.take())
+        };
+        if let Some(list) = list {
+            list.abort();
+        }
+        projects.len()
+    }
+
     /// Roots with running status and grid subscriptions.
     pub fn project_roots(&self) -> Vec<String> {
         let mut roots: Vec<String> = self.running().projects.keys().cloned().collect();

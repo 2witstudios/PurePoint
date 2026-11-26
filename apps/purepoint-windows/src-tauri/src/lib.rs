@@ -31,8 +31,37 @@ pub fn protocol_version() -> u32 {
     pu_core::protocol::PROTOCOL_VERSION
 }
 
+/// The main window's page started loading (a reload, or the renderer restarted after a crash):
+/// nothing on the old page reads its channels or will close what it opened, so the backend
+/// drops it all before the new page starts its own. Terminal sessions and chat sockets close,
+/// watchers stop (and release tokens are forgotten), and subscriptions stop. Also runs on the
+/// first load, when everything is still empty.
+fn reset_for_page_load<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    use tauri::Manager;
+    if let Some(attach) = app.try_state::<attach::AttachState>() {
+        attach.clear();
+    }
+    if let Some(sockets) = app.try_state::<pointguard::chat::ChatSockets>() {
+        sockets.clear();
+    }
+    if let Some(watchers) = app.try_state::<watchers::commands::WatcherState>() {
+        watchers.reset();
+    }
+    if let Some(subscriptions) = app.try_state::<subscriptions::Subscriptions>() {
+        subscriptions.stop_all();
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .on_page_load(|webview, payload| {
+            use tauri::Manager;
+            if webview.label() == MAIN_WINDOW
+                && payload.event() == tauri::webview::PageLoadEvent::Started
+            {
+                reset_for_page_load(webview.app_handle());
+            }
+        })
         // Links from terminals and chat open in the user's browser (WIN-7.3).
         .plugin(tauri_plugin_opener::init())
         // Open Project's folder picker (WIN-8.15).

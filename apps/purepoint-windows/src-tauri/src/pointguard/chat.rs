@@ -52,12 +52,14 @@ pub enum ChatSocketEvent {
 
 /// Where a socket's events go: the page's channel, or a test's recorder.
 pub trait ChatSink: Send + Sync + 'static {
-    fn event(&self, event: ChatSocketEvent);
+    /// False when the event could not be delivered (the page reloaded or its renderer
+    /// crashed): the socket then closes and leaves the table.
+    fn event(&self, event: ChatSocketEvent) -> bool;
 }
 
 impl ChatSink for Channel<ChatSocketEvent> {
-    fn event(&self, event: ChatSocketEvent) {
-        let _ = self.send(event);
+    fn event(&self, event: ChatSocketEvent) -> bool {
+        self.send(event).is_ok()
     }
 }
 
@@ -104,6 +106,19 @@ fn connect_error(error: WsError) -> String {
         WsError::Io(e) => format!("Could not reach Point Guard: {e}."),
         other => format!("Could not connect to Point Guard: {other}."),
     }
+}
+
+/// Close with 1001 (going away), as the Mac's `cancel(with: .goingAway)` does.
+async fn close_away<S>(write: &mut S)
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    let frame = CloseFrame {
+        code: CloseCode::Away,
+        reason: "".into(),
+    };
+    let _ = write.send(Message::Close(Some(frame))).await;
+    let _ = write.close().await;
 }
 
 /// One open chat socket.
@@ -158,18 +173,24 @@ impl ChatSocket {
                             }
                         }
                         Some(Outgoing::Close) | None => {
-                            let frame = CloseFrame { code: CloseCode::Away, reason: "".into() };
-                            let _ = write.send(Message::Close(Some(frame))).await;
-                            let _ = write.close().await;
+                            close_away(&mut write).await;
                             break;
                         }
                     },
                     record = read.next() => match record {
                         Some(Ok(Message::Text(text))) => {
-                            sink.event(ChatSocketEvent::Message { text: text.as_str().to_owned() });
+                            if !sink.event(ChatSocketEvent::Message { text: text.as_str().to_owned() }) {
+                                close_away(&mut write).await;
+                                break;
+                            }
                         }
                         Some(Ok(Message::Binary(bytes))) => match String::from_utf8(bytes.to_vec()) {
-                            Ok(text) => sink.event(ChatSocketEvent::Message { text }),
+                            Ok(text) => {
+                                if !sink.event(ChatSocketEvent::Message { text }) {
+                                    close_away(&mut write).await;
+                                    break;
+                                }
+                            }
                             Err(_) => {
                                 sink.event(ChatSocketEvent::Closed {
                                     code: None,
@@ -222,11 +243,18 @@ impl ChatSocket {
 #[derive(Default, Clone)]
 pub struct ChatSockets {
     next_id: Arc<AtomicU32>,
-    open: Arc<Mutex<HashMap<u32, ChatSocket>>>,
+    open: Arc<Mutex<Table>>,
+}
+
+#[derive(Default)]
+struct Table {
+    sockets: HashMap<u32, ChatSocket>,
+    /// Sockets whose pump ended before `open` could insert them.
+    ended: std::collections::HashSet<u32>,
 }
 
 impl ChatSockets {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u32, ChatSocket>> {
+    fn table(&self) -> std::sync::MutexGuard<'_, Table> {
         self.open.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -241,28 +269,43 @@ impl ChatSockets {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let table = self.clone();
         let socket = ChatSocket::connect(endpoint, secret, client_id, sink, move || {
-            table.lock().remove(&id);
+            let mut table = table.table();
+            if table.sockets.remove(&id).is_none() {
+                table.ended.insert(id);
+            }
         })
         .await?;
-        self.lock().insert(id, socket);
+        let mut table = self.table();
+        if !table.ended.remove(&id) {
+            table.sockets.insert(id, socket);
+        }
         Ok(id)
     }
 
     pub fn send(&self, id: u32, text: String) -> Result<(), String> {
-        match self.lock().get(&id) {
+        match self.table().sockets.get(&id) {
             Some(socket) => socket.send(text),
             None => Err("Connect to Point Guard before sending.".into()),
         }
     }
 
     pub fn close(&self, id: u32) {
-        if let Some(socket) = self.lock().remove(&id) {
+        if let Some(socket) = self.table().sockets.remove(&id) {
             socket.close();
         }
     }
 
+    /// Closes every socket (the page that opened them is gone). Returns how many.
+    pub fn clear(&self) -> usize {
+        let drained: Vec<ChatSocket> = self.table().sockets.drain().map(|(_, s)| s).collect();
+        for socket in &drained {
+            socket.close();
+        }
+        drained.len()
+    }
+
     pub fn len(&self) -> usize {
-        self.lock().len()
+        self.table().sockets.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -313,9 +356,29 @@ mod tests {
     struct Recorder(Mutex<Vec<ChatSocketEvent>>, tokio::sync::Notify);
 
     impl ChatSink for Recorder {
-        fn event(&self, event: ChatSocketEvent) {
+        fn event(&self, event: ChatSocketEvent) -> bool {
             self.0.lock().unwrap().push(event);
             self.1.notify_one();
+            true
+        }
+    }
+
+    /// The page is gone: nothing is delivered.
+    struct Gone(std::sync::atomic::AtomicUsize);
+
+    impl ChatSink for Gone {
+        fn event(&self, _: ChatSocketEvent) -> bool {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            false
+        }
+    }
+
+    async fn until_empty(sockets: &ChatSockets) {
+        for _ in 0..100 {
+            if sockets.is_empty() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 
@@ -508,5 +571,39 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(sockets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn given_a_failed_channel_send_should_close_going_away_and_leave_the_table() {
+        let (url, server) = bridge().await;
+        let sockets = ChatSockets::default();
+        let gone = Arc::new(Gone(std::sync::atomic::AtomicUsize::new(0)));
+        // The bridge's first record (the editor offer) cannot be delivered.
+        let id = sockets
+            .open(&url, SECRET, "desktop-1", gone.clone())
+            .await
+            .unwrap();
+        assert_eq!(server.await.unwrap(), Some(CloseCode::Away));
+        until_empty(&sockets).await;
+        assert!(sockets.is_empty());
+        assert!(sockets.send(id, "late".into()).is_err());
+        assert_eq!(gone.0.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn given_a_reload_should_close_every_socket() {
+        let (url, server) = bridge().await;
+        let sockets = ChatSockets::default();
+        let recorder = Arc::new(Recorder::default());
+        let id = sockets
+            .open(&url, SECRET, "desktop-1", recorder.clone())
+            .await
+            .unwrap();
+        recorder.wait(1).await;
+        assert_eq!(sockets.clear(), 1);
+        assert!(sockets.is_empty());
+        assert_eq!(server.await.unwrap(), Some(CloseCode::Away));
+        assert!(sockets.send(id, "late".into()).is_err());
+        assert_eq!(sockets.clear(), 0);
     }
 }

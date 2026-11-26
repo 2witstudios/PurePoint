@@ -826,3 +826,22 @@ async fn given_the_same_root_on_a_machine_should_keep_separate_subscriptions() {
     assert!(!subscriptions.stop_project_on("/srv/app", Some("m1")));
     assert!(subscriptions.stop_project("/srv/app"));
 }
+
+/// A page reload: every project's streams and the projects list stop at once.
+#[tokio::test]
+async fn given_a_reload_should_stop_every_subscription() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let client = DaemonClient::local(&tmp.path().join("none.sock")).unwrap();
+    let (emit, _events) = collector();
+    let subscriptions = Subscriptions::new(emit, fast_policies());
+    subscriptions.start_project(&client, r"C:\a");
+    subscriptions.start_project(&client, r"C:\b");
+    assert!(subscriptions.start_projects(&client, async {}));
+    assert_eq!(subscriptions.project_roots().len(), 2);
+    assert_eq!(subscriptions.stop_all(), 2);
+    assert!(subscriptions.project_roots().is_empty());
+    // The list stopped too, so following it starts again.
+    assert!(!subscriptions.stop_projects());
+    assert!(subscriptions.start_projects(&client, async {}));
+    assert_eq!(subscriptions.stop_all(), 0);
+}

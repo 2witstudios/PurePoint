@@ -212,6 +212,17 @@ impl Watchers {
         }
     }
 
+    /// Stops every watcher at once (the page that asked for them is gone). The threads are
+    /// signalled before this returns, so no event reaches a later page from them; the returned
+    /// handle waits for their handles to close. Returns how many were stopped.
+    pub fn stop_all(&self) -> Stopped {
+        let entries: Vec<Entry> = self.lock().active.drain().map(|(_, e)| e).collect();
+        for entry in &entries {
+            entry.running.signal();
+        }
+        Stopped(entries)
+    }
+
     /// The ids and specs of the running watchers.
     pub fn active(&self) -> Vec<(WatchId, WatchSpec)> {
         let mut list: Vec<_> = self
@@ -262,6 +273,27 @@ impl Drop for Watchers {
         let inner = self.inner.get_mut().unwrap_or_else(|p| p.into_inner());
         for (_, entry) in inner.active.drain() {
             entry.running.signal();
+            entry.running.join();
+        }
+    }
+}
+
+/// Watchers [`Watchers::stop_all`] signalled, still closing their handles.
+#[must_use = "join waits for the stopped watchers' handles to close"]
+pub struct Stopped(Vec<Entry>);
+
+impl Stopped {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Waits until every stopped watcher's handles are closed.
+    pub fn join(self) {
+        for entry in self.0 {
             entry.running.join();
         }
     }
