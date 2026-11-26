@@ -22,22 +22,12 @@ fn plugin_hash() -> String {
 
 fn plugin_dir() -> Option<PathBuf> {
     let home = pu_core::paths::home_dir().ok()?;
-    Some(
-        home
-            .join(".claude")
-            .join("plugins")
-            .join("purepoint"),
-    )
+    Some(home.join(".claude").join("plugins").join("purepoint"))
 }
 
 fn old_skill_dir() -> Option<PathBuf> {
     let home = pu_core::paths::home_dir().ok()?;
-    Some(
-        home
-            .join(".claude")
-            .join("skills")
-            .join("pu"),
-    )
+    Some(home.join(".claude").join("skills").join("pu"))
 }
 
 /// Write the Claude plugin files if they don't exist or are stale.
