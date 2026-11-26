@@ -24,7 +24,7 @@ describe('PurePoint smoke', () => {
       }),
     );
     expect(nativeTitle).toBe('PurePoint');
-    await expect($('h1=PurePoint')).toBeDisplayed();
+    await expect($('[aria-label="Sidebar"]')).toBeDisplayed();
   });
 
   it('lists the fixture project from the daemon', async () => {

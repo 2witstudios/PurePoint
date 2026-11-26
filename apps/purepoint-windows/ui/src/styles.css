@@ -1,19 +1,7 @@
-/* App styles; colors, fonts and metrics come from theme/tokens.css (WIN-5.8). */
+/* App styles; colors, fonts and metrics come from theme/tokens.css (WIN-5.8), the window
+   shell's layout from views/shell/layout.css (WIN-7.1). */
 :root {
-  --title-bar-height: 32px;
-  --control-hover: rgba(0, 0, 0, 0.06);
-  --close-hover: #c42b1c;
   font-family: var(--pp-font-ui);
-}
-
-:root[data-theme='dark'] {
-  --control-hover: rgba(255, 255, 255, 0.08);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --control-hover: rgba(255, 255, 255, 0.08);
-  }
 }
 
 * {
@@ -32,53 +20,4 @@ body {
   color: var(--pp-app-text);
   overflow: hidden;
   user-select: none;
-}
-
-.app {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.title-bar {
-  display: flex;
-  align-items: center;
-  height: var(--title-bar-height);
-  flex: none;
-  padding-left: 12px;
-}
-
-.title-bar-title {
-  flex: 1;
-  font-size: 12px;
-}
-
-.title-bar-controls {
-  display: flex;
-  height: 100%;
-}
-
-.title-bar-controls button {
-  width: 46px;
-  height: 100%;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets', sans-serif;
-  font-size: 10px;
-}
-
-.title-bar-controls button:hover {
-  background: var(--control-hover);
-}
-
-.title-bar-controls .title-bar-close:hover {
-  background: var(--close-hover);
-  color: #ffffff;
-}
-
-.app-content {
-  flex: 1;
-  display: grid;
-  place-items: center;
 }

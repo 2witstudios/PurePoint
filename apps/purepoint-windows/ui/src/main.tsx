@@ -3,9 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
 import './theme/tokens.css';
 import './styles.css';
-import { startThemeSync } from './theme/themeStore.ts';
+import { AppState } from './state/appState.ts';
+import { startApp } from './views/shell/bootstrap.ts';
 
-startThemeSync();
+const app = new AppState();
+startApp(app);
 
 const root = document.getElementById('root');
 if (!root) {
@@ -14,6 +16,6 @@ if (!root) {
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <App app={app} />
   </StrictMode>,
 );

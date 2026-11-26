@@ -43,8 +43,14 @@ webview2-com = "0.38"
 windows-core = "0.61"
 # Daemon lifecycle: find, wait on and stop the running `pu-engine.exe` (WIN-5.3).
 # Installer (WIN-10.1): the user PATH in HKCU\Environment and the WM_SETTINGCHANGE broadcast.
+# Window chrome and placement (WIN-7.1): the caption sink, subclassing, regions and monitors.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
     "Win32_System_Environment",
     "Win32_System_Registry",
     "Win32_System_Threading",

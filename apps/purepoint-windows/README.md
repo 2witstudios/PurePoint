@@ -63,7 +63,8 @@ What the types mean:
 - `ui/src/{protocol,model,state,services,views,theme}`: front-end folders. State lives in Zustand stores (DEC-14).
 - `ui/src/theme/`: design tokens ported from the macOS `Theme/` folder (`tokens.css`, named in `tokens.ts`), the light/dark/system theme store (`themeStore.ts`, sets `<html data-theme>`) and the SF Symbol to Lucide icon map (`icons.ts`, `<Icon name="gear" />`). `node ../../scripts/extract-swift-tokens.mjs` lists the Swift tokens; `tokens.test.ts` fails when one has no CSS counterpart.
 - `src-tauri/`: its own Cargo workspace with its own `Cargo.lock`, excluded from the root workspace (DEC-7). It depends on `crates/pu-core` by path. Each backend module names the leaf that fills it in.
-- The window has no native decorations (DEC-10). `ui/src/views/TitleBar.tsx` is a placeholder drag strip with window controls until WIN-7.1 builds the real chrome.
+- The window has no native decorations (DEC-10). `ui/src/views/shell/` draws the shell (WIN-7.1): a transparent title bar band with an in-app menu bar (File, View, Navigation, Panes, Tabs, Help — the Mac's `AppCommands`, with accelerators from the key binding store) and Windows 11 caption buttons. The band reports its layout through `chrome_set_layout`; `src-tauri/src/chrome.rs` puts an invisible layered "caption sink" child window over the webview, cut to the band's empty space plus the maximize button, which answers `WM_NCHITTEST` with `HTCAPTION` / `HTMAXBUTTON` / the top resize edges (Snap Layouts, drag, double-click maximize, the window menu). Win32 refuses layered child windows to apps without the Windows 10 compatibility section, so `src-tauri/windows-app-manifest.xml` adds it to Tauri's default manifest.
+- The window starts hidden and `src-tauri/src/window_state.rs` shows it at its last placement (`window-state.json` in the app data directory, saved on close; maximized state included).
 
 ## Toolchain notes
 

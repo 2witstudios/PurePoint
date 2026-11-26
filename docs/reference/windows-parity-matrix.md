@@ -15,8 +15,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 
 | Swift file | Lines | Windows location | Leaf | Status | Exclusion reason |
 |---|---|---|---|---|---|
-| `AppCommands.swift` | 404 | `ui/src/views/shell/appCommands.ts`, `src-tauri/src/menu.rs` | WIN-7.1 | todo | — |
-| `ContentView.swift` | 364 | `ui/src/views/ContentView.tsx` | WIN-7.1 | todo | — |
+| `AppCommands.swift` | 404 | `ui/src/views/shell/appCommands.ts`, `ui/src/views/shell/MenuBar.tsx` (in-app menu bar in the title bar) | WIN-7.1 | ported | — |
+| `ContentView.swift` | 364 | `ui/src/views/shell/ContentView.tsx`, `ui/src/views/shell/bootstrap.ts`, `ui/src/views/shell/sidebarWidth.ts` | WIN-7.1 | ported | — |
 | `Models/AgentSignalPendingTaps.swift` | 21 | `ui/src/model/agentSignalPendingTaps.ts` | WIN-7.7 | todo | — |
 | `Models/AgentSignalPolicy.swift` | 59 | `ui/src/model/agentSignalPolicy.ts` | WIN-7.7 | todo | — |
 | `Models/AgentSignalRouting.swift` | 59 | `ui/src/model/agentSignalRouting.ts` | WIN-7.7 | todo | — |
@@ -88,7 +88,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/ManifestWatcher.swift` | 116 | `src-tauri/src/watchers/manifest.rs` | WIN-5.6 | ported | Watches `.pu` by name, 50 ms debounce, one event per rename burst; `manifest-changed {projectRoot}`; WIN-3.13 release in `watchers/mod.rs` |
 | `Services/MarkdownHTMLRenderer.swift` | 245 | `ui/src/services/markdownHtml.ts` | WIN-8.6 | todo | — |
 | `Services/NSView+Constraints+iOS.swift` | 18 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Services/NSView+Constraints.swift` | 18 | `ui/src/views/shell/layout.css` (CSS layout replaces Auto Layout pinning) | WIN-7.1 | todo | — |
+| `Services/NSView+Constraints.swift` | 18 | `ui/src/views/shell/layout.css` (CSS layout replaces Auto Layout pinning) | WIN-7.1 | ported | — |
 | `Services/OpenCodeConversationIndex.swift` | 116 | `src-tauri/src/conversations/opencode.rs` | WIN-8.12 | ported | — |
 | `Services/PiAttachmentImport.swift` | 72 | `ui/src/services/attachmentImport.ts` | WIN-9.7 | todo | — |
 | `Services/PiPairedMac+iOS.swift` | 225 | — | — | excluded | `+iOS` file (iPad build only) |
@@ -176,10 +176,10 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/CommandPalette/CommandPalettePanel.swift` | 887 | `ui/src/views/palette/CommandPalettePanel.tsx` | WIN-7.5 | todo | — |
 | `Views/CommandPalette/CommandPaletteRowView+iOS.swift` | 92 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/CommandPalette/CommandPaletteRowView.swift` | 88 | `ui/src/views/palette/CommandPaletteRowView.tsx` | WIN-7.5 | todo | — |
-| `Views/DaemonErrorBanner.swift` | 83 | `ui/src/views/shell/DaemonErrorBanner.tsx` | WIN-7.1 | todo | — |
+| `Views/DaemonErrorBanner.swift` | 83 | `ui/src/views/shell/DaemonErrorBanner.tsx`, `ui/src/views/shell/ShellBanners.tsx` | WIN-7.1 | ported | — |
 | `Views/Detail/CoreTextBodyView+iOS.swift` | 290 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Detail/CoreTextLayout+iOS.swift` | 252 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Detail/DetailView.swift` | 104 | `ui/src/views/detail/DetailView.tsx` | WIN-7.1 | todo | — |
+| `Views/Detail/DetailView.swift` | 104 | `ui/src/views/detail/DetailView.tsx` | WIN-7.1 | ported | — |
 | `Views/Detail/DiffCardView.swift` | 202 | `ui/src/views/detail/DiffCardView.tsx` | WIN-8.3 | todo | — |
 | `Views/Detail/DiffContentNSView+iOS.swift` | 75 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Detail/DiffContentNSView.swift` | 105 | `ui/src/views/detail/DiffContentNSView.tsx` | WIN-8.3 | todo | — |
@@ -265,11 +265,11 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Terminal/TerminalPaneView+iOS.swift` | 247 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Terminal/TerminalPaneView.swift` | 251 | `ui/src/views/terminal/TerminalPaneView.tsx` | WIN-7.3 | todo | — |
 | `Views/Terminal/TerminalViewCache.swift` | 152 | `ui/src/views/terminal/terminalViewCache.ts` | WIN-7.3 | todo | — |
-| `Views/TitlebarClearance.swift` | 25 | `ui/src/views/shell/TitlebarClearance.tsx` | WIN-7.1 | todo | — |
+| `Views/TitlebarClearance.swift` | 25 | `ui/src/views/shell/TitlebarClearance.tsx` | WIN-7.1 | ported | — |
 | `Views/Triggers/TriggerCreationSheet.swift` | 220 | `ui/src/views/triggers/TriggerCreationSheet.tsx` | WIN-8.9 | todo | — |
 | `Views/Triggers/TriggerDetailView.swift` | 170 | `ui/src/views/triggers/TriggerDetailView.tsx` | WIN-8.9 | todo | — |
 | `Views/WindowChrome+iOS.swift` | 102 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/WindowChrome.swift` | 42 | `ui/src/views/shell/WindowChrome.tsx` | WIN-7.1 | todo | — |
+| `Views/WindowChrome.swift` | 42 | `ui/src/views/shell/WindowChrome.tsx`, `src-tauri/src/chrome.rs`, `src-tauri/src/window_state.rs` | WIN-7.1 | ported | — |
 | `purepoint_macosApp.swift` | 95 | `ui/src/main.tsx`, `src-tauri/src/main.rs` | WIN-5.1 | ported | — |
 
 ## Tests
