@@ -102,9 +102,13 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
     /// A brand-new single-pane workspace holding one agent.
     /// The ID is derived from the agent so it is stable across launches without any
     /// random or time-based input — restarting can never invent a different grouping.
-    static func adopting(agentId: String, container: WorkspaceContainer) -> Workspace {
+    /// The reconciler passes an explicit ID from `adoptionId(forAgentId:takenIds:)` so an
+    /// adopted workspace can never share an ID with a kept workspace.
+    static func adopting(
+        agentId: String, container: WorkspaceContainer, id: String? = nil
+    ) -> Workspace {
         Workspace(
-            id: "ws-\(agentId)",
+            id: id ?? "ws-\(agentId)",
             container: container,
             root: .leaf(id: 0),
             panes: [0: Pane(tabs: [Surface(id: 0, content: .agent(agentId))], activeTabId: 0)],
@@ -112,6 +116,20 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
             nextLeafId: 1,
             nextSurfaceId: 1
         )
+    }
+
+    /// The ID for a workspace adopting `agentId`: `ws-<agentId>`, or when a kept workspace
+    /// already uses that ID (it once adopted the agent, which has since moved out of it), the
+    /// first free one of `ws-<agentId>-2`, `-3`, ... Reusing `ws-<agentId>` publishes two
+    /// workspaces with one ID (WIN-6.2 fix, caught by WIN-6.1's random layouts).
+    /// Deterministic: the same taken IDs always give the same answer, and the adopted
+    /// workspace keeps its ID on the next reconcile because it then holds the agent.
+    static func adoptionId(forAgentId agentId: String, takenIds: Set<String>) -> String {
+        let base = "ws-\(agentId)"
+        guard takenIds.contains(base) else { return base }
+        var suffix = 2
+        while takenIds.contains("\(base)-\(suffix)") { suffix += 1 }
+        return "\(base)-\(suffix)"
     }
 
     /// The Point Guard navigation item owns a root workspace for each open project.
@@ -571,9 +589,12 @@ nonisolated enum WorkspaceReconciler {
         // Any live agent no tab claimed becomes its own single-pane workspace.
         // This is the step that makes a loose sidebar item impossible: an agent the layout
         // forgot still surfaces as a workspace, never as a bare agent row.
+        var takenIds = Set(result.map(\.id))
         for agent in live where !claimed.contains(agent.id) {
             claimed.insert(agent.id)
-            result.append(.adopting(agentId: agent.id, container: agent.container))
+            let id = Workspace.adoptionId(forAgentId: agent.id, takenIds: takenIds)
+            takenIds.insert(id)
+            result.append(.adopting(agentId: agent.id, container: agent.container, id: id))
         }
 
         return result
