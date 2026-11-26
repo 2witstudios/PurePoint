@@ -4,10 +4,11 @@
  * `canChooseDirectories` and no files.
  */
 import { open } from '@tauri-apps/plugin-dialog';
+import { testHooksEnabled } from './testHooks';
 
 interface DialogSpyGlobal {
   /**
-   * Set by the end-to-end tests only: each folder pick takes the next entry instead of showing
+   * Set by the end-to-end tests only (read in debug builds only, `__PU_TEST_HOOKS__`): each folder pick takes the next entry instead of showing
    * the dialog (WebDriver cannot drive a native window). `null` stands for Cancel; an empty
    * queue cancels too.
    */
@@ -23,7 +24,7 @@ export interface PickFolderOptions {
 
 /** Ask for one folder; resolves its path, or null when the user cancels. */
 export async function pickFolder(options: PickFolderOptions = {}): Promise<string | null> {
-  const queue = (globalThis as DialogSpyGlobal).__PU_DIALOG_SPY__;
+  const queue = testHooksEnabled() ? (globalThis as DialogSpyGlobal).__PU_DIALOG_SPY__ : undefined;
   if (Array.isArray(queue)) return queue.shift() ?? null;
   const picked = await open({
     directory: true,

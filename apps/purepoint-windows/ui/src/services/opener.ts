@@ -13,11 +13,12 @@
  *   `reveal_item_in_dir`), the Mac's Reveal in Finder (`NSWorkspace.selectFile`).
  */
 import { invoke } from '@tauri-apps/api/core';
+import { testHooksEnabled } from './testHooks';
 import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
 
 interface OpenerSpyGlobal {
   /**
-   * Set by the end-to-end tests only: receives each URL instead of the system opener, so a test
+   * Set by the end-to-end tests only (read in debug builds only, `__PU_TEST_HOOKS__`): receives each URL instead of the system opener, so a test
    * run never opens a browser, an app or Explorer. Files arrive as `open-path:<path>` and
    * `reveal:<path>`. (`__TAURI_INTERNALS__.invoke` is read-only, so it cannot be intercepted
    * there.)
@@ -26,6 +27,7 @@ interface OpenerSpyGlobal {
 }
 
 function spy(): string[] | null {
+  if (!testHooksEnabled()) return null;
   const recorded = (globalThis as OpenerSpyGlobal).__PU_OPENER_SPY__;
   return Array.isArray(recorded) ? recorded : null;
 }
