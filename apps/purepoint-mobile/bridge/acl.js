@@ -21,9 +21,14 @@ const ALLOWED_ALIASES = new Map([
 ]);
 
 export class AclError extends Error {
-  constructor(message) {
+  constructor(message, details) {
     super(message);
     this.code = "acl_private";
+    this.details = details;
+    // CI runners differ from desktops (elevated admin accounts): show what
+    // was refused so a failure is diagnosable from the log.
+    if (details && process.env.CI)
+      console.error("acl refused:", JSON.stringify(details));
   }
 }
 
@@ -109,6 +114,7 @@ export async function assertPrivate(target, { directory = false } = {}) {
   if (!isPrivateAcl(acl, sid, { directory }))
     throw new AclError(
       "Point Guard state must be private and owned by this user.",
+      { acl, userSid: sid },
     );
   return acl;
 }

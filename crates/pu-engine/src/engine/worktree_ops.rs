@@ -408,7 +408,10 @@ mod lock_tests {
         };
         assert!(!directory_removed);
         let error = error.unwrap();
-        assert!(error.contains(&held.display().to_string()), "{error}");
+        // Name the file the way the engine does (canonical), so an 8.3 TEMP
+        // spelling such as RUNNER~1 on CI still matches.
+        let held_name = pu_core::canon::canonicalize(&held).unwrap_or_else(|_| held.clone());
+        assert!(error.contains(&held_name.display().to_string()), "{error}");
         assert!(error.contains("locked"), "{error}");
         assert!(held.exists());
 
