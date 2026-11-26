@@ -111,8 +111,9 @@ fn run_remove(name: &str, json: bool) -> Result<(), CliError> {
     })
     .map_err(core_error)?;
     // Best effort: drop dead CLI sockets and the directory if nothing else
-    // (such as the app's live forward) still uses it.
+    // (such as the app's live forward) still uses it. Windows has no forwards.
     if let Ok(dir) = paths::machine_dir(&machine.id) {
+        #[cfg(unix)]
         machine_target::sweep_stale_sockets(&dir);
         let _ = std::fs::remove_dir(&dir);
     }
@@ -183,9 +184,10 @@ const START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 async fn run_start(name: &str) -> Result<(), CliError> {
     let machine = machine_target::find_machine(name)?;
     machines::validate_ssh_host(&machine.ssh_host).map_err(core_error)?;
+    let args = machine_target::start_command_args(&machine).await?;
     let program = machine_target::ssh_program();
     let run = tokio::process::Command::new(&program)
-        .args(machine_target::start_args(&machine.ssh_host))
+        .args(args)
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .status();

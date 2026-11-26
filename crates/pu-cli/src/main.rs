@@ -821,6 +821,7 @@ async fn async_main() {
     let socket = if let Some(name) = cli.machine.as_deref() {
         match connect_machine(name, &cli.command).await {
             Ok(connected) => {
+                #[cfg(unix)]
                 if matches!(connected, machine_target::Endpoint::Private(_)) {
                     machine_target::close_forwards_on_signal();
                 }
