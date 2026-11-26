@@ -40,10 +40,10 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/PiChatDomain.swift` | 368 | `ui/src/model/piChatDomain.ts` | WIN-9.4 | todo | — |
 | `Models/PointGuardPlays.swift` | 219 | `ui/src/model/pointGuardPlays.ts` | WIN-8.13 | todo | — |
 | `Models/PointGuardRuntime.swift` | 96 | `ui/src/model/pointGuardRuntime.ts` | WIN-8.13 | todo | — |
-| `Models/ProjectKey.swift` | 159 | `ui/src/model/sidebarProjectKey.ts` | WIN-6.5 | todo | — |
-| `Models/ProjectOrder.swift` | 67 | `ui/src/model/sidebarProjectOrder.ts` | WIN-6.5 | todo | — |
+| `Models/ProjectKey.swift` | 159 | `ui/src/model/projectKey.ts` | WIN-6.5 | ported | — |
+| `Models/ProjectOrder.swift` | 67 | `ui/src/model/projectOrder.ts` | WIN-6.5 | ported | — |
 | `Models/ScheduleEvent.swift` | 231 | `ui/src/model/scheduleEvent.ts` | WIN-8.8 | todo | — |
-| `Models/SidebarItem.swift` | 136 | `ui/src/model/sidebarItem.ts` | WIN-6.5 | todo | — |
+| `Models/SidebarItem.swift` | 136 | `ui/src/model/sidebarItem.ts` | WIN-6.5 | ported | — |
 | `Models/StreamEvent.swift` | 122 | `src-tauri/src/conversations/stream_event.rs` | WIN-8.12 | todo | — |
 | `Models/TriggerItem.swift` | 59 | `ui/src/model/triggerItem.ts` | WIN-8.9 | todo | — |
 | `Models/Workspace.swift` | 594 | `ui/src/model/workspace.ts`, `ui/src/model/paneSplit.ts` (the tree operations it uses) | WIN-6.1 | ported | — |
@@ -133,8 +133,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/ScheduleState.swift` | 282 | `ui/src/state/scheduleState.ts` | WIN-8.8 | todo | — |
 | `State/SessionListState.swift` | 164 | `ui/src/state/sessions.ts` | WIN-8.16 | todo | — |
 | `State/SettingsState.swift` | 111 | `ui/src/state/settingsState.ts` | WIN-8.11 | todo | — |
-| `State/SidebarExpansionStore.swift` | 45 | `ui/src/model/sidebarExpansion.ts` | WIN-6.5 | todo | — |
-| `State/SidebarVisibility.swift` | 38 | `ui/src/model/sidebarVisibility.ts` | WIN-6.5 | todo | — |
+| `State/SidebarExpansionStore.swift` | 45 | `ui/src/state/sidebarExpansionStore.ts` | WIN-6.5 | ported | — |
+| `State/SidebarVisibility.swift` | 38 | `ui/src/state/sidebarVisibilityStore.ts` | WIN-6.5 | ported | — |
 | `State/SpawnTargetResolver.swift` | 31 | `ui/src/state/spawnTargetResolver.ts` | WIN-6.6 | ported | — |
 | `State/StreamAccumulator.swift` | 193 | `ui/src/state/sessions.ts` | WIN-8.16 | todo | — |
 | `State/TriggersState.swift` | 93 | `ui/src/state/triggersState.ts` | WIN-8.9 | todo | — |
@@ -244,8 +244,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Sidebar/AddMachineSheet.swift` | 125 | `ui/src/views/sidebar/AddMachineSheet.tsx` | WIN-8.14 | todo | — |
 | `Views/Sidebar/RemoteFolderPicker+iOS.swift` | 503 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarFooter.swift` | 153 | `ui/src/views/sidebar/SidebarFooter.tsx` | WIN-7.2 | todo | — |
-| `Views/Sidebar/SidebarMenuModel.swift` | 263 | `ui/src/model/sidebarMenu.ts` | WIN-6.5 | todo | — |
-| `Views/Sidebar/SidebarOutlineModel.swift` | 310 | `ui/src/model/sidebarOutline.ts` | WIN-6.5 | todo | — |
+| `Views/Sidebar/SidebarMenuModel.swift` | 263 | `ui/src/model/sidebarMenu.ts` | WIN-6.5 | ported | — |
+| `Views/Sidebar/SidebarOutlineModel.swift` | 310 | `ui/src/model/sidebarOutline.ts` | WIN-6.5 | ported | — |
 | `Views/Sidebar/SidebarOutlineView+Callbacks.swift` | 124 | `ui/src/views/sidebar/sidebarOutlineViewCallbacks.ts` | WIN-7.2 | todo | — |
 | `Views/Sidebar/SidebarOutlineView+iOS.swift` | 37 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarOutlineView.swift` | 37 | `ui/src/views/sidebar/SidebarOutlineView.tsx` | WIN-7.2 | todo | — |
@@ -278,7 +278,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 
 | Test file | Suites | Windows test | Leaf | Status | Note |
 |---|---|---|---|---|---|
-| `ActiveProjectRoutingTests.swift` | all | `ui/src/model/sidebarOutline.test.ts` | WIN-6.5 | todo | — |
+| `ActiveProjectRoutingTests.swift` | all | `ui/src/model/sidebarOutline.test.ts` | WIN-6.5 | ported | — |
 | `AddMachineFlowTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `AgentSignalBadgeTests.swift` | all | — | — | ios-only | Badge-count rules re-expressed as new vitest cases in WIN-7.7 |
 | `AgentsHubModelsTests.swift` | all | `ui/src/model/agentsHubModels.test.ts` | WIN-8.7 | todo | — |
@@ -321,20 +321,20 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `PointGuardPlaysTests.swift` | all | `ui/src/model/pointGuardPlays.test.ts` | WIN-8.13 | todo | — |
 | `PointGuardRoutingTests.swift` | all | `ui/src/state/pointGuardRouting.test.ts` | WIN-8.13 | todo | — |
 | `PointGuardWorkspaceTests.swift` | all | `ui/src/state/pointGuardWorkspace.test.ts` | WIN-8.13 | todo | — |
-| `ProjectOrderTests.swift` | all | `ui/src/model/sidebarProjectOrder.test.ts` | WIN-6.5 | todo | — |
+| `ProjectOrderTests.swift` | all | `ui/src/model/projectOrder.test.ts` | WIN-6.5 | ported | — |
 | `RemoteFolderPickerTests.swift` | `FsBrowseRequestTests` | `ui/src/state/machineState.fsBrowse.test.ts` | WIN-8.14 | todo | Only `FsBrowseRequestTests` is platform-neutral; the rest is `#if os(iOS)` |
 | `SSHIdentityTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `SSHMachineRegistryTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `SSHTransportTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `ScrollableTerminalIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `SessionListStateTests.swift` | all | `ui/src/state/sessions.test.ts` | WIN-8.16 | todo | — |
-| `SidebarExpansionStoreTests.swift` | all | `ui/src/model/sidebarExpansion.test.ts` | WIN-6.5 | todo | — |
-| `SidebarMenuModelTests.swift` | all | `ui/src/model/sidebarMenu.test.ts` | WIN-6.5 | todo | — |
-| `SidebarOutlineModelTests.swift` | all | `ui/src/model/sidebarOutline.test.ts` | WIN-6.5 | todo | — |
+| `SidebarExpansionStoreTests.swift` | all | `ui/src/state/sidebarExpansionStore.test.ts` | WIN-6.5 | ported | — |
+| `SidebarMenuModelTests.swift` | all | `ui/src/model/sidebarMenu.test.ts` | WIN-6.5 | ported | — |
+| `SidebarOutlineModelTests.swift` | all | `ui/src/model/sidebarOutline.test.ts` | WIN-6.5 | ported | — |
 | `SidebarOutlineViewControllerIOSMenuTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `SidebarOutlineViewControllerIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `SidebarOutlineViewControllerTests.swift` | all | `ui/src/views/sidebar/SidebarOutline.test.tsx` | WIN-7.2 | todo | Platform-neutral cases only |
-| `SidebarVisibilityTests.swift` | all | `ui/src/model/sidebarVisibility.test.ts` | WIN-6.5 | todo | — |
+| `SidebarVisibilityTests.swift` | all | `ui/src/state/sidebarVisibilityStore.test.ts` | WIN-6.5 | ported | — |
 | `SpawnTargetResolverTests.swift` | all | `ui/src/state/spawnTargetResolver.test.ts` | WIN-6.6 | ported | — |
 | `StreamAccumulatorTests.swift` | all | `ui/src/state/streamAccumulator.test.ts` | WIN-8.16 | todo | — |
 | `StreamEventTests.swift` | all | `src-tauri/src/conversations/stream_event.rs` (#[cfg(test)]) | WIN-8.12 | todo | — |
