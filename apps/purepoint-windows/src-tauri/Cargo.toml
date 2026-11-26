@@ -32,6 +32,8 @@ serde_json = "1"
 base64 = "0.22"
 # Resolves `git` and `gh` on PATH (WIN-8.1).
 which = "8"
+# Project watchers (WIN-5.6); the same major as pu-engine, pinned to the root lock.
+notify = "8.2"
 
 # Same versions Tauri 2.11's WebView2 runtime links, so the COM types match.
 [target.'cfg(windows)'.dependencies]
