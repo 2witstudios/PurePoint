@@ -4,6 +4,10 @@ import { mkdtemp, readFile, stat, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pairingPayload, writePairingPage } from "./pairing.js";
+// Skipped on Windows (WIN-9.1): POSIX file modes (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "POSIX file modes (Unix only)",
+};
 
 const code = () => ({
   type: "pi-mobile-pairing",
@@ -41,7 +45,7 @@ test("one-time pinned enrollment encodes without shared-token fallback", () => {
     ),
   );
 });
-test("pairing page is private and offline; enrollment token never appears as plaintext", async () => {
+test("pairing page is private and offline; enrollment token never appears as plaintext", unixOnly, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pi-pairing-"));
   const file = path.join(dir, "pairing.html");
   const payload = code();

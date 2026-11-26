@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths: &windows-app-paths
       - "apps/purepoint-windows/**"
+      - "apps/purepoint-mobile/bridge/**"
+      - "apps/purepoint-mobile/package.json"
+      - "apps/purepoint-mobile/package-lock.json"
+      - "apps/purepoint-mobile/tsconfig.json"
       - "crates/**"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -72,3 +76,37 @@ jobs:
           cargo clippy --locked --all-targets
           cargo test --locked --all-targets
       - run: npm run tauri -- build --debug --no-bundle
+
+  bridge-windows:
+    name: Point Guard bridge (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/purepoint-mobile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+          cache: npm
+          cache-dependency-path: apps/purepoint-mobile/package-lock.json
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.89"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: bridge-windows
+      # The daemon pipe integration test runs against the workspace-built engine.
+      - name: Build pu-engine
+        working-directory: .
+        run: cargo build --locked -p pu-engine
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+        env:
+          # Fail, not skip, if the engine from the step above is missing.
+          PU_REQUIRE_ENGINE: "1"

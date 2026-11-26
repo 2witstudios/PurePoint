@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { readFile } from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
+import { daemonEndpoint } from "./pipe-name.js";
 
 /** Bounded newline JSON transport. No CLI, SSH, or daemon startup. */
 export function connectDaemon(
@@ -12,9 +13,19 @@ export function connectDaemon(
     onClose = (error = undefined) => {},
     signal = undefined,
     timeout = 5000,
+    platform = process.platform,
   },
 ) {
-  const socket = net.createConnection(socketPath);
+  // Unix: the socket itself. Windows: the daemon pipe named from it (WINAPP-003).
+  let socket;
+  if (platform === "win32") {
+    socket = new net.Socket();
+    try {
+      socket.connect(daemonEndpoint(socketPath, platform));
+    } catch (error) {
+      process.nextTick(() => socket.destroy(error));
+    }
+  } else socket = net.createConnection(socketPath);
   let pending = "";
   const decoder = new StringDecoder("utf8");
   let closed = false;

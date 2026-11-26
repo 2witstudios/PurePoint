@@ -9,6 +9,10 @@ import os from "node:os";
 import { watchAppLifetime } from "./app-lifetime.js";
 import { openRuntimeState } from "./runtime-state.js";
 import { openTrustStore } from "./trust.js";
+// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
+};
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(action) {
@@ -71,7 +75,7 @@ test("app channel EOF or error signals loss once; disposing suppresses shutdown"
   assert.equal(losses, 1, "Owner loss before watcher attachment is observed");
 });
 
-test("app owner crash releases live runtime and trust locks while preserving identity", async () => {
+test("app owner crash releases live runtime and trust locks while preserving identity", unixOnly, async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "pointguard-app-crash-"));
   const stateDir = path.join(home, "state");
   let owner, runtimePid, replacement, trust;
@@ -173,7 +177,7 @@ test("app owner crash releases live runtime and trust locks while preserving ide
   }
 });
 
-test("a surviving owner remains protected and app collision wait ends after five seconds", async () => {
+test("a surviving owner remains protected and app collision wait ends after five seconds", unixOnly, async () => {
   const home = await mkdtemp(
     path.join(os.tmpdir(), "pointguard-app-collision-"),
   );
@@ -220,7 +224,7 @@ test("a surviving owner remains protected and app collision wait ends after five
   }
 });
 
-test("owner EOF during managed startup leaves locks available for a new launch", async () => {
+test("owner EOF during managed startup leaves locks available for a new launch", unixOnly, async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "pointguard-app-startup-"));
   const stateDir = path.join(home, "state");
   let child, replacement;

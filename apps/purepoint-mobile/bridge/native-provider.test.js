@@ -15,6 +15,10 @@ import path from "node:path";
 import { nativeProviderSetup } from "./native-provider.js";
 import { privateDirectory } from "./runtime-state.js";
 import { startupFailure } from "./runtime-errors.js";
+// Skipped on Windows (WIN-9.1): POSIX modes, uids and symlinks (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "POSIX modes, uids and symlinks (Unix only)",
+};
 
 async function fixture(t) {
   const home = await mkdtemp(path.join(os.tmpdir(), "native-provider-"));
@@ -31,7 +35,7 @@ async function fixture(t) {
 const bytes =
   '{"anthropic":{"type":"api_key","key":"fixture-not-a-credential"}}\n';
 for (const mode of [0o700, 0o750, 0o755]) {
-  test(`given a safe native Pi directory (${mode.toString(8)}) should reuse private credentials without changing native data`, async (t) => {
+  test(`given a safe native Pi directory (${mode.toString(8)}) should reuse private credentials without changing native data`, unixOnly, async (t) => {
     const { dir, auth } = await fixture(t);
     await mkdir(dir, { mode });
     await chmod(dir, mode);
@@ -46,14 +50,14 @@ for (const mode of [0o700, 0o750, 0o755]) {
     assert.equal(await readFile(settings, "utf8"), '{"fixture":"preserve"}\n');
   });
 }
-test("given no native directory should create owner-only setup storage", async (t) => {
+test("given no native directory should create owner-only setup storage", unixOnly, async (t) => {
   const { dir } = await fixture(t);
   const provider = await nativeProviderSetup("fixture-device");
   t.after(() => provider.close());
   assert.equal((await lstat(dir)).mode & 0o777, 0o700);
 });
 for (const mode of [0o770, 0o707, 0o777]) {
-  test(`given writable native directory (${mode.toString(8)}) should refuse startup without changing credentials or permissions`, async (t) => {
+  test(`given writable native directory (${mode.toString(8)}) should refuse startup without changing credentials or permissions`, unixOnly, async (t) => {
     const { dir, auth } = await fixture(t);
     await mkdir(dir);
     await chmod(dir, mode);
@@ -71,7 +75,7 @@ for (const mode of [0o770, 0o707, 0o777]) {
   });
 }
 for (const kind of ["symlink", "file"]) {
-  test(`given a native directory that is a ${kind} should refuse without replacing it`, async (t) => {
+  test(`given a native directory that is a ${kind} should refuse without replacing it`, unixOnly, async (t) => {
     const { home, dir } = await fixture(t);
     const target = path.join(home, "target");
     if (kind === "symlink") {
@@ -88,7 +92,7 @@ for (const [name, mode, content] of [
   ["corrupt", 0o600, "not-json"],
   ["array", 0o600, "[]"],
 ]) {
-  test(`given ${name} native credentials should reject and preserve bytes and permissions`, async (t) => {
+  test(`given ${name} native credentials should reject and preserve bytes and permissions`, unixOnly, async (t) => {
     const { dir, auth } = await fixture(t);
     await mkdir(dir, { mode: 0o755 });
     await writeFile(auth, content, { mode });
@@ -97,12 +101,12 @@ for (const [name, mode, content] of [
     assert.equal((await lstat(auth)).mode & 0o777, mode);
   });
 }
-test("given public managed state should retain strict owner-only validation", async (t) => {
+test("given public managed state should retain strict owner-only validation", unixOnly, async (t) => {
   const { dir } = await fixture(t);
   await mkdir(dir, { mode: 0o755 });
   await assert.rejects(privateDirectory(dir), /private/);
 });
-test("given a native directory owned by another user should refuse and preserve it", async (t) => {
+test("given a native directory owned by another user should refuse and preserve it", unixOnly, async (t) => {
   const { dir, auth } = await fixture(t);
   await mkdir(dir, { mode: 0o755 });
   await writeFile(auth, bytes, { mode: 0o600 });
@@ -113,7 +117,7 @@ test("given a native directory owned by another user should refuse and preserve 
   assert.equal((await lstat(dir)).uid, owner);
   assert.equal(await readFile(auth, "utf8"), bytes);
 });
-test("given symlinked credentials should refuse without changing their target", async (t) => {
+test("given symlinked credentials should refuse without changing their target", unixOnly, async (t) => {
   const { dir, home, auth } = await fixture(t);
   await mkdir(dir, { mode: 0o755 });
   const target = path.join(home, "credentials");

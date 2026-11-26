@@ -8,6 +8,10 @@ import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { openRuntimeState } from "./runtime-state.js";
+// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
+};
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function checkDrain(loss) {
@@ -244,6 +248,6 @@ async function checkDrain(loss) {
 }
 
 for (const loss of ["helper", "app"]) {
-  test(`${loss} loss retains runtime ownership until a dispatched controller action drains`, () =>
+  test(`${loss} loss retains runtime ownership until a dispatched controller action drains`, unixOnly, () =>
     checkDrain(loss));
 }

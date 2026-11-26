@@ -19,8 +19,12 @@ import {
   readPersonal,
 } from "../support/pointguard/lib/personal.js";
 import { root, launchArguments } from "./setup.js";
+// Skipped on Windows (WIN-9.1): POSIX modes, symlinks and FIFOs (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "POSIX modes, symlinks and FIFOs (Unix only)",
+};
 const defaults = path.join(root, "support/pointguard/defaults");
-test("personal seeds publish once, preserve edits/empty files across restart and reject unsafe files", async (t) => {
+test("personal seeds publish once, preserve edits/empty files across restart and reject unsafe files", unixOnly, async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "pointguard-personal-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const dir = path.join(home, "personal");
@@ -47,7 +51,7 @@ test("personal seeds publish once, preserve edits/empty files across restart and
   await symlink(path.join(dir, "USER.md"), path.join(dir, "SOUL.md"));
   await assert.rejects(seedPersonal(dir, defaults));
 });
-test("hook rereads current sections without replacing native tools/skills, and reload waits for idle", async (t) => {
+test("hook rereads current sections without replacing native tools/skills, and reload waits for idle", unixOnly, async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pointguard-hook-"));
   const previous = process.env.POINT_GUARD_PERSONAL_DIR;
   process.env.POINT_GUARD_PERSONAL_DIR = dir;
@@ -118,7 +122,7 @@ test("launch requires a native package root and selects only the explicit workfl
   );
 });
 
-test("explicit local symlink selects one canonical native package instead of bundled workflow source", async (t) => {
+test("explicit local symlink selects one canonical native package instead of bundled workflow source", unixOnly, async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pointguard-source-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const actual = path.join(root, "support/pointguard-workflows");
@@ -134,7 +138,7 @@ test("explicit local symlink selects one canonical native package instead of bun
   assert.ok(!args.includes("--append-system-prompt"));
 });
 
-test("unsafe personal FIFO refuses promptly instead of blocking startup", async (t) => {
+test("unsafe personal FIFO refuses promptly instead of blocking startup", unixOnly, async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pointguard-fifo-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const fifo = path.join(dir, "SOUL.md");

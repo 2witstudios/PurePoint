@@ -20,7 +20,12 @@ import {
   setDeviceWorkspaceManagement,
   renameDevice,
 } from "./admin.js";
-import { platformDefaults, hostLabel, hostCopy } from "./platform.js";
+import {
+  platformDefaults,
+  hostLabel,
+  hostCopy,
+  ownerPipeName,
+} from "./platform.js";
 import { startRemote } from "./remote.js";
 import { LockError } from "./lock-helper.js";
 import { optionalRemoteListener } from "./remote-listener.js";
@@ -403,6 +408,9 @@ export async function runManaged(env = process.env, platform = platformDefaults(
     admin = await serveAdmin({
       ...(platform.adminTransport === "unix"
         ? { socketPath: path.join(directory, "admin", "admin.sock") }
+        : {}),
+      ...(platform.adminTransport === "pipe"
+        ? { pipeName: ownerPipeName(directory) }
         : {}),
       token: adminToken,
       dispatch: async (r) => {

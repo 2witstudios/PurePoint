@@ -6,6 +6,9 @@ import path from "node:path";
 import { Rpc } from "./rpc.js";
 import { Controller } from "./controller.js";
 import { cli } from "./setup.js";
+// Loading the Pi package cold on Windows (Defender scans every module) can
+// exceed the 30 s command timeout while the rest of the suite runs in parallel.
+const coldStart = process.platform === "win32" ? 120000 : 30000;
 test("published vanilla Pi supports the pinned state/history/queue contract", async () => {
   const folder = await mkdtemp(path.join(os.tmpdir(), "pi-mobile-contract-"));
   const skill = path.join(folder, "pu");
@@ -37,7 +40,7 @@ test("published vanilla Pi supports the pinned state/history/queue contract", as
   );
   rpc.on("failure", () => {});
   try {
-    const state = await rpc.call("get_state");
+    const state = await rpc.call("get_state", {}, coldStart);
     assert.equal(state.isStreaming, false);
     const entries = await rpc.call("get_entries");
     assert.equal(
@@ -128,6 +131,7 @@ test("native session changes, custom messages and shell output project against p
   const events = [];
   rpc.on("event", (event) => events.push(event.type));
   try {
+    if (process.platform === "win32") await rpc.call("get_state", {}, coldStart);
     await c.refresh();
     const initialId = c.state.sessionId;
     for (const operation of [

@@ -12,7 +12,11 @@ import {
 import path from "node:path";
 import os from "node:os";
 import { discoverPuSkills, ensureToken, loadToken } from "./setup.js";
-test("given first setup should generate a private secret once and reuse it across concurrent starts", async () => {
+// Skipped on Windows (WIN-9.1): POSIX file modes and symlinks (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "POSIX file modes and symlinks (Unix only)",
+};
+test("given first setup should generate a private secret once and reuse it across concurrent starts", unixOnly, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pi-pair-secret-"));
   const file = path.join(dir, "private/secret");
   try {
@@ -28,7 +32,7 @@ test("given first setup should generate a private secret once and reuse it acros
     await rm(dir, { recursive: true, force: true });
   }
 });
-test("owner secrets accept a trailing newline but reject invalid HTTP header characters without replacement", async () => {
+test("owner secrets accept a trailing newline but reject invalid HTTP header characters without replacement", unixOnly, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pi-pair-header-"));
   const file = path.join(dir, "secret");
   const token = "a".repeat(43);
@@ -53,7 +57,7 @@ test("owner secrets accept a trailing newline but reject invalid HTTP header cha
     await rm(dir, { recursive: true, force: true });
   }
 });
-test("installed skill discovery follows owner symlinks without a pinned cache path", async () => {
+test("installed skill discovery follows owner symlinks without a pinned cache path", unixOnly, async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "pi-skill-discovery-"));
   try {
     const skill = path.join(home, "pointguard/pu");
@@ -71,7 +75,7 @@ test("installed skill discovery follows owner symlinks without a pinned cache pa
     await rm(home, { recursive: true, force: true });
   }
 });
-test('given a secret symlink should refuse rather than share the target credential',async()=>{
+test('given a secret symlink should refuse rather than share the target credential', unixOnly,async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'pointguard-secret-link-'));
  try{const target=path.join(dir,'target');await writeFile(target,'x'.repeat(43),{mode:0o600});const link=path.join(dir,'secret');await symlink(target,link);await assert.rejects(ensureToken(link));assert.equal(await readFile(target,'utf8'),'x'.repeat(43));}
  finally{await rm(dir,{recursive:true,force:true});}

@@ -9,10 +9,20 @@ import {
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { acquirePrivateLock } from "./lock-helper.js";
+import { assertPrivate, makePrivate } from "./acl.js";
 
 /** Reject symlinks/public state rather than silently changing owner-managed data. */
 export async function privatePath(file, directory = false) {
   const s = await lstat(file);
+  if (process.platform === "win32") {
+    // Windows has no mode bits: a protected owner-only ACL instead (WINAPP-008).
+    if (s.isSymbolicLink() || (directory ? !s.isDirectory() : !s.isFile()))
+      throw new Error(
+        "Point Guard state must be private and owned by this user.",
+      );
+    await assertPrivate(file, { directory });
+    return s;
+  }
   if (
     s.isSymbolicLink() ||
     (directory ? !s.isDirectory() : !s.isFile()) ||
@@ -26,6 +36,15 @@ export async function privatePath(file, directory = false) {
 }
 export async function privateDirectory(dir) {
   await mkdir(dir, { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") {
+    const s = await lstat(dir);
+    if (s.isSymbolicLink() || !s.isDirectory())
+      throw new Error(
+        "Point Guard state must be private and owned by this user.",
+      );
+    await makePrivate(dir);
+    return;
+  }
   await privatePath(dir, true);
 }
 export async function writePrivateJSON(file, value, assertHeld = () => {}) {

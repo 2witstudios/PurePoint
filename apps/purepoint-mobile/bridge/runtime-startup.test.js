@@ -15,8 +15,12 @@ import path from "node:path";
 import { acquirePrivateLock } from "./lock-helper.js";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+// Skipped on Windows (WIN-9.1): needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "needs the pu-point-guard-lock helper and POSIX private-state modes (Unix only)",
+};
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-test("given cancel during fresh owned startup should release lock and attribute sanitized failure", async () => {
+test("given cancel during fresh owned startup should release lock and attribute sanitized failure", unixOnly, async () => {
   const folder = await mkdtemp(
     path.join(os.tmpdir(), "pointguard-start-cancel-"),
   );
@@ -110,7 +114,7 @@ test("given cancel during fresh owned startup should release lock and attribute 
   }
 });
 
-test("given nonprivate owner capability should identify credential recovery rather than cwd", async () => {
+test("given nonprivate owner capability should identify credential recovery rather than cwd", unixOnly, async () => {
   const folder = await mkdtemp(
     path.join(os.tmpdir(), "pointguard-capability-"),
   );
