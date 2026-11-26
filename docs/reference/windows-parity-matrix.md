@@ -46,8 +46,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/SidebarItem.swift` | 136 | `ui/src/model/sidebarItem.ts` | WIN-6.5 | todo | — |
 | `Models/StreamEvent.swift` | 122 | `src-tauri/src/conversations/stream_event.rs` | WIN-8.12 | todo | — |
 | `Models/TriggerItem.swift` | 59 | `ui/src/model/triggerItem.ts` | WIN-8.9 | todo | — |
-| `Models/Workspace.swift` | 594 | `ui/src/model/workspace.ts` | WIN-6.1 | todo | — |
-| `Models/WorkspaceModel.swift` | 73 | `ui/src/model/workspace.ts` | WIN-6.1 | todo | — |
+| `Models/Workspace.swift` | 594 | `ui/src/model/workspace.ts`, `ui/src/model/paneSplit.ts` (the tree operations it uses) | WIN-6.1 | ported | — |
+| `Models/WorkspaceModel.swift` | 73 | `ui/src/model/workspaceModel.ts` | WIN-6.1 | ported | — |
 | `Platform/AppActivity+iOS.swift` | 97 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Platform/AppKitShims+iOS.swift` | 81 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Platform/AppLifecycleHooks.swift` | 27 | `ui/src/services/appLifecycle.ts` | WIN-8.15 | todo | — |
@@ -343,8 +343,8 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `TranscriptParserTests.swift` | all | `src-tauri/src/conversations/transcript.rs` (#[cfg(test)]) | WIN-8.12 | todo | — |
 | `WorkingTreeDiffTests.swift` | all | `src-tauri/src/git/service.rs` (#[cfg(test)]) | WIN-8.1 | todo | — |
 | `WorkspaceFilesStateTests.swift` | all | `ui/src/state/workspaceFilesState.test.ts` | WIN-8.4 | todo | — |
-| `WorkspaceModelTests.swift` | all | `ui/src/model/workspace.test.ts` | WIN-6.1 | todo | — |
-| `WorkspaceReconcilerTests.swift` | all | `ui/src/model/workspaceReconciler.test.ts` | WIN-6.1 | todo | WIN-6.3 adds the Swift fixture test beside it |
+| `WorkspaceModelTests.swift` | all | `ui/src/model/workspaceModel.test.ts` | WIN-6.1 | ported | — |
+| `WorkspaceReconcilerTests.swift` | all | `ui/src/model/workspace.test.ts`, `ui/src/model/workspace.property.test.ts` | WIN-6.1 | ported | The five `WorkspacePersistence` file-format cases are `it.todo` until WIN-6.3 ports the persistence; WIN-6.3 adds the Swift fixture test beside it |
 | `WorkspaceRegistryTests.swift` | all | `ui/src/state/workspaceRegistry.test.ts` | WIN-6.2 | todo | — |
 | `purepoint_macosTests.swift` | `GlobalAgentSettingsTests` | `ui/src/state/agentConfigState.test.ts` | WIN-8.7 | todo | — |
 | `purepoint_macosTests.swift` | `PaneSplitNodeTests` | `ui/src/model/paneSplit.test.ts` | WIN-6.2 | todo | — |
