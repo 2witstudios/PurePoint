@@ -22,6 +22,7 @@ import {
 import { Icon } from '../../theme/Icon.tsx';
 import { InlineCodeView } from '../diff/InlineCodeView.tsx';
 import { ScreenPlaceholder } from './placeholders.tsx';
+import { CompactPointGuardChat } from '../chat/PiPointGuardChatView.tsx';
 import './detail.css';
 
 function lastPathComponent(path: string): string {
@@ -155,11 +156,7 @@ export function WorkspaceFilesSidebar({ state }: { state: WorkspaceFilesState })
         <WorkspaceSidebarToggle />
       </div>
       {mode === 'pointGuard' ? (
-        <ScreenPlaceholder
-          icon="bubble.left.and.bubble.right"
-          title="Point Guard"
-          view="PiPointGuardChatView"
-        />
+        <CompactPointGuardChat />
       ) : mode === 'files' ? (
         <ScreenPlaceholder icon="folder" title="Files" view="InlineFileTreeRow" />
       ) : (

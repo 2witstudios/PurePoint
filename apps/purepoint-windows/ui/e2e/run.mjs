@@ -28,6 +28,8 @@ const artifactsDir = join(e2eDir, 'artifacts');
 const debugApp = join(appDir, 'src-tauri', 'target', 'debug', 'purepoint-windows.exe');
 const puExe = join(repoRoot, 'target', 'debug', 'pu.exe');
 const engineExe = join(repoRoot, 'target', 'debug', 'pu-engine.exe');
+// The Point Guard spec's development runtime uses the repo's lock helper (a pu-cli binary).
+const lockHelperExe = join(repoRoot, 'target', 'debug', 'pu-point-guard-lock.exe');
 const plugin = join(repoRoot, 'crates', 'pu-cli', 'assets', 'plugin');
 
 if (process.platform !== 'win32') {
@@ -113,7 +115,7 @@ try {
     toolsDir,
   ]);
 
-  if (!existsSync(puExe) || !existsSync(engineExe)) {
+  if (!existsSync(puExe) || !existsSync(engineExe) || !existsSync(lockHelperExe)) {
     step('Build pu and pu-engine');
     sh('cargo', ['build', '--locked', '-p', 'pu-cli', '-p', 'pu-engine'], { cwd: repoRoot });
   }

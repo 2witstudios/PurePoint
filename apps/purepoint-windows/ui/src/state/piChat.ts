@@ -71,6 +71,8 @@ export interface PiPreferences {
 const KEY_CLIENT_ID = 'pointguard.clientId';
 const KEY_ENDPOINT = 'pointguard.endpoint';
 const KEY_DRAFTS = 'pointguard.drafts';
+/** The drafts key's endpoint part for the app-owned bridge. */
+const MANAGED_DRAFT_ENDPOINT = 'managed';
 const KEY_CANCELED = 'pointguard.canceledIds';
 
 export interface PiChatFields {
@@ -258,6 +260,8 @@ export class PiChatModel {
   private wantsConnection = false;
   private retryDelay = 2;
   private _clientId: string;
+  /** The app-owned bridge's address while bound; its port changes with every launch. */
+  private managedEndpoint: string | null = null;
 
   constructor(options: PiChatOptions = {}) {
     this.transport = options.transport ?? tauriChatTransport;
@@ -369,7 +373,13 @@ export class PiChatModel {
     );
   }
   get draftKey(): string {
-    return this.s.endpoint + ':' + (this.s.snapshot?.sessionId ?? 'local');
+    // The managed bridge listens on a new port each launch, so its drafts are keyed by role,
+    // not address: a draft typed before a relaunch is recovered after it (WIN-9.5).
+    const endpoint =
+      this.managedEndpoint !== null && this.s.endpoint === this.managedEndpoint
+        ? MANAGED_DRAFT_ENDPOINT
+        : this.s.endpoint;
+    return endpoint + ':' + (this.s.snapshot?.sessionId ?? 'local');
   }
   get recoverable(): PiSubmission[] {
     return this.s.submissions.filter((x) => x.recoverable);
@@ -519,6 +529,7 @@ export class PiChatModel {
     this.disconnect();
     this._clientId = clientId;
     this.setPref(KEY_CLIENT_ID, clientId);
+    this.managedEndpoint = piEndpoint(endpoint);
     await this.pair(endpoint, secret);
   }
 
@@ -554,6 +565,7 @@ export class PiChatModel {
     }
     this.saveDraft();
     this.saveAttachmentDraft();
+    if (address !== this.managedEndpoint) this.managedEndpoint = null;
     this.disconnect();
     this.set({ endpoint: address, snapshot: null, transcriptRows: [], demo: false });
     this.setPref(KEY_ENDPOINT, address);

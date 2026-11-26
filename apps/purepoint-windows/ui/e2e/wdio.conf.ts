@@ -5,12 +5,17 @@
 // Every spec file gets its own worker, daemon fixture (temp HOME, git repo, `pu init`, a
 // `terminal` agent) and tauri-driver, all torn down in `afterSession`. The machines spec also
 // gets a second daemon in its own temp HOME standing in for a remote machine, reached through a
-// fake `ssh.cmd` (`PU_SSH`; fixtures/fakeSsh.ts).
+// fake `ssh.cmd` (`PU_SSH`; fixtures/fakeSsh.ts). The Point Guard spec runs the app-managed runtime
+// in development mode with its LOCALAPPDATA and APPDATA in the temp profile and Pi answering from
+// a loopback fixture provider (fixtures/fakeProvider.ts); the Credential Manager entries its chat
+// saves are removed afterwards (fixtures/credentials.ts).
 
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { DaemonFixture } from './fixtures/daemon.ts';
 import { writeFakeSsh } from './fixtures/fakeSsh.ts';
+import { FakeProvider } from './fixtures/fakeProvider.ts';
+import { pairingCredentials, removePairingCredentials } from './fixtures/credentials.ts';
 import { workspace } from './fixtures/paths.ts';
 import { TauriDriver } from './fixtures/tauriDriver.ts';
 
@@ -20,6 +25,9 @@ let fixture: DaemonFixture | null = null;
 /** The machines spec's "remote" daemon. */
 let remote: DaemonFixture | null = null;
 let driver: TauriDriver | null = null;
+/** The Point Guard spec's model provider, and the pairing credentials that existed before it. */
+let provider: FakeProvider | null = null;
+let credentialsBefore: Set<string> | null = null;
 let specName = 'spec';
 
 function specArtifacts(): string {
@@ -42,6 +50,10 @@ async function teardown(): Promise<void> {
     await driver?.stop();
   } finally {
     driver = null;
+    await provider?.stop();
+    provider = null;
+    if (credentialsBefore !== null) removePairingCredentials(credentialsBefore);
+    credentialsBefore = null;
     const current = fixture;
     fixture = null;
     if (current !== null) {
@@ -105,6 +117,21 @@ export const config: WebdriverIO.Config = {
         await remote.startDaemon();
         process.env.PU_E2E_REMOTE_ROOT = remote.root;
         appEnv = { ...appEnv, ...writeFakeSsh(join(runRoot, 'fake-ssh'), remote.socket) };
+      }
+      if (specName === 'pointGuard') {
+        provider = await FakeProvider.start();
+        provider.writePiAgentConfig(fixture.home);
+        credentialsBefore = pairingCredentials();
+        const localAppData = join(fixture.root, 'localappdata');
+        const appData = join(fixture.root, 'appdata');
+        mkdirSync(localAppData, { recursive: true });
+        mkdirSync(appData, { recursive: true });
+        appEnv = {
+          ...appEnv,
+          PUREPOINT_POINTGUARD_DEV: '1',
+          LOCALAPPDATA: localAppData,
+          APPDATA: appData,
+        };
       }
       driver = await TauriDriver.start(appEnv, join(specArtifacts(), 'tauri-driver.log'));
       sessionConfig.port = driver.port;

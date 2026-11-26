@@ -8,24 +8,20 @@
 // restored offers Retry.
 //
 // `PointGuardChatSurfaceView` is one Point Guard tab's chat (the pane grid renders it for a
-// `pointGuard` tab): the conversation rail (Pi's conversations; choosing one resumes it) beside
-// the court, whose plays send their prompt. The transcript and composer are WIN-9.5's
-// `PiPointGuardChatView`, which takes this surface's place.
+// `pointGuard` tab). The conversation rail's visibility is one shared setting; Toggle Chat
+// Sidebar flips it only while a chat is on screen.
 import { type ReactNode, useEffect } from 'react';
 import { useStore } from 'zustand';
 import { isPointGuard } from '../../model/workspace.ts';
 import { pointGuardSessionFor } from '../../state/pointGuardSession.ts';
 import { useAppState } from '../shell/appContext.ts';
 import { PaneGridView } from '../panegrid/PaneGridView.tsx';
+import { paneActiveTab } from '../../model/workspace.ts';
 import { ScreenPlaceholder } from '../detail/placeholders.tsx';
+import { PiPointGuardChatView } from './PiPointGuardChatView.tsx';
 import { PointGuardPaneControls } from './PointGuardPaneControls.tsx';
-import {
-  CONVERSATION_HEADER_HEIGHT,
-  PointGuardConversationLayout,
-} from './PointGuardConversationLayout.tsx';
-import { PointGuardCourtView } from './PointGuardCourtView.tsx';
-import { resolvePlays } from '../../model/pointGuardPlays.ts';
-import { pointGuardPrompts, promptSourceFor } from '../../state/appStatePointGuardPlays.ts';
+import { onToggleChatSidebar } from './chatSidebarEvents.ts';
+import { CONVERSATION_HEADER_HEIGHT } from './PointGuardConversationLayout.tsx';
 import './pointGuard.css';
 
 export function PointGuardView() {
@@ -45,9 +41,27 @@ export function PointGuardView() {
       ? null
       : (registry?.workspacesByProject[projectRoot]?.find(isPointGuard) ?? null),
   );
+  const hasVisibleChat =
+    projectRoot === null ||
+    (workspace !== null &&
+      Object.values(workspace.panes).some(
+        (pane) => pane !== undefined && paneActiveTab(pane)?.content.kind === 'pointGuard',
+      ));
+
   useEffect(() => {
     app.activatePointGuardWorkspace();
   }, [app, projectRoot]);
+
+  // The workspace owns this shared setting once, even when a terminal or file sibling has focus.
+  // Background chat tabs don't handle it.
+  useEffect(
+    () =>
+      onToggleChatSidebar(() => {
+        if (hasVisibleChat)
+          session.setShowConversations(!session.showConversations.getState().shown);
+      }),
+    [hasVisibleChat, session],
+  );
 
   let body: ReactNode;
   if (projectRoot !== null && layoutError !== null) {
@@ -92,79 +106,19 @@ export function PointGuardView() {
 }
 
 /** One Point Guard tab's chat. */
-export function PointGuardChatSurfaceView({ tabBar }: { isFocused: boolean; tabBar?: ReactNode }) {
-  // `isFocused` moves the composer's focus once the composer lands (WIN-9.5).
+export function PointGuardChatSurfaceView({
+  isFocused,
+  tabBar,
+}: {
+  isFocused: boolean;
+  tabBar?: ReactNode;
+}) {
   const app = useAppState();
-  const session = pointGuardSessionFor(app);
-  const { chat, playbook } = session;
-  const shown = useStore(session.showConversations, (s) => s.shown);
-  const connected = useStore(chat.store, (s) => s.connected);
-  const conversations = useStore(chat.store, (s) => s.conversations);
-  const current = useStore(chat.store, (s) => s.snapshot?.sessionId ?? null);
-  const assignments = useStore(playbook.store, (s) => s.assignments);
-  const prompts = useStore(playbook.store, (s) => s.prompts);
-  useStore(chat.store, (s) => s.snapshot?.revision);
-  useEffect(() => {
-    if (connected) void chat.loadConversations();
-  }, [chat, connected]);
-  useEffect(() => {
-    void pointGuardPrompts(promptSourceFor(app)).then((listed) => {
-      if (listed !== null) playbook.prompts = listed;
-    });
-  }, [app, playbook]);
   return (
-    <div className="pg-chat" data-testid="pg-chat">
-      <PointGuardConversationLayout
-        expanded={shown}
-        onToggle={() => {
-          session.setShowConversations(!shown);
-        }}
-        tabBar={tabBar}
-        actions={null}
-        sidebar={
-          <ul className="pg-conversation-list" role="list">
-            {conversations.map((conversation) => (
-              <li key={conversation.id}>
-                <button
-                  type="button"
-                  className="pg-conversation-row"
-                  aria-current={conversation.id === current ? 'true' : undefined}
-                  disabled={!connected}
-                  onClick={() => void chat.changeSession(conversation.id)}
-                >
-                  {conversation.title}
-                </button>
-              </li>
-            ))}
-          </ul>
-        }
-      >
-        <PointGuardCourtView
-          plays={resolvePlays(assignments, prompts)}
-          prompts={prompts ?? []}
-          canRun={chat.canSendPlay}
-          connected={connected}
-          composer={
-            <ScreenPlaceholder
-              icon="bubble.left.and.bubble.right"
-              title="Composer"
-              view="PiPointGuardChatView"
-            />
-          }
-          onRun={(play) => {
-            if (play.source.kind === 'builtIn') void chat.submitPlay(play.prompt);
-          }}
-          onAssign={(slot, prompt) => {
-            playbook.assign(slot, prompt);
-          }}
-          onReset={(slot) => {
-            playbook.reset(slot);
-          }}
-          onOpenSettings={() => {
-            app.setShowSettings(true);
-          }}
-        />
-      </PointGuardConversationLayout>
-    </div>
+    <PiPointGuardChatView
+      session={pointGuardSessionFor(app)}
+      isFocused={isFocused}
+      tabBar={tabBar}
+    />
   );
 }

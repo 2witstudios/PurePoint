@@ -253,7 +253,7 @@ export class AppState implements ProjectStateOwner {
   private readonly startProjectFn: (project: ProjectState) => void;
   private readonly followsLocalDaemon: boolean;
   private readonly storage: AppStorage | null;
-  private readonly homeDirectory: string | null;
+  private homeDirectory: string | null;
   private readonly pathExists: (path: string) => boolean;
   private readonly machineDirectory: MachineDirectory | null;
   private readonly projectEnvironment: Partial<ProjectEnvironment> | undefined;
@@ -673,6 +673,11 @@ export class AppState implements ProjectStateOwner {
   /** Whether a path is too broad to open as a project (`/`, a drive root, home or above). */
   isTooBroadProjectRoot(path: string): boolean {
     return isTooBroadProjectRoot(path, this.homeDirectory);
+  }
+
+  /** `%USERPROFILE%`, once the app has read it (the window starts before it is known). */
+  setHomeDirectory(path: string | null): void {
+    this.homeDirectory = path;
   }
 
   // MARK: Project order

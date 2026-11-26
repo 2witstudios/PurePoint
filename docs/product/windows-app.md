@@ -436,7 +436,7 @@ Launch environment, added to the scrubbed copy of the app's:
 | `PI_MOBILE_CWD` | only for a recovery folder chosen while stopped |
 | `PI_MOBILE_HOST` | the tailnet IPv4 when an up, non-loopback adapter holds it and `%ProgramFiles%\Tailscale\tailscale.exe ip -4` (run with `CREATE_NO_WINDOW`, 3 s deadline) reports exactly it; absent otherwise |
 
-Admin requests go over the owner pipe as `POST /admin/v1` with the bearer token from the private `admin-token`, sent only after the pipe's server is confirmed to be the owned child's pid running as this user. Tauri: commands `pointguard_status`, `pointguard_start`, `pointguard_stop`, `pointguard_restart`, `pointguard_request`, `pointguard_chat_connection`, `pointguard_validate_folder`; event `pointguard-state`.
+Admin requests go over the owner pipe as `POST /admin/v1` with the bearer token from the private `admin-token`, sent only after the pipe's server is confirmed to be the owned child's pid running as this user. Tauri: commands `pointguard_status`, `pointguard_start`, `pointguard_stop`, `pointguard_restart`, `pointguard_request`, `pointguard_chat_connection`, `pointguard_validate_folder`, `pointguard_home` (the home folder as the daemon and Pi resolve it, which Point Guard treats as too broad to be a project, WIN-8.13); event `pointguard-state`.
 
 ### Point Guard chat (WIN-9.4)
 

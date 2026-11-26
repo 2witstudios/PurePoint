@@ -2,19 +2,20 @@
 // the connection controls that live in a Point Guard tab's strip — a status dot (typing dots
 // while Point Guard works) and an options menu with Connect phone, Setup and Connect/Disconnect.
 // History controls stay in the conversation rail.
+import { useState } from 'react';
 import { useStore } from 'zustand';
 import { Icon } from '../../theme/Icon.tsx';
 import type { PointGuardSession } from '../../state/pointGuardSession.ts';
-import { useAppState } from '../shell/appContext.ts';
-import { MenuButton, TypingDots } from './pointGuardParts.tsx';
+import { ChatSheet, MenuButton, TypingDots } from './pointGuardParts.tsx';
+import { PointGuardPhoneView, PointGuardSetupView } from './PointGuardSetupView.tsx';
 
 export function PointGuardPaneControls({ session }: { session: PointGuardSession }) {
   const { chat, service } = session;
   const connected = useStore(chat.store, (state) => state.connected);
   const status = useStore(chat.store, (state) => state.connectionStatus);
   const busy = useStore(chat.store, (state) => state.snapshot?.busy === true);
-  // Setup and Connect phone open Settings › Point Guard until WIN-9.5's setup sheet.
-  const app = useAppState();
+  const [showSetup, setShowSetup] = useState(false);
+  const [showPhone, setShowPhone] = useState(false);
 
   return (
     <div className="pg-pane-controls" data-testid="pg-pane-controls">
@@ -36,14 +37,14 @@ export function PointGuardPaneControls({ session }: { session: PointGuardSession
           {
             label: 'Connect phone',
             onSelect: () => {
-              app.setShowSettings(true);
+              setShowPhone(true);
               void service.connectPhone();
             },
           },
           {
             label: 'Setup',
             onSelect: () => {
-              app.setShowSettings(true);
+              setShowSetup(true);
             },
           },
           {
@@ -58,6 +59,25 @@ export function PointGuardPaneControls({ session }: { session: PointGuardSession
       >
         <Icon name="ellipsis" size={14} />
       </MenuButton>
+      {showSetup && (
+        <ChatSheet
+          title="Point Guard setup"
+          testId="pg-setup-sheet"
+          onDone={() => {
+            setShowSetup(false);
+          }}
+        >
+          <PointGuardSetupView service={service} chat={chat} />
+        </ChatSheet>
+      )}
+      {showPhone && (
+        <PointGuardPhoneView
+          service={service}
+          onDone={() => {
+            setShowPhone(false);
+          }}
+        />
+      )}
     </div>
   );
 }

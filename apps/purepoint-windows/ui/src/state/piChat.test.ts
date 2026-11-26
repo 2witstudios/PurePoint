@@ -446,3 +446,34 @@ describe('PiChatModel preview', () => {
     expect(chat.store.getState().conversations).toHaveLength(1);
   });
 });
+
+describe('PiChatModel managed drafts', () => {
+  it('given a relaunch onto a new managed port should recover the draft', async () => {
+    const preferences = memoryPreferences();
+    const recovery = memoryRecoveryStore();
+    const make = (bridge: ScriptedBridge) =>
+      new PiChatModel({
+        transport: bridge.transport,
+        recovery,
+        secrets: memorySecretStore(),
+        preferences,
+        writerDelayMs: 0,
+      });
+    const first = make(new ScriptedBridge());
+    await first.bindManagedConnection(ENDPOINT, SECRET, CLIENT);
+    await vi.waitFor(() => {
+      expect(first.connected).toBe(true);
+    });
+    first.setDraft('Half a thought');
+    await first.flush();
+    first.disconnect();
+
+    const second = make(new ScriptedBridge());
+    await second.bindManagedConnection('ws://127.0.0.1:4200/v1', SECRET, CLIENT);
+    await vi.waitFor(() => {
+      expect(second.connected).toBe(true);
+    });
+    expect(second.draft).toBe('Half a thought');
+    second.disconnect();
+  });
+});

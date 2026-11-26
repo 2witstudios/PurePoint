@@ -6,8 +6,9 @@
 //
 // Differences from Swift: these are functions over the app's Agents hub state
 // (`agentsHubStateFor(app)`) rather than an AppState extension, and the home folder comes from
-// Tauri's path API (the Swift `NSHomeDirectory()`).
-import { homeDir } from '@tauri-apps/api/path';
+// the backend (`pointguard_home`, `%USERPROFILE%` as the daemon and Pi resolve it; the Swift
+// `NSHomeDirectory()`).
+import { invoke } from '@tauri-apps/api/core';
 import type { SavedPrompt } from '../model/agentsHubModels.ts';
 import type { PointGuardPrompt } from '../model/pointGuardPlays.ts';
 import { agentsHubStateFor } from './agentsHubState.ts';
@@ -22,7 +23,10 @@ let home: Promise<string> | null = null;
 
 /** The home folder, read once. */
 export function pointGuardPromptRoot(): Promise<string> {
-  home ??= homeDir();
+  home ??= invoke<string | null>('pointguard_home').then((path) => {
+    if (path === null) throw new Error('The home folder is unknown.');
+    return path;
+  });
   return home;
 }
 

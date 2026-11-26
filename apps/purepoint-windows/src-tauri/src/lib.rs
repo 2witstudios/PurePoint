@@ -112,6 +112,7 @@ pub fn run() {
             pointguard::pointguard_request,
             pointguard::pointguard_chat_connection,
             pointguard::pointguard_validate_folder,
+            pointguard::pointguard_home,
             pointguard::chat::pointguard_chat_open,
             pointguard::chat::pointguard_chat_send,
             pointguard::chat::pointguard_chat_close,

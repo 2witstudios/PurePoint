@@ -17,6 +17,7 @@ import { SettingsDisplayView } from './SettingsDisplayView.tsx';
 import { SettingsGeneralView } from './SettingsGeneralView.tsx';
 import { SettingsHotkeysView } from './SettingsHotkeysView.tsx';
 import { SettingsPointGuardView } from './SettingsPointGuardView.tsx';
+import { pointGuardSessionFor } from '../../state/pointGuardSession.ts';
 import './settings.css';
 
 export function SettingsView({
@@ -56,7 +57,13 @@ export function SettingsView({
       </nav>
       <div className="settings-content">
         {section === 'general' && <SettingsGeneralView app={app} />}
-        {section === 'pointGuard' && <SettingsPointGuardView config={config} />}
+        {section === 'pointGuard' && (
+          <SettingsPointGuardView
+            config={config}
+            service={pointGuardSessionFor(app).service}
+            chat={pointGuardSessionFor(app).chat}
+          />
+        )}
         {section === 'agents' && <SettingsAgentsView app={app} config={config} />}
         {section === 'hotkeys' && <SettingsHotkeysView />}
         {section === 'display' && <SettingsDisplayView />}

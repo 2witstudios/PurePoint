@@ -46,10 +46,25 @@ pub fn save(base: &Path, name: &str, json: &str) -> Result<(), String> {
 }
 
 fn base(app: &AppHandle) -> Result<PathBuf, String> {
+    // Debug builds follow `%APPDATA%` (the known folder ignores it), so an end-to-end run's
+    // temp profile keeps its recovery files out of the real one (WIN-9.5).
+    if cfg!(debug_assertions)
+        && let Some(dir) = debug_app_data(std::env::var_os("APPDATA"), &app.config().identifier)
+    {
+        return Ok(dir.join(DIR));
+    }
     app.path()
         .app_data_dir()
         .map(|dir| dir.join(DIR))
         .map_err(|e| e.to_string())
+}
+
+/// `<APPDATA>\<identifier>`, when `APPDATA` names an absolute folder.
+fn debug_app_data(appdata: Option<std::ffi::OsString>, identifier: &str) -> Option<PathBuf> {
+    appdata
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(identifier))
 }
 
 #[tauri::command]
@@ -98,5 +113,15 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         assert!(save(temp.path(), "../escape", "{}").is_err());
         assert!(load(temp.path(), "drafts").is_err());
+    }
+
+    #[test]
+    fn given_an_absolute_appdata_should_put_debug_recovery_under_it() {
+        assert_eq!(
+            debug_app_data(Some(r"C:\temp\roaming".into()), "com.purepoint.app"),
+            Some(PathBuf::from(r"C:\temp\roaming\com.purepoint.app"))
+        );
+        assert_eq!(debug_app_data(Some("relative".into()), "id"), None);
+        assert_eq!(debug_app_data(None, "id"), None);
     }
 }

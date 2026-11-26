@@ -83,11 +83,12 @@ describe('app actions', () => {
 
   it('keep the commands of unported screens as named no-ops', () => {
     const actions = createAppActions(deps());
-    for (const [command, stub] of Object.entries(PENDING_ACTIONS)) {
+    const pending: Record<string, () => void> = PENDING_ACTIONS;
+    for (const [command, stub] of Object.entries(pending)) {
       expect(stub.name).not.toBe('');
       expect(actions[command as keyof typeof PENDING_ACTIONS]).toBe(stub);
       stub();
     }
-    expect(PENDING_ACTIONS.toggleChatSidebar.name).toBe('toggleChatSidebar');
+    expect(Object.keys(PENDING_ACTIONS)).toEqual([]);
   });
 });

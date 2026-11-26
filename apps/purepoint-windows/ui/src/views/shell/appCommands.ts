@@ -20,6 +20,7 @@ import {
   isHotkeyAction,
 } from '../../model/keyBinding.ts';
 import type { SidebarNavItem } from '../../model/sidebarItem.ts';
+import { postToggleChatSidebar } from '../chat/chatSidebarEvents.ts';
 
 /** Every menu command: the hotkey actions plus the menu-only ones. */
 export type AppCommand = HotkeyAction | 'exit' | 'checkForUpdates';
@@ -189,15 +190,8 @@ const noPaneActions = Object.fromEntries(
 
 // Commands whose screens are later leaves. Each is a named no-op until its leaf replaces it.
 
-/** WIN-9.x: the Point Guard chat sidebar (Swift `.toggleChatSidebar` notification). */
-function toggleChatSidebar(): void {
-  // Pending the chat sidebar leaf.
-}
-
 /** The named no-ops, by command; exported so tests can tell stubs from real actions. */
-export const PENDING_ACTIONS = {
-  toggleChatSidebar,
-} as const satisfies Partial<AppActions>;
+export const PENDING_ACTIONS = {} as const satisfies Partial<AppActions>;
 
 export function createAppActions(deps: AppActionDeps): AppActions {
   return {
@@ -223,6 +217,10 @@ export function createAppActions(deps: AppActionDeps): AppActions {
     },
     toggleWorkspaceSidebar: () => {
       deps.toggleSidebar('toggleWorkspaceSidebar');
+    },
+    // The Swift `.toggleChatSidebar` notification: the Point Guard chat on screen toggles its rail.
+    toggleChatSidebar: () => {
+      postToggleChatSidebar();
     },
     focusSidebar: () => {
       deps.focusSidebar();

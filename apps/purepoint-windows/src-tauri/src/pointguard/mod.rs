@@ -197,6 +197,17 @@ pub fn pointguard_chat_connection(
     state.service.chat_connection()
 }
 
+/// The home folder Point Guard and the daemon use (`%USERPROFILE%`, as `pu_core` resolves it):
+/// Pi's default working folder, which is too broad to be a project (WIN-8.13). Tauri's own
+/// `homeDir` reads the profile known folder, which ignores the environment.
+#[tauri::command]
+pub fn pointguard_home() -> Option<String> {
+    pu_core::paths::home_dir()
+        .ok()
+        .filter(|h| h.is_absolute())
+        .map(|h| h.display().to_string())
+}
+
 /// An existing absolute working folder, canonicalized.
 #[tauri::command]
 pub fn pointguard_validate_folder(path: String) -> Result<String, String> {

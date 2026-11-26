@@ -18,6 +18,8 @@ const { WorkspaceFilesSidebar } = await import('./WorkspaceFilesSidebar.tsx');
 const { WorkspaceFilesLayout } = await import('./WorkspaceFilesLayout.tsx');
 const { WorkspaceFilesState } = await import('../../state/workspaceFilesState.ts');
 const { DiffState } = await import('../../state/diffState.ts');
+const { AppStateContext } = await import('../shell/appContext.ts');
+const { makeTestApp } = await import('../shell/testApp.ts');
 type FileDiff = import('../../services/git.ts').FileDiff;
 type GitReviewSummary = import('../../services/git.ts').GitReviewSummary;
 type DiffGitService = import('../../state/diffState.ts').DiffGitService;
@@ -255,10 +257,14 @@ describe('WorkspaceFilesSidebar', () => {
 
   it('switches modes', async () => {
     const state = filesState([]);
-    render(<WorkspaceFilesSidebar state={state} />);
+    render(
+      <AppStateContext value={makeTestApp()}>
+        <WorkspaceFilesSidebar state={state} />
+      </AppStateContext>,
+    );
     await screen.findByText('No changes');
     fireEvent.click(screen.getByRole('tab', { name: 'Point Guard' }));
-    expect(screen.getByText('PiPointGuardChatView')).toBeInTheDocument();
+    expect(screen.getByTestId('pg-chat')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
     expect(screen.getByText('InlineFileTreeRow')).toBeInTheDocument();
   });

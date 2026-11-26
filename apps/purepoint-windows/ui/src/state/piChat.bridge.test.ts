@@ -484,7 +484,8 @@ describe('PiChatModel against the bridge fixture', () => {
       string,
       { id: string }[]
     >;
-    expect(saved[`${bridge.endpoint}:fixture-session`]?.map((f) => f.id)).toEqual(['note']);
+    // The managed bridge's drafts are keyed by role, not by its per-launch address.
+    expect(saved['managed:fixture-session']?.map((f) => f.id)).toEqual(['note']);
   });
 
   it('given the bridge going away should mark the connection lost and reconnect when it returns', async () => {

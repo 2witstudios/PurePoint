@@ -13,6 +13,7 @@ import { PiChatModel, pointGuardChatBinding } from './piChat.ts';
 import { PointGuardServiceState } from './pointGuardService.ts';
 import { PointGuardPlaybook, sharedPlaybook } from '../model/pointGuardPlays.ts';
 import { browserStorage } from './storage.ts';
+import { pointGuardPromptRoot } from './appStatePointGuardPlays.ts';
 
 /** `@AppStorage("PP_pointGuardShowConversations")`, shared by every Point Guard surface. */
 export const SHOW_CONVERSATIONS_KEY = 'PP_pointGuardShowConversations';
@@ -88,9 +89,14 @@ export function setPointGuardSession(app: object, session: PointGuardSession): v
 export function startPointGuardSession(
   app: AppState,
   session: PointGuardSession = pointGuardSessionFor(app),
+  home: Promise<string | null> = pointGuardPromptRoot().catch(() => null),
 ): () => void {
   let stopped = false;
+  // Pi's default folder is the home folder, which is too broad to be a project: the folder is
+  // followed only once the home folder is known, so it never reaches the daemon as one.
+  let homeKnown = false;
   const follow = (cwd: string) => {
+    if (!homeKnown) return;
     const root = cwd === '' ? null : cwd;
     if (root === app.pointGuardRoot) return;
     app.updatePointGuardRoot(cwd);
@@ -99,7 +105,12 @@ export function startPointGuardSession(
       app.activatePointGuardWorkspace();
     }
   };
-  follow(session.service.store.getState().activeCwd);
+  void home.then((path) => {
+    if (stopped) return;
+    app.setHomeDirectory(path);
+    homeKnown = true;
+    follow(session.service.store.getState().activeCwd);
+  });
   const unsubscribe = session.service.store.subscribe((state, previous) => {
     if (state.activeCwd !== previous.activeCwd) follow(state.activeCwd);
   });

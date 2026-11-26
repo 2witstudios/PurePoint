@@ -161,16 +161,16 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Chat/ConversationSidebarView.swift` | 200 | — | — | excluded | DEC-11: legacy chat (iPad DEC-9) |
 | `Views/Chat/MarkdownTextView.swift` | 8 | — | — | excluded | DEC-11: legacy chat, reached only from `ChatAreaView` |
 | `Views/Chat/MessageStreamView.swift` | 61 | — | — | excluded | DEC-11: legacy chat, reached only from `ChatAreaView` |
-| `Views/Chat/PiPointGuardChatView.swift` | 776 | `ui/src/views/chat/PiPointGuardChatView.tsx` | WIN-9.5 | todo | — |
-| `Views/Chat/PiTranscriptScrollCoordinator.swift` | 65 | `ui/src/views/chat/piTranscriptScrollCoordinator.ts` | WIN-9.5 | todo | — |
+| `Views/Chat/PiPointGuardChatView.swift` | 776 | `ui/src/views/chat/PiPointGuardChatView.tsx`, `ui/src/views/chat/chatSidebarEvents.ts` (Toggle Chat Sidebar); e2e `ui/e2e/specs/pointGuard.e2e.ts` | WIN-9.5 | ported | — |
+| `Views/Chat/PiTranscriptScrollCoordinator.swift` | 65 | `ui/src/views/chat/piTranscriptScrollCoordinator.ts` | WIN-9.5 | ported | — |
 | `Views/Chat/PointGuardConversationLayout.swift` | 165 | `ui/src/views/chat/PointGuardConversationLayout.tsx` | WIN-8.13 | ported | — |
 | `Views/Chat/PointGuardCourtView.swift` | 481 | `ui/src/views/chat/PointGuardCourtView.tsx`, `ui/src/views/chat/pointGuardParts.tsx`, `ui/src/views/chat/pointGuard.css` | WIN-8.13 | ported | — |
 | `Views/Chat/PointGuardPaneControls.swift` | 86 | `ui/src/views/chat/PointGuardPaneControls.tsx` | WIN-8.13 | ported | — |
 | `Views/Chat/PointGuardSetupView+iOS.swift` | 152 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Chat/PointGuardSetupView+iOSScanner.swift` | 110 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Chat/PointGuardSetupView.swift` | 240 | `ui/src/views/chat/PointGuardSetupView.tsx` | WIN-9.5 | todo | — |
+| `Views/Chat/PointGuardSetupView.swift` | 240 | `ui/src/views/chat/PointGuardSetupView.tsx` (the pairing code shows as text with Copy; no QR encoder) | WIN-9.5 | ported | — |
 | `Views/Chat/PointGuardView.swift` | 84 | `ui/src/views/chat/PointGuardView.tsx` | WIN-8.13 | ported | — |
-| `Views/Chat/ToolCallCardView.swift` | 54 | `ui/src/views/chat/ToolCallCardView.tsx` | WIN-9.5 | todo | — |
+| `Views/Chat/ToolCallCardView.swift` | 54 | `ui/src/views/chat/ToolCallCardView.tsx` | WIN-9.5 | ported | — |
 | `Views/CommandPalette/CommandPalettePanel+iOS.swift` | 195 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/CommandPalette/CommandPalettePanel+iOSContent.swift` | 809 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/CommandPalette/CommandPalettePanel.swift` | 887 | `ui/src/views/palette/CommandPalettePanel.tsx`, `ui/src/views/palette/paletteStore.ts`, `ui/src/views/palette/paletteFilter.ts`, `ui/src/views/palette/openPalette.ts` (in-window overlay; entry points from AppCommands, SidebarFooter, sidebar callbacks and EmptyTabView) | WIN-7.5 | ported | — |
@@ -237,7 +237,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Settings/SettingsGeneralView.swift` | 128 | `ui/src/views/settings/SettingsGeneralView.tsx` (notification sound toggles not ported: toasts play the Windows sound) | WIN-8.11 | ported | — |
 | `Views/Settings/SettingsHotkeysView+iOS.swift` | 106 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Settings/SettingsHotkeysView.swift` | 221 | `ui/src/views/settings/SettingsHotkeysView.tsx`, `ui/src/views/settings/hotkeyRecorder.ts` (records `KeyboardEvent.code`; refuses reserved terminal chords) | WIN-8.11 | ported | — |
-| `Views/Settings/SettingsPointGuardView.swift` | 20 | `ui/src/views/settings/SettingsPointGuardView.tsx` | WIN-9.5 | todo | — |
+| `Views/Settings/SettingsPointGuardView.swift` | 20 | `ui/src/views/settings/SettingsPointGuardView.tsx` (hosts `PointGuardSetupView` above the pairing import and agent launch groups) | WIN-9.5 | ported | — |
 | `Views/Settings/SettingsSection.swift` | 41 | `ui/src/views/settings/SettingsSection.ts` | WIN-8.11 | ported | — |
 | `Views/Settings/SettingsView.swift` | 138 | `ui/src/views/settings/SettingsView.tsx`, `ui/src/views/settings/SettingsGroup.tsx`, `ui/src/views/settings/settings.css` | WIN-8.11 | ported | — |
 | `Views/Sidebar/AddMachineSheet+iOS.swift` | 390 | — | — | excluded | `+iOS` file (iPad build only) |

@@ -1,6 +1,6 @@
-// Settings › Point Guard (WIN-8.11). The Mac pane hosts `PointGuardSetupView` (providers, model,
-// working folder, phone pairing; WIN-9.5 ports it into this pane). Until then this pane carries
-// what Windows needs from it today:
+// Settings › Point Guard (WIN-8.11, WIN-9.5). The Mac pane is `PointGuardSetupView` (providers,
+// model, working folder, phone pairing); given the app's chat, this pane hosts it (WIN-9.5) beside
+// what Windows adds:
 // - the owned runtime's connection status, with Start / Stop / Restart (state/pointGuardService.ts);
 // - importing a pairing (a pasted pairing code, or an address and secret) through the
 //   `pointguard_pairing_import` command, which validates and saves it in Credential Manager
@@ -14,6 +14,9 @@ import type { AgentConfigState } from '../../state/agentConfigState.ts';
 import { PointGuardServiceState } from '../../state/pointGuardService.ts';
 import { type PairingImport, importPairing } from '../../services/pairingSecret.ts';
 import { SettingsCaption, SettingsGroup, SettingsToggle } from './SettingsGroup.tsx';
+import type { PiChatModel } from '../../state/piChat.ts';
+import { PointGuardSetupView } from '../chat/PointGuardSetupView.tsx';
+import '../chat/pointGuard.css';
 
 export const SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 const POINT_GUARD_AGENT = 'claude';
@@ -149,10 +152,13 @@ function PairingImportForm({
 export function SettingsPointGuardView({
   config,
   service: injected,
+  chat,
   onImport = importPairing,
 }: {
   config: AgentConfigState;
   service?: PointGuardServiceState;
+  /** The app's chat: with it the pane hosts the setup view (provider, model, folder, phone). */
+  chat?: PiChatModel;
   onImport?: (request: PairingImport) => Promise<string>;
 }) {
   const service = useMemo(() => injected ?? new PointGuardServiceState(), [injected]);
@@ -225,6 +231,12 @@ export function SettingsPointGuardView({
         </SettingsCaption>
         {pg.error !== null && <p className="settings-error">{pg.error}</p>}
       </SettingsGroup>
+
+      {chat !== undefined && (
+        <SettingsGroup label="Setup">
+          <PointGuardSetupView service={service} chat={chat} embedded />
+        </SettingsGroup>
+      )}
 
       <SettingsGroup label="Pairing">
         <SettingsCaption>
