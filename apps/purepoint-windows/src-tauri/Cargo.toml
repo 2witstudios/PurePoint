@@ -38,6 +38,8 @@ notify = "8.2"
 uuid = { version = "1", features = ["v4"] }
 # Ctrl+click on a terminal link opens it outside the app (WIN-7.3).
 tauri-plugin-opener = "~2.5"
+# Point Guard runtime seal: SHA-256 of every bundled file (WIN-9.3); the version pu-core uses.
+sha2 = "0.11"
 
 # Same versions Tauri 2.11's WebView2 runtime links, so the COM types match.
 [target.'cfg(windows)'.dependencies]
@@ -46,9 +48,13 @@ windows-core = "0.61"
 # Daemon lifecycle: find, wait on and stop the running `pu-engine.exe` (WIN-5.3).
 # Installer (WIN-10.1): the user PATH in HKCU\Environment and the WM_SETTINGCHANGE broadcast.
 # Window chrome and placement (WIN-7.1): the caption sink, subclassing, regions and monitors.
+# Point Guard (WIN-9.3): adapter addresses for the tailnet check, the Quit prompt.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
     "Win32_System_LibraryLoader",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
@@ -66,3 +72,8 @@ tempfile = "3"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# The Point Guard seal hashes the whole ~230 MB runtime before each launch (WIN-9.3); unoptimized
+# SHA-256 takes minutes, so debug builds and tests optimize it.
+[profile.dev.package.sha2]
+opt-level = 3
