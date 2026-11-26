@@ -8,12 +8,14 @@
 // - The terminal view cache (`viewCache.remove`) is WIN-7.3; nothing is cached yet to drop.
 // - The command palette is WIN-7.5: the add buttons call the named `openCommandPalette` stub, and
 //   `onAddTerminal` (the worktree add menu's New Terminal) arrives with the menus (WIN-7.8).
-// - A remote project's removal error goes to the daemon banner; the machine's own `actionError`
-//   is part of the machines port (WIN-8.14).
+// - A remote project's removal error goes to the daemon banner.
+// - A machine row's add button opens the remote folder picker (WIN-8.14; the Mac adds remote
+//   projects from the CLI or another device, the iPad from this picker).
 
 import type { SidebarSelection } from '../../model/sidebarItem.ts';
 import type { AppState } from '../../state/appState.ts';
 import { openCommandPalette } from '../shell/appCommands.ts';
+import { useMachineSheets } from './machineSheets.ts';
 import type {
   SidebarOutlineCallbacks,
   SidebarSelectOptions,
@@ -79,7 +81,15 @@ export function wireCallbacks(
       const machine = app.machines.find((candidate) => candidate.machine.id === machineId);
       if (machine === undefined) return;
       if (machine.snapshot().state.kind === 'disconnected') machine.connect();
-      else machine.disconnect();
+      else machine.disconnect({ remember: true });
+    },
+
+    onStartDaemon: (machineId) => {
+      app.machines.find((candidate) => candidate.machine.id === machineId)?.startDaemon();
+    },
+
+    onOpenRemoteProject: (machineId) => {
+      useMachineSheets.getState().openFolderPicker(machineId);
     },
   };
 }

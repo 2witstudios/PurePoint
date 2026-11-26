@@ -35,12 +35,16 @@ pub fn run() {
     tauri::Builder::default()
         // Links from terminals and chat open in the user's browser (WIN-7.3).
         .plugin(tauri_plugin_opener::init())
+        // Open Project's folder picker (WIN-8.15).
+        .plugin(tauri_plugin_dialog::init())
         // Agent signal toasts (WIN-7.7).
         .plugin(tauri_plugin_notification::init())
         // In-place updates (WIN-10.3): the app's `updater_*` commands drive it.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(git::commands::GitState::default())
         .manage(attach::AttachState::default())
+        // Each machine's daemon client over the ssh relay (WIN-8.14).
+        .manage(daemon::machine::MachineClients::default())
         .manage(pointguard::chat::ChatSockets::default())
         .manage(secrets::pairing::PairingSecrets::default())
         .invoke_handler(tauri::generate_handler![
@@ -66,6 +70,14 @@ pub fn run() {
             daemon::daemon_request,
             daemon::daemon_health,
             daemon::daemon_status,
+            daemon::machine::machines_load,
+            daemon::machine::machines_add,
+            daemon::machine::machines_remove,
+            daemon::machine::machines_ssh_config,
+            daemon::machine::machine_request,
+            daemon::machine::machine_probe,
+            daemon::machine::machine_start_daemon,
+            daemon::machine::machine_test_connection,
             installer::installer_status,
             installer::installer_run,
             updater::updater_status,

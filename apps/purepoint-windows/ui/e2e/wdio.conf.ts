@@ -3,17 +3,22 @@
 // and stages the app first.
 //
 // Every spec file gets its own worker, daemon fixture (temp HOME, git repo, `pu init`, a
-// `terminal` agent) and tauri-driver, all torn down in `afterSession`.
+// `terminal` agent) and tauri-driver, all torn down in `afterSession`. The machines spec also
+// gets a second daemon in its own temp HOME standing in for a remote machine, reached through a
+// fake `ssh.cmd` (`PU_SSH`; fixtures/fakeSsh.ts).
 
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { DaemonFixture } from './fixtures/daemon.ts';
+import { writeFakeSsh } from './fixtures/fakeSsh.ts';
 import { workspace } from './fixtures/paths.ts';
 import { TauriDriver } from './fixtures/tauriDriver.ts';
 
 const runRoot = process.env.PU_E2E_RUN_ROOT;
 
 let fixture: DaemonFixture | null = null;
+/** The machines spec's "remote" daemon. */
+let remote: DaemonFixture | null = null;
 let driver: TauriDriver | null = null;
 let specName = 'spec';
 
@@ -44,6 +49,14 @@ async function teardown(): Promise<void> {
         copyFileSync(current.daemonLog, join(specArtifacts(), 'pu-engine.log'));
       }
       await current.dispose();
+    }
+    const machine = remote;
+    remote = null;
+    if (machine !== null) {
+      if (existsSync(machine.daemonLog)) {
+        copyFileSync(machine.daemonLog, join(specArtifacts(), 'remote-pu-engine.log'));
+      }
+      await machine.dispose();
     }
   }
 }
@@ -83,7 +96,17 @@ export const config: WebdriverIO.Config = {
       process.env.PU_E2E_ROOT = fixture.root;
       process.env.PU_E2E_HOME = fixture.home;
       process.env.PU_E2E_PROJECT_ROOT = fixture.projectRoot;
-      driver = await TauriDriver.start(fixture.env, join(specArtifacts(), 'tauri-driver.log'));
+      let appEnv = fixture.env;
+      if (specName === 'machines') {
+        remote = await DaemonFixture.create({
+          root: join(runRoot, 'machines-remote'),
+          projectName: 'remote-project',
+        });
+        await remote.startDaemon();
+        process.env.PU_E2E_REMOTE_ROOT = remote.root;
+        appEnv = { ...appEnv, ...writeFakeSsh(join(runRoot, 'fake-ssh'), remote.socket) };
+      }
+      driver = await TauriDriver.start(appEnv, join(specArtifacts(), 'tauri-driver.log'));
       sessionConfig.port = driver.port;
     } catch (error) {
       await teardown();

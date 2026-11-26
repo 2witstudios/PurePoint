@@ -34,7 +34,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/FileNode.swift` | 38 | `ui/src/model/fileNode.ts` | WIN-8.4 | todo | — |
 | `Models/KeyBinding+iOS.swift` | 128 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Models/KeyBinding.swift` | 449 | `ui/src/model/keyBinding.ts` | WIN-6.7 | ported | — |
-| `Models/Machine.swift` | 278 | `ui/src/model/machine.ts` | WIN-8.14 | todo | — |
+| `Models/Machine.swift` | 278 | `ui/src/model/machine.ts` (validation, ssh config aliases, destinations; the registry file and its lock are pu-core's, through `src-tauri/src/daemon/machine.rs`) | WIN-8.14 | ported | — |
 | `Models/ManifestModel.swift` | 100 | `ui/src/protocol/generated/` (replaced by generated types; Swift's lenient decoding in `ui/src/services/daemonConnection.ts`) | WIN-6.0 | ported | — |
 | `Models/PRModel.swift` | 33 | `ui/src/model/pr.ts` (`PullRequestInfo` from `ui/src/services/git.ts`) | WIN-6.0 | ported | — |
 | `Models/PiChatDomain.swift` | 368 | `ui/src/model/piChatDomain.ts`, `ui/src/services/pointGuardChat.ts` (recovery store, coalesced writer) | WIN-9.4 | ported | — |
@@ -50,7 +50,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/WorkspaceModel.swift` | 73 | `ui/src/model/workspaceModel.ts` | WIN-6.1 | ported | — |
 | `Platform/AppActivity+iOS.swift` | 97 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Platform/AppKitShims+iOS.swift` | 81 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Platform/AppLifecycleHooks.swift` | 27 | `ui/src/services/appLifecycle.ts` | WIN-8.15 | todo | — |
+| `Platform/AppLifecycleHooks.swift` | 27 | `ui/src/services/appLifecycle.ts` (Open Project defaults to the folder picker, `ui/src/services/dialog.ts`; reveal and open-in-default-app are `ui/src/services/opener.ts`; `scenePhaseChanged` and `presentPalette` are iPad-only) | WIN-8.15 | ported | — |
 | `Platform/HSplitView+iOS.swift` | 25 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Platform/LocalFilePresenter+iOS.swift` | 113 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Platform/MacControlStyles+iOS.swift` | 299 | — | — | excluded | `+iOS` file (iPad build only) |
@@ -83,7 +83,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Services/HotkeyMonitor+iOS.swift` | 136 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Services/HotkeyMonitor.swift` | 49 | `ui/src/services/hotkeys.ts` (DOM key handling) | WIN-7.6 | todo | — |
 | `Services/MachineConnection+iOS.swift` | 380 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Services/MachineConnection.swift` | 650 | `src-tauri/src/daemon/machine.rs` | WIN-8.14 | todo | — |
+| `Services/MachineConnection.swift` | 650 | `src-tauri/src/daemon/machine.rs` (relayed `health` probe, exit 69/127/9009/255 verdicts, Start daemon), `src-tauri/src/daemon/relay.rs` (argv), `ui/src/services/machines.ts` (`MachineConnection` supervision; no forward, `forward.lock` or pid file, WINAPP-013) | WIN-8.14 | ported | — |
 | `Services/MachineRegistryWatcher.swift` | 146 | `src-tauri/src/watchers/machine_registry.rs` | WIN-5.6 | ported | Watches the parent dir by name (no re-open after rename), 1 s retry while absent; `machines-changed` |
 | `Services/ManifestWatcher.swift` | 116 | `src-tauri/src/watchers/manifest.rs` | WIN-5.6 | ported | Watches `.pu` by name, 50 ms debounce, one event per rename burst; `manifest-changed {projectRoot}`; WIN-3.13 release in `watchers/mod.rs` |
 | `Services/MarkdownHTMLRenderer.swift` | 245 | `ui/src/services/markdownHtml.ts` | WIN-8.6 | todo | — |
@@ -124,8 +124,8 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/FileTabStore.swift` | 62 | `ui/src/state/workspaceRegistry.ts` | WIN-6.2 | ported | — |
 | `State/FileTreeState.swift` | 208 | `ui/src/state/fileTreeState.ts` | WIN-8.4 | todo | — |
 | `State/KeyBindingState.swift` | 138 | `ui/src/state/keyBindingStore.ts` | WIN-6.7 | ported | — |
-| `State/MachineState+OpenProject.swift` | 67 | `ui/src/state/machineStateOpenProject.ts` | WIN-8.14 | todo | — |
-| `State/MachineState.swift` | 515 | `ui/src/state/machineState.ts` | WIN-8.14 | todo | — |
+| `State/MachineState+OpenProject.swift` | 67 | `ui/src/state/machineStateOpenProject.ts` (with `fsBrowseRequest`; the picker is `ui/src/state/remoteFolderBrowser.ts`, `ui/src/views/sidebar/RemoteFolderPicker.tsx`) | WIN-8.14 | ported | — |
+| `State/MachineState.swift` | 515 | `ui/src/state/machineState.ts` (`LiveMachineState`, `TauriMachineDirectory`; the project list is polled, not streamed) | WIN-8.14 | ported | — |
 | `State/PiChatModel.swift` | 827 | `ui/src/state/piChat.ts`, `src-tauri/src/pointguard/chat.rs` (WebSocket held by the backend), `src-tauri/src/pointguard/recovery.rs` | WIN-9.4 | ported | — |
 | `State/PointGuardServiceModel.swift` | 516 | `src-tauri/src/pointguard/service.rs`, `src-tauri/src/pointguard/runtime.rs`, `src-tauri/src/pointguard/admin.rs`, `ui/src/services/pointguard.ts`, `ui/src/state/pointGuardService.ts` | WIN-9.3 | ported | — |
 | `State/ProjectState.swift` | 748 | `ui/src/state/projectState.ts`, `ui/src/state/remoteLayoutSaver.ts`, `ui/src/state/cachedWorkspacePersistence.ts`, `ui/src/services/fs.ts`, `src-tauri/src/files/text.rs` | WIN-6.0 | ported | — |
@@ -241,7 +241,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/Settings/SettingsSection.swift` | 41 | `ui/src/views/settings/SettingsSection.tsx` | WIN-8.11 | todo | — |
 | `Views/Settings/SettingsView.swift` | 138 | `ui/src/views/settings/SettingsView.tsx` | WIN-8.11 | todo | — |
 | `Views/Sidebar/AddMachineSheet+iOS.swift` | 390 | — | — | excluded | `+iOS` file (iPad build only) |
-| `Views/Sidebar/AddMachineSheet.swift` | 125 | `ui/src/views/sidebar/AddMachineSheet.tsx` | WIN-8.14 | todo | — |
+| `Views/Sidebar/AddMachineSheet.swift` | 125 | `ui/src/views/sidebar/AddMachineSheet.tsx` (`ui/src/views/sidebar/machineSheets.ts`) | WIN-8.14 | ported | — |
 | `Views/Sidebar/RemoteFolderPicker+iOS.swift` | 503 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/Sidebar/SidebarFooter.swift` | 153 | `ui/src/views/sidebar/SidebarFooter.tsx` | WIN-7.2 | ported | — |
 | `Views/Sidebar/SidebarMenuModel.swift` | 263 | `ui/src/model/sidebarMenu.ts` | WIN-6.5 | ported | — |
@@ -312,7 +312,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `IPadWindowingTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `KeyBindingStateTests.swift` | all | `ui/src/state/keyBindingStore.test.ts` | WIN-6.7 | ported | — |
 | `LocalFilePresenterIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
-| `MachinesTests.swift` | all | `ui/src/model/machine.test.ts`, `src-tauri/src/daemon/machine.rs` (#[cfg(test)]) | WIN-8.14 | todo | — |
+| `MachinesTests.swift` | all | `ui/src/model/machine.test.ts`, `ui/src/state/machineState.test.ts`, `src-tauri/src/daemon/machine.rs` and `src-tauri/src/daemon/relay.rs` (#[cfg(test)]); `ProjectKeyTests` are `ui/src/model/projectKey.test.ts`, the remote layout cases `ui/src/model/workspacePersistence.test.ts`; the forward, pid-file and `forward.lock` cases have no Windows counterpart (WINAPP-013) | WIN-8.14 | ported | — |
 | `MarkdownHTMLRendererTests.swift` | all | `ui/src/services/markdownHtml.test.ts` | WIN-8.6 | todo | — |
 | `PaneTabDragIOSTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `PaneTabStackTests.swift` | all | `ui/src/state/workspaceRegistry.tabs.test.ts` | WIN-6.2 | ported | — |
@@ -322,7 +322,7 @@ Test files in `apps/purepoint-macos/purepoint-macosTests/`. Status is `todo`, `p
 | `PointGuardRoutingTests.swift` | all | `ui/src/state/pointGuardRouting.test.ts` | WIN-8.13 | todo | — |
 | `PointGuardWorkspaceTests.swift` | all | `ui/src/state/pointGuardWorkspace.test.ts` | WIN-8.13 | todo | — |
 | `ProjectOrderTests.swift` | all | `ui/src/model/projectOrder.test.ts` | WIN-6.5 | ported | — |
-| `RemoteFolderPickerTests.swift` | `FsBrowseRequestTests` | `ui/src/state/machineState.fsBrowse.test.ts` | WIN-8.14 | todo | Only `FsBrowseRequestTests` is platform-neutral; the rest is `#if os(iOS)` |
+| `RemoteFolderPickerTests.swift` | `FsBrowseRequestTests` | `ui/src/state/machineState.fsBrowse.test.ts` (the Windows picker's browsing: `ui/src/state/remoteFolderBrowser.test.ts`) | WIN-8.14 | ported | Only `FsBrowseRequestTests` is platform-neutral; the rest is `#if os(iOS)` |
 | `SSHIdentityTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `SSHMachineRegistryTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |
 | `SSHTransportTests.swift` | all | — | — | ios-only | Whole-file `#if os(iOS)` |

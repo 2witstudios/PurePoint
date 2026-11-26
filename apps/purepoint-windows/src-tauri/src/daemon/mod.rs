@@ -3,6 +3,8 @@
 //! - `client`: NDJSON one-shot requests and long-lived connections (`DaemonClient.swift`).
 //! - `lifecycle`: find, reuse, start and restart the local daemon (`DaemonLifecycle.swift`).
 //! - `relay`: a machine's daemon over `ssh.exe … pu daemon proxy`, for remote projects.
+//! - `machine`: the machine registry, each machine's daemon client, its health probe and
+//!   Start daemon (WIN-8.14).
 //!
 //! Tauri surface (front end: `ui/src/services/daemon.ts`): commands `daemon_request`,
 //! `daemon_health` and `daemon_status`, and the `daemon-state` event carrying a
@@ -10,6 +12,7 @@
 
 pub mod client;
 pub mod lifecycle;
+pub mod machine;
 pub mod relay;
 
 use std::sync::Arc;

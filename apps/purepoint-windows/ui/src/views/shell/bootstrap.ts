@@ -1,7 +1,8 @@
 // App startup (WIN-7.1): what purepoint_macosApp.swift and ContentView start when the window
 // opens — the theme following Windows, AppState's backend listeners (daemon state into the
 // banner), the first daemon status, the projects subscription, the installer's state, and the
-// updater's state (WIN-10.3).
+// updater's state (WIN-10.3), and the
+// machines in `machines.json` (WIN-8.14), whose agents' terminals attach through their machine.
 import { daemonStatus, type DaemonConnectionState } from '../../services/daemon.ts';
 import {
   installerStatus,
@@ -16,6 +17,8 @@ import {
   startAgentSignals,
 } from '../../services/agentSignalNotifications.ts';
 import { AppState } from '../../state/appState.ts';
+import { TauriMachineDirectory } from '../../state/machineState.ts';
+import { configureTerminals } from '../terminal/terminals.ts';
 import { CachedWorkspacePersistence } from '../../state/cachedWorkspacePersistence.ts';
 import { WorkspaceRegistry } from '../../state/workspaceRegistry.ts';
 import { startThemeSync } from '../../theme/themeStore.ts';
@@ -31,6 +34,8 @@ export interface StartAppDeps {
   startAgentSignals?(app: AppState): () => void;
   /** Follows `updater-state` into the updater store (WIN-10.3); returns its stop. */
   startUpdater?(): () => void;
+  /** The machines in `machines.json` and where remote agents' terminals attach (WIN-8.14). */
+  loadMachines?(app: AppState): void;
 }
 
 const defaultDeps: StartAppDeps = {
@@ -43,6 +48,12 @@ const defaultDeps: StartAppDeps = {
   },
   startAgentSignals,
   startUpdater,
+  loadMachines: (app) => {
+    configureTerminals({
+      machineIdFor: (agentId) => app.projectStateForAgent(agentId)?.machineId ?? undefined,
+    });
+    app.loadMachines().catch(logged('loading machines'));
+  },
 };
 
 /** The updater store follows the backend: its events, then its current state. */
@@ -92,6 +103,7 @@ export function createAppState(): AppState {
     registry,
     persistence,
     signalNotifications: new AgentSignalNotifications(),
+    machines: new TauriMachineDirectory(),
   });
   registry.onCloseAgent = (projectId, agentId) => {
     app.projectState(projectId)?.removeAndKillAgent(agentId);
@@ -126,6 +138,8 @@ export function startApp(app: AppState, deps: StartAppDeps = defaultDeps): () =>
 
   // The local daemon's projects, followed from here on (the projects subscription).
   app.restoreProjects();
+  // Machines: connect the registered ones and follow the registry (WIN-8.14).
+  if (deps.loadMachines !== undefined) deps.loadMachines(app);
   if (deps.startAgentSignals !== undefined) keep(deps.startAgentSignals(app));
   if (deps.startUpdater !== undefined) keep(deps.startUpdater());
 

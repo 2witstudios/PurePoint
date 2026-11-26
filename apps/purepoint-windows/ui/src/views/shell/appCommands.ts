@@ -143,6 +143,8 @@ export interface AppActionDeps {
   /** Toggles a sidebar by its hotkey action (`toggleSidebar`, `toggleWorkspaceSidebar`). */
   toggleSidebar: (action: HotkeyAction) => void;
   showSettings: () => void;
+  /** Open Project: the folder picker (WIN-8.15, Swift `openProjectWithPicker`). */
+  openProject: () => void;
   focusSidebar: () => void;
   focusContent: () => void;
   closeWindow: () => void;
@@ -173,10 +175,6 @@ export const openCommandPalette: (request: CommandPaletteRequest | null) => void
 /** WIN-7.5: the command palette (Swift `showNewAgentPalette`). */
 function newAgent(): void {
   // Pending WIN-7.5.
-}
-/** WIN-8.x: the folder picker (Tauri dialog plugin, Swift `openProjectWithPicker`). */
-function openProject(): void {
-  // Pending the dialog plugin.
 }
 /** WIN-7.4: close the focused tab (Swift `.closeAgent` + `TabCloseConfirmation`). */
 function closeTab(): void {
@@ -230,7 +228,6 @@ function toggleChatSidebar(): void {
 /** The named no-ops, by command; exported so tests can tell stubs from real actions. */
 export const PENDING_ACTIONS = {
   newAgent,
-  openProject,
   closeAgent: closeTab,
   splitBelow,
   splitRight,
@@ -260,6 +257,9 @@ export function createAppActions(deps: AppActionDeps): AppActions {
     ...PENDING_ACTIONS,
     settings: () => {
       deps.showSettings();
+    },
+    openProject: () => {
+      deps.openProject();
     },
     exit: () => {
       deps.closeWindow();

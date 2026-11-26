@@ -873,4 +873,24 @@ describe('SidebarView', () => {
       includeWorktree: true,
     });
   });
+
+  it('opens the folder picker from the footer and opens the chosen folder (WIN-8.15)', async () => {
+    const app = makeTestApp();
+    const spy = globalThis as { __PU_DIALOG_SPY__?: (string | null)[] };
+    spy.__PU_DIALOG_SPY__ = ['C:\\work\\picked'];
+    try {
+      render(
+        <AppStateContext.Provider value={app}>
+          <SidebarFooter selection={null} />
+        </AppStateContext.Provider>,
+      );
+      expect(screen.getByRole('button', { name: 'Open' })).toHaveTextContent('Ctrl+Shift+O');
+      fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+      await vi.waitFor(() => {
+        expect(app.projects.map((project) => project.projectRoot)).toEqual(['C:\\work\\picked']);
+      });
+    } finally {
+      delete spy.__PU_DIALOG_SPY__;
+    }
+  });
 });

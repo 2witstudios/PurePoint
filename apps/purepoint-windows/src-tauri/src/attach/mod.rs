@@ -21,8 +21,8 @@ use tauri::State;
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 use crate::daemon::DaemonState;
-use crate::daemon::client::{DaemonClient, DaemonError};
-use crate::daemon::relay::SshRelayConnector;
+use crate::daemon::client::DaemonError;
+use crate::daemon::machine::MachineClients;
 use session::{AttachEvent, AttachOptions, AttachSession, AttachSink};
 
 /// How long `attach_input` with `deliver` waits for a connection (`deliverInput`).
@@ -102,6 +102,7 @@ impl InputData {
 #[tauri::command]
 pub async fn attach_open(
     daemon: State<'_, DaemonState>,
+    machines: State<'_, MachineClients>,
     attach: State<'_, AttachState>,
     agent_id: String,
     cols: u16,
@@ -112,7 +113,7 @@ pub async fn attach_open(
     machine_id: Option<String>,
 ) -> Result<u32, DaemonError> {
     let client = match machine_id {
-        Some(machine) => DaemonClient::new(Arc::new(SshRelayConnector::new(machine))),
+        Some(machine) => machines.client(&machine),
         None => daemon.lifecycle()?.client().clone(),
     };
     let mut options = AttachOptions::new(agent_id, cols, rows);

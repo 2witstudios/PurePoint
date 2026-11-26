@@ -757,3 +757,72 @@ mod real_daemon {
         );
     }
 }
+
+#[test]
+fn given_a_machines_events_should_carry_its_id() {
+    let remote = SubscriptionEvent::Remote(RemoteEvent::new(
+        "6f1c2b3a-1111-4222-8333-944455556666",
+        &SubscriptionEvent::Status {
+            project_root: "/home/me/app".into(),
+            worktrees: vec![],
+            agents: vec![],
+        },
+    ));
+    assert_eq!(remote.name(), "status-event");
+    assert_eq!(
+        serde_json::to_value(&remote).unwrap(),
+        serde_json::json!({"machineId": "6f1c2b3a-1111-4222-8333-944455556666",
+            "projectRoot": "/home/me/app", "worktrees": [], "agents": []})
+    );
+    let state = SubscriptionEvent::Remote(RemoteEvent::new(
+        "m",
+        &SubscriptionEvent::State(StateChange {
+            kind: SubscriptionKind::Status,
+            project_root: Some("/srv".into()),
+            state: SubscriptionState::DaemonLost,
+        }),
+    ));
+    assert_eq!(state.name(), "subscription-state");
+    assert_eq!(
+        serde_json::to_value(&state).unwrap(),
+        serde_json::json!({"machineId": "m", "kind": "status", "projectRoot": "/srv",
+            "state": "daemon_lost"})
+    );
+}
+
+#[tokio::test]
+async fn given_the_same_root_on_a_machine_should_keep_separate_subscriptions() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let client = DaemonClient::local(&tmp.path().join("none.sock")).unwrap();
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let subscriptions = Subscriptions::new(
+        Arc::new(move |event| {
+            let _ = tx.send(event);
+        }),
+        Policies::default(),
+    );
+    subscriptions.start_project(&client, "/srv/app");
+    subscriptions.start_project_on(&client, "/srv/app", Some("M1"));
+    assert_eq!(
+        subscriptions.project_roots(),
+        vec!["/srv/app".to_string(), "machine:m1:/srv/app".to_string()]
+    );
+    // The machine's streams report under its id.
+    let tagged = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match events.recv().await {
+                Some(SubscriptionEvent::Remote(remote)) => {
+                    break remote.machine_id().unwrap_or_default().to_owned();
+                }
+                Some(_) => continue,
+                None => panic!("events ended"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(tagged, "m1");
+    assert!(subscriptions.stop_project_on("/srv/app", Some("m1")));
+    assert!(!subscriptions.stop_project_on("/srv/app", Some("m1")));
+    assert!(subscriptions.stop_project("/srv/app"));
+}
