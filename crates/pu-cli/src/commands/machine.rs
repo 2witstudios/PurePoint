@@ -114,7 +114,7 @@ fn run_remove(name: &str, json: bool) -> Result<(), CliError> {
     // (such as the app's live forward) still uses it.
     if let Ok(dir) = paths::machine_dir(&machine.id) {
         machine_target::sweep_stale_sockets(&dir);
-        let _ = std::fs::remove_dir(&dir);
+        let _ = pu_core::fs_retry::remove_dir(&dir);
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&machine_json(&machine))?);

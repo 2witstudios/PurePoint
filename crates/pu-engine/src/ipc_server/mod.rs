@@ -170,7 +170,7 @@ impl IpcServer {
     pub fn bind(socket_path: &Path, engine: Engine) -> Result<Self, std::io::Error> {
         use std::os::unix::fs::PermissionsExt;
         // Remove stale socket if it exists
-        let _ = std::fs::remove_file(socket_path);
+        let _ = pu_core::fs_retry::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path)?;
         // Owner-only whatever the umask. Connections accepted before this are
         // still held to the peer check in `run`.

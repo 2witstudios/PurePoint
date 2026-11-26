@@ -215,8 +215,8 @@ pub fn close_open_forwards() {
                 libc::kill(pid, libc::SIGKILL);
             }
         }
-        let _ = std::fs::remove_file(&socket);
-        let _ = std::fs::remove_file(pid_file_path(&socket));
+        let _ = pu_core::fs_retry::remove_file(&socket);
+        let _ = pu_core::fs_retry::remove_file(pid_file_path(&socket));
     }
 }
 
@@ -263,8 +263,8 @@ impl Drop for Forward {
             let _ = child.kill();
             let _ = child.wait();
         }
-        let _ = std::fs::remove_file(&self.socket);
-        let _ = std::fs::remove_file(pid_file_path(&self.socket));
+        let _ = pu_core::fs_retry::remove_file(&self.socket);
+        let _ = pu_core::fs_retry::remove_file(pid_file_path(&self.socket));
     }
 }
 
@@ -375,7 +375,7 @@ pub fn sweep_stale_sockets(dir: &Path) {
                 }
             }
         }
-        let _ = std::fs::remove_file(&path);
+        let _ = pu_core::fs_retry::remove_file(&path);
     }
 }
 
@@ -390,7 +390,7 @@ pub async fn open_forward(machine: &Machine) -> Result<Forward, CliError> {
             socket.display()
         )));
     }
-    let _ = std::fs::remove_file(&socket);
+    let _ = pu_core::fs_retry::remove_file(&socket);
     let home = resolve_remote_home(machine).await?;
     // A signal while ssh is still coming up must close it too.
     close_forwards_on_signal();

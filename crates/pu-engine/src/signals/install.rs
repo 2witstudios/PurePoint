@@ -33,7 +33,7 @@ impl Artifacts {
         // the launch's scratch HOME.
         let socket_directory = std::env::temp_dir().join(format!("pu-signal-{launch}"));
         if let Err(e) = pu_core::private_fs::create_new_private_dir(&socket_directory) {
-            let _ = std::fs::remove_dir(&directory);
+            let _ = pu_core::fs_retry::remove_dir(&directory);
             return Err(e);
         }
         #[cfg(unix)]
@@ -42,8 +42,8 @@ impl Artifacts {
         let signal_address = match signal_pipe_name(project, launch) {
             Ok(name) => name,
             Err(e) => {
-                let _ = std::fs::remove_dir(&socket_directory);
-                let _ = std::fs::remove_dir(&directory);
+                let _ = pu_core::fs_retry::remove_dir(&socket_directory);
+                let _ = pu_core::fs_retry::remove_dir(&directory);
                 return Err(e);
             }
         };
@@ -114,13 +114,13 @@ impl Drop for Artifacts {
         // Compare-and-remove only exact owned bytes; later edits survive removal.
         for (path, bytes) in &self.files {
             if std::fs::read(path).is_ok_and(|current| current == *bytes) {
-                let _ = std::fs::remove_file(path);
+                let _ = pu_core::fs_retry::remove_file(path);
             }
         }
-        let _ = std::fs::remove_file(self.socket_directory.join("s"));
-        let _ = std::fs::remove_dir(self.socket_directory.join("home"));
-        let _ = std::fs::remove_dir(&self.socket_directory);
-        let _ = std::fs::remove_dir(&self.directory);
+        let _ = pu_core::fs_retry::remove_file(self.socket_directory.join("s"));
+        let _ = pu_core::fs_retry::remove_dir(self.socket_directory.join("home"));
+        let _ = pu_core::fs_retry::remove_dir(&self.socket_directory);
+        let _ = pu_core::fs_retry::remove_dir(&self.directory);
     }
 }
 

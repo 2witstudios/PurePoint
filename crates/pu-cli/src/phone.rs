@@ -476,7 +476,7 @@ pub fn write_unit_file(file: &Path, unit: &str) -> Result<(), CliError> {
     }
     let temp = file.with_extension("service.tmp");
     // A leftover (or planted) temp file is replaced, never written through.
-    match std::fs::remove_file(&temp) {
+    match pu_core::fs_retry::remove_file(&temp) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
         _ => {}
     }
@@ -489,7 +489,7 @@ pub fn write_unit_file(file: &Path, unit: &str) -> Result<(), CliError> {
     out.write_all(unit.as_bytes())?;
     out.sync_all()?;
     drop(out);
-    std::fs::rename(&temp, file)?;
+    pu_core::fs_retry::rename(&temp, file)?;
     Ok(())
 }
 

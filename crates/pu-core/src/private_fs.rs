@@ -50,11 +50,11 @@ pub fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
         file.write_all(contents)?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&temp, path)?;
+        crate::fs_retry::rename(&temp, path)?;
         sync_dir(parent)
     };
     write().inspect_err(|_| {
-        let _ = std::fs::remove_file(&temp);
+        let _ = crate::fs_retry::remove_file(&temp);
     })
 }
 
@@ -179,7 +179,7 @@ mod imp {
     }
 
     pub fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
-        std::fs::rename(from, to)
+        crate::fs_retry::rename(from, to)
     }
 
     pub fn check_private(path: &Path) -> io::Result<()> {
@@ -296,28 +296,39 @@ mod imp {
 
     pub fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
         const ERROR_FILE_NOT_FOUND: i32 = 2;
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        const ERROR_UNABLE_TO_REMOVE_REPLACED: i32 = 1175;
         let target = sec::wide(to.as_os_str());
         let source = sec::wide(from.as_os_str());
-        // SAFETY: both names are NUL-terminated; the reserved arguments are null.
-        let ok = unsafe {
-            ReplaceFileW(
-                target.as_ptr(),
-                source.as_ptr(),
-                std::ptr::null(),
-                REPLACEFILE_IGNORE_MERGE_ERRORS,
-                std::ptr::null(),
-                std::ptr::null(),
-            )
+        let replace = || {
+            // SAFETY: both names are NUL-terminated; the reserved arguments are null.
+            let ok = unsafe {
+                ReplaceFileW(
+                    target.as_ptr(),
+                    source.as_ptr(),
+                    std::ptr::null(),
+                    REPLACEFILE_IGNORE_MERGE_ERRORS,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            };
+            if ok != 0 {
+                return Ok(());
+            }
+            let err = io::Error::last_os_error();
+            // The replaced file is held open: a lock, retried like one.
+            if err.raw_os_error() == Some(ERROR_UNABLE_TO_REMOVE_REPLACED) {
+                return Err(io::Error::from_raw_os_error(ERROR_SHARING_VIOLATION));
+            }
+            Err(err)
         };
-        if ok != 0 {
-            return Ok(());
+        match crate::fs_retry::retry_op(to, replace) {
+            Err(err) if err.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) && !to.exists() => {
+                // No file to replace: a plain move.
+                crate::fs_retry::rename(from, to)
+            }
+            result => result,
         }
-        let err = io::Error::last_os_error();
-        if err.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) && !to.exists() {
-            // No file to replace: a plain move.
-            return std::fs::rename(from, to);
-        }
-        Err(err)
     }
 }
 

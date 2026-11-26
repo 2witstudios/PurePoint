@@ -358,7 +358,7 @@ fn uninstall() -> Result<(), CliError> {
         return Ok(());
     }
     let _ = systemctl(&["disable", "--now", phone::UNIT]);
-    std::fs::remove_file(&file)?;
+    pu_core::fs_retry::remove_file(&file)?;
     let _ = systemctl(&["daemon-reload"]);
     println!(
         "removed {}; paired devices and Point Guard state are kept in {}",
@@ -450,7 +450,7 @@ fn prune_payloads(keep: &Path) {
             && Some(&path) != running.as_ref()
             && phone::prunable(&entry.file_name().to_string_lossy(), keep)
         {
-            let _ = std::fs::remove_dir_all(&path);
+            let _ = pu_core::fs_retry::remove_dir_all(&path);
         }
     }
 }

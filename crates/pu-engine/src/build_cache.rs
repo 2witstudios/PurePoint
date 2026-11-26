@@ -152,7 +152,7 @@ pub fn free_bytes(path: &Path) -> Option<u64> {
 pub fn remove_idle(dirs: &[PathBuf], now: SystemTime, idle_after: Duration) -> Vec<PathBuf> {
     dirs.iter()
         .filter(|dir| is_idle(dir, now, idle_after))
-        .filter(|dir| match std::fs::remove_dir_all(dir) {
+        .filter(|dir| match pu_core::fs_retry::remove_dir_all(dir) {
             Ok(()) => true,
             Err(e) => {
                 tracing::warn!(dir = %dir.display(), "failed to remove build cache: {e}");

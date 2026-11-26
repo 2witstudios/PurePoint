@@ -798,7 +798,7 @@ fn write_atomically(
         pu_core::private_fs::replace_file(&tmp, target)
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        let _ = pu_core::fs_retry::remove_file(&tmp);
     }
     result
 }
@@ -821,9 +821,9 @@ fn fs_delete(path: &str, roots: &FsRoots) -> Response {
         Err(e) => return io_error(&resolved, &e),
     };
     let result = if meta.is_dir() {
-        std::fs::remove_dir_all(&resolved)
+        pu_core::fs_retry::remove_dir_all(&resolved)
     } else {
-        std::fs::remove_file(&resolved)
+        pu_core::fs_retry::remove_file(&resolved)
     };
     match result {
         Ok(()) => Response::Ok,

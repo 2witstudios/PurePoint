@@ -1,6 +1,7 @@
 pub mod agent_def;
 pub mod config;
 pub mod error;
+pub mod fs_retry;
 pub mod id;
 pub mod machines;
 pub mod manifest;

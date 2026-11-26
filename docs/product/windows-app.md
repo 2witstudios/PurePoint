@@ -201,6 +201,8 @@ Not proven, and owned by later leaves: Codex hooks on Windows (source only, WIN-
 - REQ-WINAPP-045: Given `rename`, `remove_file` or `remove_dir_all` anywhere in pu-core, pu-engine or pu-cli, should go through `fs_retry`. On `ERROR_SHARING_VIOLATION`, `ERROR_ACCESS_DENIED` or `ERROR_LOCK_VIOLATION`, it retries at least 10 times over at least 2 s, clearing read-only attributes first. On Unix it is a passthrough.
 - REQ-WINAPP-046: Given a file inside the worktree held open by another process past the retry budget, should fail with an error whose message names the locked path. Given that file then closed, a retried request should succeed.
 
+The daemon side is `pu_core::fs_retry` plus `handle_delete_worktree`: it waits on each killed agent's exit watch (up to 5 s), runs `git worktree remove --force`, and falls back to `fs_retry::remove_dir_all`. When a file stays locked, the reply is `delete_worktree_result` with `directory_removed: false` and an `error` that names the file and says it is locked, and the manifest keeps the worktree with status `failed`. The app re-creates its watchers on that reply, and the user can retry once the file is closed. Releasing watchers is the app's job (WIN-5.6), because the daemon cannot close another process's handles.
+
 ### Signals, hooks and introspection
 
 - REQ-WINAPP-047: Given an agent launch, should bind a per-launch pipe `purepoint-<hash16>-signal-<nonce>` with the pipe SDDL and client SID check, export it in `PU_SIGNAL_SOCKET` with `PU_SIGNAL_TOKEN`, and accept one frame per connection (at most 256 KiB, a 1 s read timeout, the token compared in constant time).

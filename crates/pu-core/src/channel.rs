@@ -161,12 +161,12 @@ impl ChannelStore {
             file.write_all(&serde_json::to_vec_pretty(data)?)?;
             file.write_all(b"\n")?;
             file.sync_all()?;
-            std::fs::rename(&temp, &self.path)?;
+            crate::fs_retry::rename(&temp, &self.path)?;
             crate::private_fs::sync_dir(self.path.parent().expect("channel parent"))?;
             Ok(())
         };
         write().inspect_err(|_| {
-            let _ = std::fs::remove_file(&temp);
+            let _ = crate::fs_retry::remove_file(&temp);
         })
     }
 

@@ -462,7 +462,7 @@ pub(crate) async fn prepare(
         .ok()
         .flatten()
         .unwrap_or_else(|| "unknown".into());
-    let _ = std::fs::remove_dir(&home);
+    let _ = pu_core::fs_retry::remove_dir(&home);
     let socket = artifacts.bind_signal().ok()?;
     let token = format!("{}{}", pu_core::id::session_id(), pu_core::id::session_id());
     let identity = SignalIdentity {
