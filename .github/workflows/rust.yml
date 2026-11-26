@@ -80,8 +80,7 @@ jobs:
           toolchain: "1.89"
           components: clippy
       - name: Isolate Rust output
-        run: printf 'CARGO_TARGET_DIR=%s/rust-ci-cargo
-' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+        run: printf 'CARGO_TARGET_DIR=%s/rust-ci-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: windows
