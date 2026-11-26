@@ -102,6 +102,8 @@ How it stays private:
 
 On hosts without systemd, run `pu phone run` under your own supervisor instead.
 
+On a Windows PC the same commands work without a service: `pu phone install --now` registers the logon entry `HKCU\…\Run\PurePoint Point Guard` and starts Point Guard in the background, state lives in `%LOCALAPPDATA%\PurePoint\point-guard`, and the owner channel is a token-guarded named pipe that `pu` uses only when its server runs as you. Tailscale is found only at `C:\Program Files\Tailscale\tailscale.exe`. Nothing restarts Point Guard after a crash; run `pu phone start`.
+
 ## Upgrading
 
 Re-run the installer (with `PU_WITH_PHONE=1` if you use phone access), then restart the daemon so it uses the new binary. Restarting suspends running agents, and they resume when the daemon comes back:

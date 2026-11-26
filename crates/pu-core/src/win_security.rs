@@ -392,6 +392,16 @@ pub fn check_trusted_binary(path: &Path) -> Result<(), &'static str> {
     {
         return Err("not an .exe");
     }
+    check_trusted_file(path)
+}
+
+/// [`check_trusted_binary`] for any file this user will run or load (a
+/// script, say): the same owner and no-write-for-others rule, any extension.
+pub fn check_trusted_file(path: &Path) -> Result<(), &'static str> {
+    let meta = std::fs::metadata(path).map_err(|_| "not found")?;
+    if !meta.is_file() {
+        return Err("not a file");
+    }
     let user = current_user_sid().map_err(|_| "cannot read the current user")?;
     let name = wide(path.as_os_str());
     let mut owner: PSID = null_mut();

@@ -564,7 +564,25 @@ pub(crate) mod run_key {
 
     /// The registered command line, if the value exists.
     pub(crate) fn read() -> io::Result<Option<String>> {
-        Ok(query(RUN, VALUE)?.map(|bytes| {
+        read_value(VALUE)
+    }
+
+    pub(crate) fn write(command: &str) -> io::Result<()> {
+        write_value(VALUE, command)
+    }
+
+    /// Delete the value. False when it was not there.
+    pub(crate) fn delete() -> io::Result<bool> {
+        delete_value(VALUE)
+    }
+
+    pub(crate) fn disabled_in_startup_apps() -> bool {
+        value_disabled_in_startup_apps(VALUE)
+    }
+
+    /// The command line registered under the Run value `value`, if any.
+    pub(crate) fn read_value(value: &str) -> io::Result<Option<String>> {
+        Ok(query(RUN, value)?.map(|bytes| {
             let units: Vec<u16> = bytes
                 .chunks_exact(2)
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
@@ -574,7 +592,7 @@ pub(crate) mod run_key {
         }))
     }
 
-    pub(crate) fn write(command: &str) -> io::Result<()> {
+    pub(crate) fn write_value(value: &str, command: &str) -> io::Result<()> {
         let mut key: HKEY = null_mut();
         let path = wide(RUN);
         // SAFETY: path is NUL-terminated; key receives a handle closed by Key.
@@ -592,7 +610,7 @@ pub(crate) mod run_key {
             )
         })?;
         let key = Key(key);
-        let name = wide(VALUE);
+        let name = wide(value);
         let data = wide(command);
         // SAFETY: data is a NUL-terminated wide string of the given byte size.
         check(unsafe {
@@ -607,12 +625,12 @@ pub(crate) mod run_key {
         })
     }
 
-    /// Delete the value. False when it was not there.
-    pub(crate) fn delete() -> io::Result<bool> {
+    /// Delete the Run value `value`. False when it was not there.
+    pub(crate) fn delete_value(value: &str) -> io::Result<bool> {
         let Some(key) = open(RUN, KEY_SET_VALUE)? else {
             return Ok(false);
         };
-        let name = wide(VALUE);
+        let name = wide(value);
         // SAFETY: an open key and a NUL-terminated name.
         let rc = unsafe { RegDeleteValueW(key.0, name.as_ptr()) };
         if rc == ERROR_FILE_NOT_FOUND {
@@ -623,9 +641,9 @@ pub(crate) mod run_key {
 
     /// Settings > Startup apps records its toggle as a REG_BINARY whose
     /// first byte is even when enabled (2) and odd when disabled (3).
-    pub(crate) fn disabled_in_startup_apps() -> bool {
+    pub(crate) fn value_disabled_in_startup_apps(value: &str) -> bool {
         matches!(
-            query(STARTUP_APPROVED, VALUE),
+            query(STARTUP_APPROVED, value),
             Ok(Some(bytes)) if bytes.first().is_some_and(|b| b % 2 == 1)
         )
     }

@@ -100,10 +100,14 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: bridge-windows
-      # The daemon pipe integration test runs against the workspace-built engine.
-      - name: Build pu-engine
+      # The daemon pipe integration test runs against the workspace-built engine;
+      # the bridge state tests hold their locks through the built lock helper.
+      - name: Build pu-engine and the Point Guard lock helper
         working-directory: .
-        run: cargo build --locked -p pu-engine
+        run: |
+          cargo build --locked -p pu-engine
+          cargo build --locked -p pu-cli --bin pu-point-guard-lock
+          printf 'POINT_GUARD_LOCK_HELPER_PATH=%s/target/debug/pu-point-guard-lock.exe\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test

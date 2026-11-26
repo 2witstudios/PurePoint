@@ -2,23 +2,41 @@ import { constants } from "node:fs";
 import { mkdir, lstat, open, readFile, link, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { assertPrivate, makePrivate } from "../../../bridge/acl.js";
 
+const win32 = process.platform === "win32";
+const notPrivate = () =>
+  new Error(
+    "Point Guard personal files must be private, regular and owned by this user; restore permissions deliberately.",
+  );
 export const personalLimit = 32 * 1024;
 function validate(info, directory = false) {
   if (
     (directory ? !info.isDirectory() : !info.isFile()) ||
-    (info.mode & 0o077) !== 0 ||
-    (typeof process.getuid === "function" && info.uid !== process.getuid())
+    (!win32 &&
+      ((info.mode & 0o077) !== 0 ||
+        (typeof process.getuid === "function" &&
+          info.uid !== process.getuid())))
   )
-    throw new Error(
-      "Point Guard personal files must be private, regular and owned by this user; restore permissions deliberately.",
-    );
+    throw notPrivate();
   if (!directory && info.size > personalLimit)
     throw new Error(
       "Point Guard personal files must be at most 32 KiB; shorten the file deliberately.",
     );
 }
+/** Windows has no mode bits or uids: never a link, and an owner-only ACL. */
+async function validateWindows(target, directory = false) {
+  if (!win32) return;
+  if ((await lstat(target)).isSymbolicLink()) throw notPrivate();
+  try {
+    await assertPrivate(target, { directory });
+  } catch {
+    throw notPrivate();
+  }
+}
 export async function readPersonal(file) {
+  // Windows has no O_NOFOLLOW: refuse a link before opening.
+  await validateWindows(file);
   const handle = await open(
     file,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -49,8 +67,11 @@ export async function readPersonal(file) {
 export async function seedPersonal(directory, defaults) {
   if (!path.isAbsolute(directory))
     throw new Error("Point Guard personal directory must be absolute.");
-  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const created = await mkdir(directory, { recursive: true, mode: 0o700 });
+  // Windows: a directory created here gets the owner-only ACL; existing ones are checked.
+  if (win32 && created !== undefined) await makePrivate(directory);
   validate(await lstat(directory), true);
+  await validateWindows(directory, true);
   for (const name of ["SOUL.md", "USER.md"]) {
     const file = path.join(directory, name);
     try {
@@ -81,6 +102,7 @@ export async function seedPersonal(directory, defaults) {
 }
 export async function personalSections(directory) {
   validate(await lstat(directory), true);
+  await validateWindows(directory, true);
   const [soul, user] = await Promise.all([
     readPersonal(path.join(directory, "SOUL.md")),
     readPersonal(path.join(directory, "USER.md")),

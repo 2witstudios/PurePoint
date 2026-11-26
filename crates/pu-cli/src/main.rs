@@ -5,6 +5,8 @@ mod error;
 mod machine_target;
 mod output;
 mod phone;
+#[cfg(windows)]
+mod phone_windows;
 mod service;
 mod signal_helper;
 mod skill;
@@ -196,7 +198,7 @@ enum Commands {
         #[command(subcommand)]
         action: commands::daemon::DaemonAction,
     },
-    /// Pair phones directly with this Linux host and manage them
+    /// Pair phones directly with this Linux or Windows host and manage them
     Phone {
         #[command(subcommand)]
         action: commands::phone::PhoneAction,

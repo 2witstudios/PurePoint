@@ -250,6 +250,12 @@ The daemon side is `pu_core::fs_retry` plus `handle_delete_worktree`: it waits o
 - REQ-WINAPP-077: Given the installer, should be an NSIS per-user install (no admin) that bundles `pu.exe`, `pu-engine.exe`, the Point Guard runtime and the WebView2 bootstrapper. Uninstall removes the app and the Run value, and leaves `%USERPROFILE%\.pu` intact.
 - REQ-WINAPP-078: Given a waiting or broken agent while the window is unfocused, should post a Windows toast that focuses the agent's pane when clicked, and show the unseen count as a taskbar overlay badge.
 
+### Headless phone host (`pu phone`, WIN-9.2)
+
+- REQ-WINAPP-081: Given `pu phone install|start|stop|restart|status|run|pair|devices|grant|rename|revoke|login|model|cwd|uninstall` on Windows, should behave as on Linux, with the Run value `PurePoint Point Guard` (`"<pu.exe>" phone start`) in place of the systemd unit, state in `%LOCALAPPDATA%\PurePoint\point-guard` and the owner pipe as the admin channel. The token is sent only after the pipe's server runs as this user; the state directory and token must pass `check_private`.
+- REQ-WINAPP-082: Given `pu-point-guard-lock` on Windows, should take `LockFileEx` on the lock handle its parent passed by inheritance (`--handle` with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, or libuv's CRT descriptor 3), after the same checks as on Unix: owner SID and owner-only DACL on the file and its directory, no reparse point, one link, and the path naming the same file. The bridge opens the lock without sharing (`UV_FS_O_EXLOCK`), so a second owner fails with `lock_busy` until the first releases, as the shared Unix OFD does after a helper crash.
+- REQ-WINAPP-083: Given a headless Windows bridge (`POINT_GUARD_DISCOVER_TAILNET=1`), should bind only the address `tailscale ip -4` (fixed `Program Files` path, never `PATH`) and an interface agree on, never listen without Tailscale, and report the reason in `pu phone status`.
+
 ### Unix unchanged and exclusions
 
 - REQ-WINAPP-079: Given Linux and macOS, should build and pass the existing test suites unchanged, with `PROTOCOL_VERSION` still 14 and every Windows code path `cfg(windows)`.
@@ -346,6 +352,8 @@ Owner: the current user. `check_private` accepts the user, SYSTEM or Administrat
 | Status | installed when the value exists; `StartupApproved\Run` disabled ⇒ reported as "disabled in Startup apps" |
 | Optional | COM `TASK_TRIGGER_LOGON` task with `UserId = DOMAIN\user`, `LogonType = InteractiveToken`, `RunLevel = LUA`, used only if restart-on-failure is needed |
 
+`pu phone install` writes a second value through the same manager: `PurePoint Point Guard` = `"%USERPROFILE%\.pu\bin\pu.exe" phone start`. `start` runs only that exact entry (an older `pu` left registered must be moved with `pu phone restart`) and launches the payload's `node.exe` detached (`DETACHED_PROCESS | CREATE_NO_WINDOW`) with an explicit environment. `stop` and `restart` ask the bridge to stop while idle (`runtime.stop`) and wait for its process to exit; `--force` terminates the recorded process, matched by pid and creation time. Nothing restarts the bridge after a crash.
+
 ### Install layout
 
 | Path | Contents |
@@ -356,6 +364,7 @@ Owner: the current user. `check_private` accepts the user, SYSTEM or Administrat
 | Tauri app data dir | window geometry, sidebar width, selection, open projects, preferences, custom key bindings |
 | Credential Manager | `PurePoint.PointGuard.Pairing` / `<endpoint>` |
 | `%LOCALAPPDATA%\PurePoint\point-guard` | Point Guard bridge state (WIN-9.1) |
+| `%USERPROFILE%\.pu\pointguard\<version>\` | `pu phone` payload: `runtime-manifest.json` (`layout: "windows"`), `bin\node.exe`, `bin\point-guard-lock.exe`, `bridge\main.js`; `phone-host.json` (port, pid and creation time) and `phone-host.log` beside the versions |
 | app install dir (NSIS per-user) | app exe, `pu.exe`/`pu-engine.exe` sidecars, Point Guard runtime |
 
 ### Remote relay (Windows client)
