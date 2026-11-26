@@ -545,6 +545,7 @@ pub(crate) mod process {
     }
 
     /// Wait up to `timeout` for `pid` to exit; true once it has (or cannot be opened).
+    #[cfg(test)]
     pub fn wait_exit(pid: u32, timeout: Duration) -> bool {
         Process::open(pid, PROCESS_SYNCHRONIZE).is_none_or(|p| wait_handle(&p, timeout))
     }
@@ -563,6 +564,7 @@ pub(crate) mod process {
         }
         pub fn terminate(&self) {}
     }
+    #[cfg(test)]
     pub fn wait_exit(_pid: u32, _timeout: Duration) -> bool {
         true
     }
