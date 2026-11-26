@@ -495,4 +495,22 @@ struct WorkspaceReconcilerTests {
             rekeyed.placement == SpawnPlacement(workspace: Workspace.pointGuardId(projectRoot: "/srv/app"), surface: 3))
         #expect(LiveAgent(id: "ag-x", container: .projectRoot).placementRekeyed(projectRoot: "/p").placement == nil)
     }
+
+    /// WIN-6.1's random layouts caught the old rule: a kept workspace already named `ws-a1`
+    /// (it once adopted `a1`, which has since moved out of it) plus a live unplaced `a1`
+    /// re-derived `ws-a1`, publishing two workspaces with one ID. Port of the Windows WIN-6.2
+    /// fix: adopt under the first free ID of `ws-<agentId>`, `ws-<agentId>-2`, `-3`, ...
+    @Test func givenAdoptionIdAlreadyTakenShouldAdoptUnderFirstFreeIdAndStayStable() {
+        // A workspace that adopted a1, which has since moved out and left only its file tab.
+        var movedOut = Workspace.adopting(agentId: "a1", container: .projectRoot)
+        movedOut.setContent(.file(path: "/p/notes.md"), forSurface: 0)
+        let agents = [LiveAgent(id: "a1", container: .projectRoot)]
+
+        let once = WorkspaceReconciler.reconcile(stored: [movedOut], live: agents)
+        let again = WorkspaceReconciler.reconcile(stored: once, live: agents)
+
+        #expect(once.map(\.id) == ["ws-a1", "ws-a1-2"])
+        #expect(once.last?.agentIds == ["a1"])
+        #expect(again == once)
+    }
 }
