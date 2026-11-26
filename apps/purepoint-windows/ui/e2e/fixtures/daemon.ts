@@ -8,7 +8,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, closeSync, realpathSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { killTree, waitForExit } from './processes.ts';
@@ -44,6 +44,19 @@ export class DaemonFixture {
     this.daemonLog = join(root, 'pu-engine.log');
   }
 
+  /**
+   * The fixture of the running spec, for specs that drive the daemon or the repository
+   * themselves: wdio.conf.ts creates it in `beforeSession` and exports its HOME and project.
+   */
+  static current(): DaemonFixture {
+    const home = process.env.PU_E2E_HOME;
+    const projectRoot = process.env.PU_E2E_PROJECT_ROOT;
+    if (home === undefined || projectRoot === undefined) {
+      throw new Error('PU_E2E_HOME and PU_E2E_PROJECT_ROOT are not set');
+    }
+    return new DaemonFixture(dirname(home), basename(projectRoot));
+  }
+
   /** Make the temp HOME and the git repository; nothing runs yet. */
   static async create(options: DaemonFixtureOptions): Promise<DaemonFixture> {
     mkdirSync(options.root, { recursive: true });
@@ -58,6 +71,15 @@ export class DaemonFixture {
     await fixture.git('add', 'README.md');
     await fixture.git('commit', '--quiet', '-m', 'Initial commit');
     return fixture;
+  }
+
+  /**
+   * The fixture this spec's session made (`PU_E2E_ROOT`), for specs that spawn their own agents.
+   * The session owns its daemon; this handle never stops it.
+   */
+  static existing(root = process.env.PU_E2E_ROOT): DaemonFixture {
+    if (root === undefined) throw new Error('PU_E2E_ROOT is not set');
+    return new DaemonFixture(root, 'e2e-project');
   }
 
   /** The environment for anything that should use this fixture's HOME (the app included). */
@@ -82,8 +104,13 @@ export class DaemonFixture {
     };
   }
 
-  private async git(...args: string[]): Promise<CommandResult> {
-    return run('git', args, { cwd: this.projectRoot, env: this.env, windowsHide: true });
+  /** Run git in the project, or in `cwd` (a worktree). */
+  async git(...args: string[]): Promise<CommandResult> {
+    return this.gitIn(this.projectRoot, ...args);
+  }
+
+  async gitIn(cwd: string, ...args: string[]): Promise<CommandResult> {
+    return run('git', args, { cwd, env: this.env, windowsHide: true });
   }
 
   /** Run the workspace-built `pu.exe` against this fixture's daemon. */
@@ -142,12 +169,26 @@ export class DaemonFixture {
   }
 
   /**
-   * Spawn a `terminal` agent in the project root, or in a new worktree named `worktree`;
-   * resolves its agent ID.
+   * Spawn a `terminal` agent in the project root; resolves its agent ID. `command` replaces the
+   * shell (the daemon splits it on whitespace, so no paths with spaces).
    */
-  async spawnTerminal(worktree?: string): Promise<string> {
-    const placement = worktree === undefined ? ['--root'] : ['--name', worktree];
-    const { stdout } = await this.pu(['spawn', ...placement, '--agent', 'terminal', '--json']);
+  async spawnTerminal(command?: string): Promise<string> {
+    const { stdout } = await this.pu([
+      'spawn',
+      '--root',
+      '--agent',
+      'terminal',
+      ...(command === undefined ? [] : ['--command', command]),
+      '--json',
+    ]);
+    const match = /"(?:agent_id|id)"\s*:\s*"([^"]+)"/.exec(stdout);
+    if (!match?.[1]) throw new Error(`pu spawn printed no agent id: ${stdout}`);
+    return match[1];
+  }
+
+  /** Spawn a `terminal` agent in a new worktree called `name`; resolves its agent ID. */
+  async spawnWorktreeTerminal(name: string): Promise<string> {
+    const { stdout } = await this.pu(['spawn', '--agent', 'terminal', '--name', name, '--json']);
     const match = /"(?:agent_id|id)"\s*:\s*"([^"]+)"/.exec(stdout);
     if (!match?.[1]) throw new Error(`pu spawn printed no agent id: ${stdout}`);
     return match[1];

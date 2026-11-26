@@ -82,7 +82,7 @@ impl Listener {
                 .as_ref()
                 .and_then(|c| c.pid())
                 .and_then(|p| u32::try_from(p).ok()),
-            same_user: cred.map(|c| c.uid()) == Some(euid()),
+            same_user: crate::same_user(cred.map(|c| c.uid()), euid()),
         };
         Ok((Stream(stream), peer))
     }

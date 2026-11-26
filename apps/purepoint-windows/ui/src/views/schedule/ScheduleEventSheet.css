@@ -1,0 +1,217 @@
+/*
+ * The schedule event sheet (WIN-8.17): a 400 × 560 modal like the Mac's `.sheet`, a grouped
+ * form, the next-run preview, and the footer. Colors come from schedule.css and tokens.css.
+ */
+.schedule-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.schedule-sheet {
+  position: relative;
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  height: 560px;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  background: var(--pp-card-background);
+  color: var(--pp-app-text);
+  font-family: var(--pp-font-ui);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.schedule-sheet button,
+.schedule-sheet input,
+.schedule-sheet select {
+  font-family: inherit;
+  color: inherit;
+}
+
+.schedule-sheet-header {
+  flex: none;
+  padding: 12px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--schedule-divider);
+}
+
+.schedule-sheet-form {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 20px;
+}
+
+.schedule-field {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.schedule-field > span:first-child {
+  color: var(--secondary-text);
+}
+
+.schedule-field input[type='text'],
+.schedule-field input[type='datetime-local'],
+.schedule-field select {
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--schedule-field-border);
+  border-radius: 5px;
+  background: var(--schedule-field-background);
+  font-size: 12px;
+}
+
+.schedule-field input:focus-visible,
+.schedule-field select:focus-visible {
+  outline: 2px solid var(--schedule-accent);
+  outline-offset: -1px;
+}
+
+.schedule-enabled-field input {
+  justify-self: start;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--schedule-accent);
+}
+
+.schedule-trigger-picker {
+  display: flex;
+}
+
+.schedule-trigger-picker button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 3px 6px;
+}
+
+.schedule-color-picker {
+  display: flex;
+  gap: 8px;
+}
+
+.schedule-color-swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--event-color) 50%, transparent);
+  background: var(--event-color);
+  cursor: pointer;
+}
+
+.schedule-color-swatch[aria-checked='true'] {
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px var(--event-color);
+}
+
+.schedule-sheet-preview {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  font-size: 12px;
+  color: var(--secondary-text);
+  border-top: 1px solid var(--schedule-divider);
+}
+
+.schedule-sheet-error {
+  flex: none;
+  padding: 6px 20px;
+  font-size: 12px;
+  color: var(--schedule-destructive);
+  border-top: 1px solid var(--schedule-divider);
+}
+
+.schedule-sheet-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--schedule-divider);
+}
+
+.schedule-button {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--schedule-field-border);
+  border-radius: 5px;
+  background: var(--schedule-field-background);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.schedule-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.schedule-sheet .schedule-default {
+  border-color: transparent;
+  background: var(--schedule-accent);
+  color: #ffffff;
+}
+
+.schedule-sheet .schedule-destructive {
+  color: var(--schedule-destructive);
+}
+
+.schedule-sheet .schedule-destructive-filled {
+  border-color: transparent;
+  background: var(--schedule-destructive);
+  color: #ffffff;
+}
+
+.schedule-alert {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 260px;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--pp-card-background);
+  border: 1px solid var(--schedule-divider);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  text-align: center;
+}
+
+.schedule-alert-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.schedule-alert-message {
+  font-size: 12px;
+  color: var(--secondary-text);
+}
+
+.schedule-alert-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}

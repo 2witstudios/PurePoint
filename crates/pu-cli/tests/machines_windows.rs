@@ -238,7 +238,7 @@ async fn given_windows_machine_should_relay_commands_through_pu_daemon_proxy() {
     );
     assert!(
         log.contains(
-            "-T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 fakehost pu daemon proxy"
+            "-T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ControlMaster=no -o ControlPath=none fakehost pu daemon proxy"
         ),
         "{log}"
     );

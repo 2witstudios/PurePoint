@@ -2,34 +2,38 @@
 //
 // Routes the sidebar selection to its screen. The screens are later leaves; until each lands its
 // slot renders a placeholder naming the view that will fill it (the leaf is in the parity matrix).
+// WIN-8.2 fills the project, worktree and workspace files screens.
 import { useStore } from 'zustand';
 import { isPointGuard } from '../../model/workspace.ts';
 import type { SidebarSelection } from '../../model/sidebarItem.ts';
-import { Icon } from '../../theme/Icon.tsx';
-import type { SfSymbolName } from '../../theme/icons.ts';
+import type { ProjectState } from '../../state/projectState.ts';
 import { useAppState } from '../shell/appContext.ts';
 import { useTitlebarClearance } from '../shell/TitlebarClearance.tsx';
+import { AgentsHubView } from '../agents/AgentsHubView.tsx';
+import { useAgentSelection } from '../terminal/agentSelection.ts';
+import { AgentTerminalsView } from '../terminal/AgentTerminals.tsx';
+import { ScheduleView } from '../schedule/ScheduleView.tsx';
+import { ScreenPlaceholder } from './placeholders.tsx';
+import { ProjectChannelView } from '../channel/ProjectChannelView.tsx';
+import { ProjectDetailView } from './ProjectDetailView.tsx';
+import { WorkspaceFilesLayout } from './WorkspaceFilesLayout.tsx';
+import { WorktreeDetailView } from './WorktreeDetailView.tsx';
+
+export { ScreenPlaceholder } from './placeholders.tsx';
 
 export interface DetailViewProps {
   selection: SidebarSelection | null;
 }
 
-/** A screen that is not ported yet: its title, and the view that will draw it. */
-export function ScreenPlaceholder({
-  icon,
-  title,
-  view,
-}: {
-  icon: SfSymbolName;
-  title: string;
-  view?: string;
-}) {
-  return (
-    <div className="detail-placeholder" data-view={view}>
-      <Icon name={icon} size={40} className="detail-placeholder-icon" />
-      <span className="detail-placeholder-title">{title}</span>
-      {view !== undefined && <span className="detail-placeholder-view">{view}</span>}
-    </div>
+/** Follows the worktree's model (branch, base, agents) as the project reports changes. */
+function WorktreeRoute({ project, worktreeId }: { project: ProjectState; worktreeId: string }) {
+  const worktree = useStore(project.store, (state) =>
+    state.worktrees.find((candidate) => candidate.id === worktreeId),
+  );
+  return worktree === undefined ? (
+    <ScreenPlaceholder icon="arrow.triangle.branch" title="Worktree not found" />
+  ) : (
+    <WorktreeDetailView worktree={worktree} project={project} />
   );
 }
 
@@ -60,14 +64,19 @@ function SelectedContent({ selection }: { selection: SidebarSelection }) {
           />
         );
       }
-      return app.fileRoot(selection.id) === null ? (
+      const rootPath = app.fileRoot(selection.id);
+      const paneGrid = (
         <ScreenPlaceholder icon="rectangle.split.2x2" title="Workspace" view="PaneGridView" />
+      );
+      return rootPath === null ? (
+        paneGrid
       ) : (
-        <ScreenPlaceholder
-          icon="rectangle.split.2x2"
-          title="Workspace"
-          view="WorkspaceFilesLayout + PaneGridView"
-        />
+        <WorkspaceFilesLayout
+          rootPath={rootPath}
+          machineId={app.projectStateForWorkspace(selection.id)?.machineId ?? null}
+        >
+          {paneGrid}
+        </WorkspaceFilesLayout>
       );
     }
     case 'nav':
@@ -81,48 +90,56 @@ function SelectedContent({ selection }: { selection: SidebarSelection }) {
             />
           );
         case 'agents':
-          return <ScreenPlaceholder icon="cpu" title="Agents" view="AgentsHubView" />;
+          return <AgentsHubView />;
         case 'schedule':
-          return <ScreenPlaceholder icon="calendar" title="Schedule" view="ScheduleView" />;
+          return <ScheduleView />;
       }
       break;
-    case 'worktree':
-      return app.projectStateForWorktree(selection.id) === null ? (
+    case 'worktree': {
+      const project = app.projectStateForWorktree(selection.id);
+      return project === null ? (
         <ScreenPlaceholder icon="arrow.triangle.branch" title="Worktree not found" />
       ) : (
-        <ScreenPlaceholder
-          icon="arrow.triangle.branch"
-          title="Worktree"
-          view="WorktreeDetailView"
+        <WorktreeRoute key={selection.id} project={project} worktreeId={selection.id} />
+      );
+    }
+    case 'channel': {
+      const project = app.projectState(selection.id);
+      return project === null ? (
+        <ScreenPlaceholder icon="bubble.left.and.bubble.right" title="Project channel" />
+      ) : (
+        <ProjectChannelView key={project.projectId} project={project} />
+      );
+    }
+    case 'project': {
+      const project = app.projectState(selection.id);
+      return project === null ? (
+        <ScreenPlaceholder icon="folder.fill" title="Project" />
+      ) : (
+        <ProjectDetailView
+          project={project}
+          onSelectWorktree={(worktreeId) => {
+            // The shell selects it (ContentView follows `pendingSelectWorktreeId`).
+            app.setPendingSelectWorktreeId(worktreeId);
+          }}
         />
       );
-    case 'channel':
-      return (
-        <ScreenPlaceholder
-          icon="bubble.left.and.bubble.right"
-          title="Project channel"
-          {...(app.projectState(selection.id) === null ? {} : { view: 'ProjectChannelView' })}
-        />
-      );
-    case 'project':
-      return (
-        <ScreenPlaceholder
-          icon="folder.fill"
-          title="Project"
-          {...(app.projectState(selection.id) === null ? {} : { view: 'ProjectDetailView' })}
-        />
-      );
+    }
   }
   return null;
 }
 
 export function DetailView({ selection }: DetailViewProps) {
   const clearance = useTitlebarClearance();
+  // Selected agents show their terminals (WIN-7.3) until the pane grid (WIN-7.4) takes over.
+  const agentIds = useAgentSelection((state) => state.agentIds);
   return (
     // The title bar is a band across the whole window on Windows, so every screen starts below
     // it (the Mac's dashboard and workspaces draw their tab strip in the band instead).
     <div className="detail-view" style={{ paddingTop: clearance.height }}>
-      {selection === null ? (
+      {agentIds.length > 0 ? (
+        <AgentTerminalsView agentIds={agentIds} />
+      ) : selection === null ? (
         <ScreenPlaceholder icon="sidebar.left" title="Select an item" />
       ) : (
         <SelectedContent selection={selection} />

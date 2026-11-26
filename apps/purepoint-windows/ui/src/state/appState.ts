@@ -495,12 +495,17 @@ export class AppState implements ProjectStateOwner {
 
   private follow(project: ProjectState): void {
     if (this.projectUnsubscribers.has(project)) return;
-    this.projectUnsubscribers.set(
-      project,
-      project.store.subscribe(() => {
-        this.bumpRevision();
-      }),
-    );
+    const stopProject = project.store.subscribe(() => {
+      this.bumpRevision();
+    });
+    // The sidebar's channel badge (Swift observes `project.channel.unreadCount`).
+    const stopChannel = project.channel.store.subscribe((state, previous) => {
+      if (state.unreadCount !== previous.unreadCount) this.bumpRevision();
+    });
+    this.projectUnsubscribers.set(project, () => {
+      stopProject();
+      stopChannel();
+    });
   }
 
   private unfollow(project: ProjectState): void {

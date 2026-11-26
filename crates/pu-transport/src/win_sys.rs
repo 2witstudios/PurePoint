@@ -104,6 +104,108 @@ fn token_user(token: HANDLE) -> io::Result<Sid> {
     Ok(unsafe { Sid::copy_from(user.User.Sid) })
 }
 
+/// Fixed-size token information (`TokenIsAppContainer` and the like).
+fn token_u32(token: HANDLE, class: i32) -> io::Result<u32> {
+    let mut value = 0u32;
+    let mut len = 0u32;
+    check(unsafe {
+        GetTokenInformation(
+            token,
+            class,
+            (&mut value as *mut u32).cast(),
+            size_of::<u32>() as u32,
+            &mut len,
+        )
+    })?;
+    Ok(value)
+}
+
+/// The mandatory integrity RID of a token (`SECURITY_MANDATORY_*_RID`).
+fn token_integrity_rid(token: HANDLE) -> io::Result<u32> {
+    use windows_sys::Win32::Security::{
+        GetSidSubAuthority, GetSidSubAuthorityCount, TOKEN_MANDATORY_LABEL, TokenIntegrityLevel,
+    };
+    let mut len = 0u32;
+    unsafe { GetTokenInformation(token, TokenIntegrityLevel, null_mut(), 0, &mut len) };
+    if len == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+    check(unsafe {
+        GetTokenInformation(
+            token,
+            TokenIntegrityLevel,
+            buf.as_mut_ptr().cast(),
+            len,
+            &mut len,
+        )
+    })?;
+    let label = unsafe { &*(buf.as_ptr() as *const TOKEN_MANDATORY_LABEL) };
+    let sid = label.Label.Sid;
+    let count = unsafe { *GetSidSubAuthorityCount(sid) };
+    if count == 0 {
+        return Err(io::Error::other("integrity SID has no RID"));
+    }
+    Ok(unsafe { *GetSidSubAuthority(sid, u32::from(count) - 1) })
+}
+
+/// How far a process's primary token can be trusted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TokenTrust {
+    /// Mandatory integrity RID (0x2000 medium, 0x3000 high, ...).
+    pub integrity: u32,
+    pub app_container: bool,
+    pub restricted: bool,
+}
+
+fn process_token_trust(process: HANDLE) -> io::Result<TokenTrust> {
+    use windows_sys::Win32::Security::{IsTokenRestricted, TokenIsAppContainer};
+    let mut token: HANDLE = null_mut();
+    check(unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) })?;
+    let token = unsafe { OwnedHandle::from_raw_handle(token as RawHandle) };
+    let raw = token_raw(&token);
+    Ok(TokenTrust {
+        integrity: token_integrity_rid(raw)?,
+        app_container: token_u32(raw, TokenIsAppContainer)? != 0,
+        restricted: unsafe { IsTokenRestricted(raw) } != 0,
+    })
+}
+
+/// Integrity level and sandboxing of this process's token.
+pub fn current_token_trust() -> io::Result<TokenTrust> {
+    process_token_trust(unsafe { GetCurrentProcess() })
+}
+
+/// Integrity level and sandboxing of another process's token.
+pub fn process_trust(pid: u32) -> io::Result<TokenTrust> {
+    let process = open_process(pid)?;
+    process_token_trust(token_raw(&process))
+}
+
+/// Medium mandatory integrity, the level of a normal desktop process.
+pub const MEDIUM_INTEGRITY: u32 = 0x2000;
+
+/// Why a server with token `server` is not trusted by a client running at
+/// integrity `client_integrity`; `None` when it is. A sandboxed or
+/// lower-integrity process of the same user could squat on the pipe name, so
+/// the server must reach the client's level, capped at Medium: an elevated
+/// (High) `pu` in an admin terminal still talks to the user's normal daemon.
+pub fn untrusted_server_reason(server: TokenTrust, client_integrity: u32) -> Option<String> {
+    let required = client_integrity.min(MEDIUM_INTEGRITY);
+    if server.app_container {
+        Some("server runs in an AppContainer".into())
+    } else if server.restricted {
+        Some("server runs with a restricted token".into())
+    } else if server.integrity < required {
+        Some(format!(
+            "server integrity {:#x} is below the required {required:#x}",
+            server.integrity
+        ))
+    } else {
+        None
+    }
+}
+
 /// True while `pid` is running. A process that exited but whose object is
 /// still held open by some handle is not alive.
 pub fn process_alive(pid: u32) -> bool {

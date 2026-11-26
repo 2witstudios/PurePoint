@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod files;
 pub mod git;
 pub mod installer;
+pub mod pointguard;
 pub mod secrets;
 pub mod subscriptions;
 pub mod watchers;
@@ -30,8 +31,12 @@ pub fn protocol_version() -> u32 {
 
 pub fn run() {
     tauri::Builder::default()
+        // Links from terminals and chat open in the user's browser (WIN-7.3).
+        .plugin(tauri_plugin_opener::init())
         .manage(git::commands::GitState::default())
         .manage(attach::AttachState::default())
+        .manage(pointguard::chat::ChatSockets::default())
+        .manage(secrets::pairing::PairingSecrets::default())
         .invoke_handler(tauri::generate_handler![
             files::index::file_index,
             files::text::fs_stat_text,
@@ -77,14 +82,37 @@ pub fn run() {
             watchers::commands::watchers_restore,
             watchers::commands::watchers_discard,
             chrome::chrome_set_layout,
+            pointguard::pointguard_status,
+            pointguard::pointguard_start,
+            pointguard::pointguard_stop,
+            pointguard::pointguard_restart,
+            pointguard::pointguard_request,
+            pointguard::pointguard_chat_connection,
+            pointguard::pointguard_validate_folder,
+            pointguard::chat::pointguard_chat_open,
+            pointguard::chat::pointguard_chat_send,
+            pointguard::chat::pointguard_chat_close,
+            pointguard::recovery::pointguard_recovery_load,
+            pointguard::recovery::pointguard_recovery_save,
+            secrets::pairing::pointguard_pairing_read,
+            secrets::pairing::pointguard_pairing_save,
+            secrets::pairing::pointguard_pairing_import,
         ])
         .on_window_event(|window, event| {
             if window.label() == MAIN_WINDOW
-                && let tauri::WindowEvent::CloseRequested { .. } = event
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
             {
                 use tauri::Manager;
                 let dir = window.app_handle().path().app_data_dir().ok();
                 window_state::persist(window, dir.as_deref());
+                // Quit waits for the owned Point Guard runtime (WIN-9.3).
+                if let Some(pointguard) = window
+                    .app_handle()
+                    .try_state::<pointguard::PointGuardState>()
+                    && pointguard.intercept_close(window.app_handle())
+                {
+                    api.prevent_close();
+                }
             }
         })
         .setup(|app| {
@@ -97,6 +125,9 @@ pub fn run() {
                 app.manage(watchers::commands::WatcherState::new(app.handle().clone()));
                 // After the daemon state: a replaced pu-engine.exe restarts it.
                 installer::start(app.handle());
+                let pointguard = pointguard::PointGuardState::for_app(app.handle());
+                pointguard.start_at_launch();
+                app.manage(pointguard);
             }
             #[cfg(windows)]
             {
@@ -114,8 +145,16 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running PurePoint");
+        .build(tauri::generate_context!())
+        .expect("error while building PurePoint")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                if let Some(pointguard) = app.try_state::<pointguard::PointGuardState>() {
+                    pointguard.stop_for_termination();
+                }
+            }
+        });
 }
 
 #[cfg(test)]

@@ -256,9 +256,19 @@ The daemon side is `pu_core::fs_retry` plus `handle_delete_worktree`: it waits o
 - REQ-WINAPP-082: Given `pu-point-guard-lock` on Windows, should take `LockFileEx` on the lock handle its parent passed by inheritance (`--handle` with `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, or libuv's CRT descriptor 3), after the same checks as on Unix: owner SID and owner-only DACL on the file and its directory, no reparse point, one link, and the path naming the same file. The bridge opens the lock without sharing (`UV_FS_O_EXLOCK`), so a second owner fails with `lock_busy` until the first releases, as the shared Unix OFD does after a helper crash.
 - REQ-WINAPP-083: Given a headless Windows bridge (`POINT_GUARD_DISCOVER_TAILNET=1`), should bind only the address `tailscale ip -4` (fixed `Program Files` path, never `PATH`) and an interface agree on, never listen without Tailscale, and report the reason in `pu phone status`.
 
+### App-managed Point Guard runtime (WIN-9.3)
+
+- REQ-WINAPP-084: Given app launch, should start the bundled runtime as an app-owned child, `node.exe bridge\main.js --managed`, with no window, the user's home as working directory and the app's environment minus every `PU_*`, `PI_*`, `POINT_GUARD_*` and `NODE_*` variable (except `NODE_EXTRA_CA_CERTS`) and `PATH`, plus the launch variables in Interfaces. It is ready only when the private `admin.json` names this child's pid, this launch's `POINT_GUARD_INSTANCE_ID` and the owner pipe of the state directory; it fails with the bridge's `error.json` when the child exits first, and after 30 seconds otherwise. A debug build starts it only with `PUREPOINT_POINTGUARD_DEV=1`.
+- REQ-WINAPP-085: Given a bundled runtime, should verify its seal before every launch: `runtime-manifest.json` lists the SHA-256 of every file in the runtime directory, and a missing, changed or unlisted file, or a link or reparse point, refuses the launch with "PurePoint's files were modified after it was installed, so Point Guard won't start. Reinstall PurePoint." A build that sets `PUREPOINT_POINTGUARD_MANIFEST_SHA256` also refuses a manifest whose own digest differs.
+- REQ-WINAPP-086: Given Quit (closing the main window) while Point Guard runs, should ask it to stop while idle (`runtime.stop`) and wait for the exact owned child to exit; when that fails, offer the Mac's "Point Guard is still running" choice, where Stop Point Guard and Quit closes the lifetime pipe and waits, and Cancel keeps the app open. A bridge that was ready and exits unexpectedly is restarted after 1, 2, 4, 8 and 16 seconds, then left for Retry; a failed start is never retried automatically.
+
 ### Unix unchanged and exclusions
 
 - REQ-WINAPP-079: Given Linux and macOS, should build and pass the existing test suites unchanged, with `PROTOCOL_VERSION` still 14 and every Windows code path `cfg(windows)`.
+- Three small changes made for the port are visible on Unix too, and are kept there on purpose (shared code is simpler than gating them, and none changes a working setup):
+  - An empty `HOME` is treated as unset (`pu_core::paths::home_from`), so `HOME=` fails with "$HOME not set" instead of resolving `.pu` against the current directory.
+  - An existing `<project>/.pu/agent-signals` directory is chmod'ed to 0700 when an agent launches (`private_fs::create_private_dir`), not only a newly created one.
+  - `pu-engine --parent-pid <pid>` is honoured on Unix: the daemon exits when that pid is gone, as with `--managed`, which still watches the original parent when no pid is given. An unparsable value exits with status 1.
 - REQ-WINAPP-080: Given the Exclusions list, should not port any listed file or feature, and should provide the listed replacement wherever the Mac exposes the feature.
 
 ## Sum Sheet
@@ -278,7 +288,7 @@ Windows app = Mac app on Windows 11 22H2+, with a native daemon. Endpoint = priv
 | Pipe SDDL | `O:<user SID>D:P(A;;GA;;;<user SID>)(A;;GA;;;SY)` (reads back as `FA`) |
 | Flags | first instance `FILE_FLAG_FIRST_PIPE_INSTANCE`; every instance `PIPE_REJECT_REMOTE_CLIENTS`. A failed first create (error 5) means `AddrInUse` |
 | Server check of client | `GetNamedPipeClientProcessId` → `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` → `TokenUser` must equal the daemon's SID |
-| Client check of server | `GetNamedPipeServerProcessId` → token user SID must equal the caller's; and if `<socket>.pid` names a live process, it must be the server PID |
+| Client check of server | `GetNamedPipeServerProcessId` → token user SID must equal the caller's; the server token must not be an AppContainer or restricted token, and its integrity must be at least the client's capped at Medium (an elevated `pu` still reaches the normal daemon; a Low-integrity squatter is refused even with no PID file); and if `<socket>.pid` names a live process, it must be the server PID |
 | Busy | client retries `ERROR_PIPE_BUSY` for 2 s. Over-cap connections get `BUSY` through an awaited `write_all` (1 s timeout, 128 concurrent writers at most) |
 | Disconnect probe | `PeekNamedPipe` (broken pipe) plus a tokio readiness check into the connection's stash (`ReadHalf::peer_sent_or_closed`) |
 | Half-close | none; a connection ends when both halves drop |
@@ -365,13 +375,59 @@ Owner: the current user. `check_private` accepts the user, SYSTEM or Administrat
 | Credential Manager | `PurePoint.PointGuard.Pairing` / `<endpoint>` |
 | `%LOCALAPPDATA%\PurePoint\point-guard` | Point Guard bridge state (WIN-9.1) |
 | `%USERPROFILE%\.pu\pointguard\<version>\` | `pu phone` payload: `runtime-manifest.json` (`layout: "windows"`), `bin\node.exe`, `bin\point-guard-lock.exe`, `bridge\main.js`; `phone-host.json` (port, pid and creation time) and `phone-host.log` beside the versions |
-| app install dir (NSIS per-user) | app exe, `pu.exe`/`pu-engine.exe` sidecars, Point Guard runtime |
+| app install dir (NSIS per-user) | app exe, `pu.exe`/`pu-engine.exe` sidecars, Point Guard runtime in the resource dir's `PointGuard\` (WIN-9.3) |
+
+### Point Guard runtime (app, WIN-9.3)
+
+`src-tauri/src/pointguard/` (front end `ui/src/services/pointguard.ts`, `ui/src/state/pointGuardService.ts`). The staged payload is the `pu phone` layout, so one staging serves both:
+
+| Path in `<resource dir>\PointGuard\` | Contents |
+|---|---|
+| `runtime-manifest.json` | `schemaVersion` 1, `contractVersion` 1, `layout: "windows"`, `puVersion`, `piVersion` (1.3.0), `nodeVersion`, `architecture` (`x64`/`arm64`, must match the app), `sourceSHA`, `paths` (`node`, `lockHelper`, `entry`, `instructions`, `skills`), `seal: {algorithm: "sha256", files: {"<forward/slash/path>": "<hex>"}}` |
+| `bin\node.exe` | the official `node-v<version>-win-<arch>.zip` pinned in `apps/purepoint-mobile/runtime/node-release.json` (`win-x64`, `win-arm64`), the Mac's Node version |
+| `bin\point-guard-lock.exe` | `pu-point-guard-lock.exe` |
+| `bridge\`, `node_modules\`, `docs\`, `support\`, `package.json` | the bridge without tests, production dependencies (`npm ci --omit=dev --ignore-scripts`, other platforms' `pi-tui` natives removed) |
+
+`apps/purepoint-windows/scripts/stage-pointguard-runtime.mjs --out <dir> --lock-helper <exe>` stages it and prints the manifest's SHA-256; `--seal <dir>` rewrites only the seal. WIN-10.2 adds the directory to the Tauri resources and passes the digest as `PUREPOINT_POINTGUARD_MANIFEST_SHA256`. `pu.exe` is not in the payload: the app uses its sidecar (beside the exe, then the resource dir), else `%USERPROFILE%\.pu\bin\pu.exe`, each passing `check_trusted_binary`; `node.exe` and the lock helper must pass `check_trusted_file`.
+
+Seal: the Mac's `BundleSeal` checks the code signature; Windows signing is not provisioned, so WIN-9.3 seals with the manifest hashes. Before each launch every listed file is hashed and compared, and the directory is walked for unlisted files, links and reparse points. The manifest can be rewritten by whoever can write the install dir; the compile-time pin closes that once the exe itself is signed. Development runs (`PUREPOINT_POINTGUARD_DEV=1`, debug builds only) use the system `node`, the repo's `apps/purepoint-mobile/bridge/main.js` and `target\debug\{pu,pu-point-guard-lock}.exe`, unsealed, as the Mac skips its seal in Debug.
+
+Launch environment, added to the scrubbed copy of the app's:
+
+| Variable | Value |
+|---|---|
+| `PATH` | `<pu dir>;%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell\v1.0` |
+| `POINT_GUARD_STATE_DIR` | `%LOCALAPPDATA%\PurePoint\point-guard` (shared with `pu phone`; the state lock admits one owner) |
+| `POINT_GUARD_PU_PATH`, `POINT_GUARD_PU_HOME` | the `pu.exe` above, `%USERPROFILE%\.pu` |
+| `POINT_GUARD_LOCK_HELPER_PATH` | `bin\point-guard-lock.exe` |
+| `POINT_GUARD_INSTANCE_ID` | a fresh UUID per launch |
+| `POINT_GUARD_APP_LIFETIME` | `stdin`: the app holds the pipe; EOF (Stop for Quit, app exit or crash) makes the bridge drain and exit, in place of the Mac's SIGTERM |
+| `PI_MOBILE_CWD` | only for a recovery folder chosen while stopped |
+| `PI_MOBILE_HOST` | the tailnet IPv4 when an up, non-loopback adapter holds it and `%ProgramFiles%\Tailscale\tailscale.exe ip -4` (run with `CREATE_NO_WINDOW`, 3 s deadline) reports exactly it; absent otherwise |
+
+Admin requests go over the owner pipe as `POST /admin/v1` with the bearer token from the private `admin-token`, sent only after the pipe's server is confirmed to be the owned child's pid running as this user. Tauri: commands `pointguard_status`, `pointguard_start`, `pointguard_stop`, `pointguard_restart`, `pointguard_request`, `pointguard_chat_connection`, `pointguard_validate_folder`; event `pointguard-state`.
+
+### Point Guard chat (WIN-9.4)
+
+`ui/src/state/piChat.ts` ports `PiChatModel` (macOS side) over the bridge's WebSocket v1 contract: `sync`/`send` (Send, Steer, After reply)/`stop`/`sessions`/`history`/`new`/`resume`/`answer` requests with `receipt`s, authoritative `snapshot`s ordered by epoch and revision, `editor` offers, Stop-cancelled queue items offered back for restore, and the private per-endpoint, per-session draft. Every send is saved as a submission (confirmed write) before it leaves; a lost connection, a missing receipt (35 s) or a rejected send keeps it recoverable, and a saved `Sending` receipt becomes `Delivery uncertain` after a restart.
+
+- The bridge authenticates the chat socket only by the upgrade's `Authorization: Bearer <desktop-chat-token>` and `X-PointGuard-Client-ID: <desktopClientId>` headers and refuses any `Origin`; it has no query or subprotocol credential. A page can set neither, so the backend holds the socket (`src-tauri/src/pointguard/chat.rs`, `tokio-tungstenite`, 4 MiB messages) and relays text records over a Tauri `Channel`. It connects only to `ws://127.0.0.1:<port>/v1`, the descriptor's `nativeChatURL`, which `pointGuardChatBinding` binds from WIN-9.3's `onConnection` and drops on `onDisconnect`.
+- Preferences (client ID, endpoint, drafts, cancelled IDs) are in `localStorage` as the Mac keeps them in UserDefaults; attachment drafts and submissions are owner-only files in `<app data>\PurePoint.PointGuard\{attachment-drafts,submissions}.json` (40 MiB bound).
+- Tauri: commands `pointguard_chat_open(endpoint, secret, clientId, onEvent)` → socket id, `pointguard_chat_send(socketId, text)`, `pointguard_chat_close(socketId)` (1001), `pointguard_recovery_load(name)`, `pointguard_recovery_save(name, json)`. Channel events: `{type: "message", text}`, `{type: "closed", code, reason}`.
+
+### Point Guard pairing secret and attachments (WIN-9.7)
+
+- The pairing secret is a Credential Manager generic credential written by the `keyring` crate (3.x, `windows-native`) with service `PurePoint.PointGuard.Pairing` and the endpoint as account (target name `<endpoint>.PurePoint.PointGuard.Pairing`). The chat reads it by endpoint before connecting and saves the managed bridge's secret on every bind, as the Mac does with its Keychain item. Tauri: `pointguard_pairing_read(endpoint)` (empty when none), `pointguard_pairing_save(endpoint, secret)`, and `pointguard_pairing_import(request)` for Settings, taking `{code}` (the `pi-mobile-pairing` v1 JSON) or `{endpoint, secret}`, validating the address (ws/wss, `/v1`, loopback or tailnet) and secret (32 characters to 1 KiB, one line), and returning the canonical endpoint for `chat.connectSaved`.
+- Composer attachments (`ui/src/services/attachmentImport.ts`) come from the file picker, a drop (`dragDropEnabled` is off, so the page receives `File`s) or a paste (an image with no text): images are re-encoded to JPEG within 256 KiB, text must be UTF-8 within 32 KiB, at most four files and 512 KiB in all. PDFs are refused: the Mac extracts their text with PDFKit and WebView2 has no equivalent.
+- Agent uploads (`ui/src/services/attachmentUpload.ts`) send `attach_file` in 512 KiB chunks (base64) up to 64 MB and return the daemon's path once the last chunk lands; a folder or an oversized drop is refused before reading.
 
 ### Remote relay (Windows client)
 
 ```
 ssh.exe -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 <ssh_host> <relay>
 ```
+
+- `pu --machine` also passes `-o ControlMaster=no -o ControlPath=none` before `<ssh_host>`, as on its other ssh commands: Win32-OpenSSH ignores connection sharing, but `PU_SSH` or `PATH` may name an ssh (Git for Windows, MSYS2) that honours a user's ControlMaster config.
 
 - Unix machine: `<relay>` is `/bin/sh -c 'PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; exec pu daemon proxy'`, the same as the iPad.
 - Windows machine (detected once per connection by the start probe: `uname -s` exits non-zero or prints nothing): `<relay>` is `pu daemon proxy`. Windows sshd builds the session environment from the user's registry `PATH`, which includes `%USERPROFILE%\.pu\bin`.
@@ -476,5 +532,5 @@ These Mac and iPad items are not ported. Each one's Windows replacement is liste
 | `ssh -L` Unix-socket forward, `forward.lock`, stale-forward sweep | the same exec relay, one `ssh.exe` per connection (WINAPP-013) |
 | `HotkeyMonitor` (`NSEvent` monitor) | a WebView `keydown` handler on `KeyboardEvent.code` (REQ-WINAPP-067) |
 | Dock tile badge, `NSUserNotification`/`UNUserNotificationCenter` | taskbar overlay badge and toasts through `tauri-plugin-notification` (REQ-WINAPP-078) |
-| `BundleSeal` (`SecStaticCodeCheckValidity`) | an integrity check of the installed Point Guard runtime before the bridge starts; WIN-9.3 picks the mechanism (Authenticode or the runtime manifest hashes) |
+| `BundleSeal` (`SecStaticCodeCheckValidity`) | the runtime manifest's SHA-256 seal over every file of the installed Point Guard runtime, checked before each launch (WIN-9.3, REQ-WINAPP-085; Authenticode is not provisioned) |
 | launchd agent / systemd unit (`pu daemon install`) | HKCU `Run` value (WINAPP-011) |

@@ -1,0 +1,558 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`in UTC > ProjectChannelView > renders channel-history.json like the Mac 1`] = `
+<div
+  class="channel-view"
+  data-view="ProjectChannelView"
+>
+  <div
+    class="channel-header"
+  >
+    <span
+      class="channel-hash"
+    >
+      #
+    </span>
+    <div
+      class="channel-heading"
+    >
+      <span
+        class="channel-title"
+      >
+        demo
+      </span>
+      <span
+        class="channel-subtitle"
+      >
+        A shared place to keep each other up to date
+      </span>
+    </div>
+    <span
+      class="channel-spacer"
+    />
+    <div
+      class="channel-menu-anchor"
+    >
+      <button
+        aria-expanded="false"
+        aria-label="Channel members"
+        class="channel-tool"
+        title="Channel members"
+        type="button"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-users"
+          data-symbol="person.2"
+          fill="none"
+          height="14"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="14"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"
+          />
+          <path
+            d="M16 3.128a4 4 0 0 1 0 7.744"
+          />
+          <path
+            d="M22 21v-2a4 4 0 0 0-3-3.87"
+          />
+          <circle
+            cx="9"
+            cy="7"
+            r="4"
+          />
+        </svg>
+      </button>
+    </div>
+    <button
+      aria-label="Search messages"
+      class="channel-tool"
+      title="Search messages (Ctrl+F)"
+      type="button"
+    >
+      <svg
+        aria-hidden="true"
+        class="lucide lucide-search"
+        data-symbol="magnifyingglass"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="2"
+        viewBox="0 0 24 24"
+        width="14"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <path
+          d="m21 21-4.34-4.34"
+        />
+        <circle
+          cx="11"
+          cy="11"
+          r="8"
+        />
+      </svg>
+    </button>
+    <div
+      class="channel-menu-anchor"
+    >
+      <button
+        aria-expanded="false"
+        aria-haspopup="menu"
+        aria-label="Channel options"
+        class="channel-tool"
+        type="button"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-ellipsis lucide-more-horizontal"
+          data-symbol="ellipsis"
+          fill="none"
+          height="14"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="14"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <circle
+            cx="12"
+            cy="12"
+            r="1"
+          />
+          <circle
+            cx="19"
+            cy="12"
+            r="1"
+          />
+          <circle
+            cx="5"
+            cy="12"
+            r="1"
+          />
+        </svg>
+      </button>
+    </div>
+  </div>
+  <div
+    class="channel-unread-banner"
+  >
+    <button
+      type="button"
+    >
+      1 unread messages ↓
+    </button>
+    <span
+      class="channel-spacer"
+    />
+    <button
+      aria-label="Mark as read"
+      title="Mark as read"
+      type="button"
+    >
+      <svg
+        aria-hidden="true"
+        class="lucide lucide-x"
+        data-symbol="xmark"
+        fill="none"
+        height="11"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="2"
+        viewBox="0 0 24 24"
+        width="11"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <path
+          d="M18 6 6 18"
+        />
+        <path
+          d="m6 6 12 12"
+        />
+      </svg>
+    </button>
+  </div>
+  <div
+    class="channel-timeline"
+    tabindex="-1"
+  >
+    <div
+      class="channel-timeline-content"
+      data-testid="channel-timeline"
+    >
+      <button
+        class="channel-load-older"
+        type="button"
+      >
+        Load older messages
+      </button>
+      <div
+        class="channel-entry"
+      >
+        <div
+          class="channel-divider channel-new-messages"
+        >
+          <span
+            class="channel-rule"
+          />
+          <span>
+            New messages
+          </span>
+          <span
+            class="channel-rule"
+          />
+        </div>
+        <div
+          class="channel-divider channel-day"
+        >
+          <span
+            class="channel-rule"
+          />
+          <span>
+            Oct 9, 2026
+          </span>
+          <span
+            class="channel-rule"
+          />
+        </div>
+        <div
+          data-message-id="msg-parent"
+        >
+          <div
+            aria-label="jono: Ready for \`review\`?"
+            class="channel-row"
+            role="article"
+            tabindex="0"
+          >
+            <div
+              class="channel-message"
+            >
+              <span
+                aria-hidden="true"
+                class="channel-avatar"
+              >
+                j
+              </span>
+              <div
+                class="channel-message-body"
+              >
+                <div
+                  class="channel-message-header"
+                >
+                  <span
+                    class="channel-author"
+                  >
+                    jono
+                  </span>
+                  <span
+                    class="channel-time"
+                  >
+                    5:00 PM
+                  </span>
+                </div>
+                <span
+                  class="channel-message-text"
+                >
+                  Ready for 
+                  <code
+                    class="chat-markdown-inline-code"
+                  >
+                    review
+                  </code>
+                  ?
+                </span>
+                <span
+                  class="channel-edited"
+                >
+                  edited
+                </span>
+                <div
+                  class="channel-references"
+                >
+                  <button
+                    class="channel-reference"
+                    title="Open reference changes"
+                    type="button"
+                  >
+                    <svg
+                      aria-hidden="true"
+                      class="lucide lucide-git-pull-request"
+                      data-symbol="arrow.triangle.pull"
+                      fill="none"
+                      height="11"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      viewBox="0 0 24 24"
+                      width="11"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <circle
+                        cx="18"
+                        cy="18"
+                        r="3"
+                      />
+                      <circle
+                        cx="6"
+                        cy="6"
+                        r="3"
+                      />
+                      <path
+                        d="M13 6h3a2 2 0 0 1 2 2v7"
+                      />
+                      <line
+                        x1="6"
+                        x2="6"
+                        y1="9"
+                        y2="21"
+                      />
+                    </svg>
+                    <span>
+                      Review PR
+                    </span>
+                  </button>
+                </div>
+                <div
+                  class="channel-reactions"
+                >
+                  <button
+                    class="channel-reaction mine"
+                    type="button"
+                  >
+                    👍 2
+                  </button>
+                  <button
+                    class="channel-reply-count"
+                    type="button"
+                  >
+                    3 replies
+                  </button>
+                </div>
+              </div>
+              <span
+                class="channel-message-trailing"
+              />
+            </div>
+            <div
+              aria-label="Message actions"
+              class="channel-row-actions"
+              role="toolbar"
+            >
+              <button
+                aria-label="React 👍"
+                class="channel-action"
+                title="React 👍"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  class="lucide lucide-thumbs-up"
+                  data-symbol="hand.thumbsup"
+                  fill="none"
+                  height="12"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="12"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"
+                  />
+                  <path
+                    d="M7 10v12"
+                  />
+                </svg>
+              </button>
+              <button
+                aria-label="Reply in thread"
+                class="channel-action"
+                title="Reply in thread"
+                type="button"
+              >
+                <svg
+                  aria-hidden="true"
+                  class="lucide lucide-message-circle"
+                  data-symbol="bubble.left"
+                  fill="none"
+                  height="12"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="12"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"
+                  />
+                </svg>
+              </button>
+              <div
+                class="channel-menu-anchor"
+              >
+                <button
+                  aria-expanded="false"
+                  aria-haspopup="menu"
+                  aria-label="More actions"
+                  class="channel-action"
+                  type="button"
+                >
+                  <svg
+                    aria-hidden="true"
+                    class="lucide lucide-ellipsis lucide-more-horizontal"
+                    data-symbol="ellipsis"
+                    fill="none"
+                    height="12"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                    width="12"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <circle
+                      cx="12"
+                      cy="12"
+                      r="1"
+                    />
+                    <circle
+                      cx="19"
+                      cy="12"
+                      r="1"
+                    />
+                    <circle
+                      cx="5"
+                      cy="12"
+                      r="1"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      class="channel-bottom"
+    />
+  </div>
+  <div
+    class="channel-composer"
+    data-testid="channel-composer"
+  >
+    <div
+      class="channel-composer-editor"
+    >
+      <textarea
+        aria-autocomplete="list"
+        aria-expanded="false"
+        aria-label="Message channel"
+        class="channel-composer-text"
+        placeholder="Message #demo"
+        style="height: 60px;"
+      />
+    </div>
+    <div
+      class="channel-composer-bar"
+    >
+      <div
+        class="channel-menu-anchor"
+      >
+        <button
+          aria-expanded="false"
+          aria-haspopup="menu"
+          aria-label="Mention someone"
+          class="channel-tool channel-mention-button"
+          title="Mention someone"
+          type="button"
+        >
+          @
+        </button>
+      </div>
+      <button
+        aria-label="Insert inline code"
+        class="channel-tool"
+        title="Insert inline code"
+        type="button"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-code"
+          data-symbol="chevron.left.forwardslash.chevron.right"
+          fill="none"
+          height="12"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="12"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m16 18 6-6-6-6"
+          />
+          <path
+            d="m8 6-6 6 6 6"
+          />
+        </svg>
+      </button>
+      <span
+        class="channel-hint"
+      >
+        Enter to send · Shift Enter for a new line
+      </span>
+      <span
+        class="channel-spacer"
+      />
+      <button
+        aria-label="Send message"
+        class="channel-send"
+        disabled=""
+        title="Send message"
+        type="button"
+      >
+        <svg
+          aria-hidden="true"
+          class="lucide lucide-arrow-up"
+          data-symbol="arrow.up"
+          fill="none"
+          height="12"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="12"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m5 12 7-7 7 7"
+          />
+          <path
+            d="M12 19V5"
+          />
+        </svg>
+      </button>
+    </div>
+  </div>
+</div>
+`;

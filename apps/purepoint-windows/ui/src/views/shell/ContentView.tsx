@@ -15,6 +15,7 @@
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import { type SidebarSelection, selection as sidebarSelection } from '../../model/sidebarItem.ts';
+import { workspaceAgentIds } from '../../model/workspace.ts';
 import type { AppState } from '../../state/appState.ts';
 import { useKeyBindingStore } from '../../state/keyBindingStore.ts';
 import { SIDEBAR_KEY, useSidebarVisibilityStore } from '../../state/sidebarVisibilityStore.ts';
@@ -22,6 +23,7 @@ import { Icon } from '../../theme/Icon.tsx';
 import { runWindowAction } from '../../services/windowChrome.ts';
 import { DetailView, ScreenPlaceholder } from '../detail/DetailView.tsx';
 import { SidebarView } from '../sidebar/SidebarView.tsx';
+import { useAgentSelection } from '../terminal/agentSelection.ts';
 import { useAppState } from './appContext.ts';
 import { type AppCommand, createAppActions } from './appCommands.ts';
 import { MenuBar } from './MenuBar.tsx';
@@ -65,6 +67,24 @@ function followSelection(app: AppState, selection: SidebarSelection | null): voi
     if (selection?.kind === 'workspace') registry.activate(selection.id);
     else registry.activeWorkspaceId = null;
   }
+}
+
+/**
+ * What a sidebar pick does to the terminals on screen until the pane grid (WIN-7.4): a workspace
+ * row shows its agents' terminals (Ctrl+click adds them to, or takes them from, those shown, as
+ * the interim agent list did); any other row clears them so its screen shows.
+ */
+export function selectSidebarAgents(
+  app: AppState,
+  selection: SidebarSelection | null,
+  additive: boolean,
+): void {
+  const agentSelection = useAgentSelection.getState();
+  const workspace =
+    selection?.kind === 'workspace' ? (app.registry?.workspace(selection.id) ?? null) : null;
+  const agentIds = workspace === null ? [] : workspaceAgentIds(workspace);
+  if (!additive || agentIds.length === 0) agentSelection.clear();
+  for (const agentId of agentIds) agentSelection.select(agentId, true);
 }
 
 /** The drag handle between the sidebar and the detail. */
@@ -193,6 +213,14 @@ export function ContentView() {
     followSelection(app, selection);
   }, [app, selection]);
 
+  const selectFromSidebar = useCallback(
+    (next: SidebarSelection | null, options?: { readonly additive?: boolean }) => {
+      selectSidebarAgents(app, next, options?.additive === true);
+      setSelection(next);
+    },
+    [app],
+  );
+
   // Swift `.onChange(of: appState.pendingSelectWorktreeId)`.
   useEffect(
     () =>
@@ -209,6 +237,7 @@ export function ContentView() {
     (command: AppCommand) => {
       const actions = createAppActions({
         selectNav: (item) => {
+          useAgentSelection.getState().clear();
           setSelection(sidebarSelection.nav(item));
         },
         toggleSidebar: (action) => {
@@ -264,7 +293,7 @@ export function ContentView() {
         {sidebarShown && (
           <>
             <aside className="sidebar-column" ref={sidebarRef} tabIndex={-1}>
-              <SidebarView selection={selection} onSelectionChange={setSelection} />
+              <SidebarView selection={selection} onSelectionChange={selectFromSidebar} />
             </aside>
             <SidebarResizer />
           </>

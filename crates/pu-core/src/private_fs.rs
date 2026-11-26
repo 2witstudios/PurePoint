@@ -20,17 +20,13 @@ pub fn create_private_dir(dir: &Path) -> io::Result<()> {
 
 /// Create a new private file, failing if it exists (`O_CREAT|O_EXCL`).
 pub fn create_new_private_file(path: &Path) -> io::Result<File> {
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
-    imp::open_private(path, &mut opts)
+    imp::open_private(path, true)
 }
 
 /// Open (creating if missing, never truncating) a private file for writing,
 /// e.g. a lock file.
 pub fn open_private_file(path: &Path) -> io::Result<File> {
-    let mut opts = OpenOptions::new();
-    opts.write(true).create(true).truncate(false);
-    imp::open_private(path, &mut opts)
+    imp::open_private(path, false)
 }
 
 /// Atomically replace `path` with `contents` in a private file.
@@ -149,7 +145,13 @@ mod imp {
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
     }
 
-    pub fn open_private(path: &Path, opts: &mut OpenOptions) -> io::Result<File> {
+    pub fn open_private(path: &Path, create_new: bool) -> io::Result<File> {
+        let mut opts = OpenOptions::new();
+        if create_new {
+            opts.write(true).create_new(true);
+        } else {
+            opts.write(true).create(true).truncate(false);
+        }
         opts.mode(0o600).open(path)
     }
 
@@ -214,21 +216,119 @@ mod imp {
     use super::*;
     use crate::win_security as sec;
     use std::os::windows::fs::OpenOptionsExt;
-    use std::os::windows::io::AsRawHandle;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle};
+    use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_TYPE_DISK, GetFileInformationByHandle, GetFileType, REPLACEFILE_IGNORE_MERGE_ERRORS,
-        ReplaceFileW,
+        BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW,
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TYPE_DISK, GetFileInformationByHandle, GetFileType,
+        OPEN_ALWAYS, OPEN_EXISTING, REPLACEFILE_IGNORE_MERGE_ERRORS, ReplaceFileW,
     };
 
-    pub fn create_private_dir(dir: &Path) -> io::Result<()> {
-        std::fs::create_dir_all(dir)?;
-        sec::set_private_dacl(dir, true)
+    const READ_CONTROL: u32 = 0x0002_0000;
+    const WRITE_DAC: u32 = 0x0004_0000;
+    const ERROR_ALREADY_EXISTS: i32 = 183;
+
+    fn reparse_refused(path: &Path) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} is a symbolic link or junction, which is never followed",
+                path.display()
+            ),
+        )
     }
 
-    pub fn open_private(path: &Path, opts: &mut OpenOptions) -> io::Result<File> {
-        let file = opts.open(path)?;
-        sec::set_private_dacl(path, false)?;
+    /// `CreateFileW` on `path` itself (never following a final reparse
+    /// point), shared like std opens. Returns the file and whether it
+    /// already existed (`OPEN_ALWAYS`).
+    fn create_file(
+        path: &Path,
+        access: u32,
+        disposition: u32,
+        flags: u32,
+        sa: Option<&SECURITY_ATTRIBUTES>,
+    ) -> io::Result<(File, bool)> {
+        let name = sec::wide(path.as_os_str());
+        // SAFETY: name is NUL-terminated; sa (if any) and its descriptor
+        // outlive the call.
+        let handle = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                access,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                sa.map_or(std::ptr::null(), |sa| sa as *const _),
+                disposition,
+                flags | FILE_FLAG_OPEN_REPARSE_POINT,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        let existed = io::Error::last_os_error().raw_os_error() == Some(ERROR_ALREADY_EXISTS);
+        // SAFETY: CreateFileW returned a fresh handle we now own.
+        Ok((unsafe { File::from_raw_handle(handle as _) }, existed))
+    }
+
+    fn security_attributes(sd: &sec::SecurityDescriptor) -> SECURITY_ATTRIBUTES {
+        SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: sd.as_ptr(),
+            bInheritHandle: 0,
+        }
+    }
+
+    pub fn create_private_dir(dir: &Path) -> io::Result<()> {
+        if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)?;
+        }
+        match create_new_private_dir(dir) {
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            other => return other,
+        }
+        // An existing directory: fix its DACL through a handle to it, never
+        // to whatever a junction there points at.
+        let (handle, _) = create_file(
+            dir,
+            READ_CONTROL | WRITE_DAC,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            None,
+        )?;
+        let attrs = by_handle(&handle)?.dwFileAttributes;
+        if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(reparse_refused(dir));
+        }
+        if attrs & FILE_ATTRIBUTE_DIRECTORY == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} exists and is not a directory", dir.display()),
+            ));
+        }
+        sec::set_private_dacl_handle(&handle, true)
+    }
+
+    /// A new file is created with the private DACL; an existing one (open
+    /// mode only) has its DACL replaced through the handle.
+    pub fn open_private(path: &Path, create_new: bool) -> io::Result<File> {
+        let sd = sec::private_descriptor(false)?;
+        let sa = security_attributes(&sd);
+        let (file, existed) = create_file(
+            path,
+            GENERIC_WRITE | READ_CONTROL | WRITE_DAC,
+            if create_new { CREATE_NEW } else { OPEN_ALWAYS },
+            FILE_ATTRIBUTE_NORMAL,
+            Some(&sa),
+        )?;
+        if existed {
+            if by_handle(&file)?.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(reparse_refused(path));
+            }
+            sec::set_private_dacl_handle(&file, false)?;
+        }
         Ok(file)
     }
 
@@ -237,8 +337,14 @@ mod imp {
     }
 
     pub fn create_new_private_dir(dir: &Path) -> io::Result<()> {
-        std::fs::create_dir(dir)?;
-        sec::set_private_dacl(dir, true)
+        let sd = sec::private_descriptor(true)?;
+        let sa = security_attributes(&sd);
+        let name = sec::wide(dir.as_os_str());
+        // SAFETY: name is NUL-terminated; sa and its descriptor outlive the call.
+        if unsafe { CreateDirectoryW(name.as_ptr(), &sa) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     fn raw(file: &File) -> windows_sys::Win32::Foundation::HANDLE {
@@ -335,6 +441,70 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Give `dir` an inheritable Everyone entry, as a careless parent might.
+    #[cfg(windows)]
+    fn leaky_parent(dir: &Path) {
+        let user = crate::win_security::current_user_sid()
+            .unwrap()
+            .to_string_sid()
+            .unwrap();
+        let sddl = format!(
+            "{}(A;OICI;FA;;;WD)",
+            crate::win_security::private_sddl(&user, true)
+        );
+        crate::win_security::apply_sddl(dir, &sddl).unwrap();
+        assert!(crate::win_security::check_private(dir).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_leaky_parent_should_create_private_paths_without_inheriting() {
+        let tmp = tempfile::tempdir().unwrap();
+        leaky_parent(tmp.path());
+        let new_dir = tmp.path().join("new");
+        create_new_private_dir(&new_dir).unwrap();
+        check_private(&new_dir).unwrap();
+        let nested = tmp.path().join("a").join("b");
+        create_private_dir(&nested).unwrap();
+        check_private(&nested).unwrap();
+        let file = tmp.path().join("f");
+        drop(create_new_private_file(&file).unwrap());
+        check_private(&file).unwrap();
+        // Existing paths with an inherited DACL are fixed by handle.
+        let old_dir = tmp.path().join("old");
+        std::fs::create_dir(&old_dir).unwrap();
+        assert!(check_private(&old_dir).is_err());
+        create_private_dir(&old_dir).unwrap();
+        check_private(&old_dir).unwrap();
+        let old_file = tmp.path().join("old.lock");
+        std::fs::write(&old_file, b"x").unwrap();
+        assert!(check_private(&old_file).is_err());
+        drop(open_private_file(&old_file).unwrap());
+        check_private(&old_file).unwrap();
+        assert_eq!(std::fs::read(&old_file).unwrap(), b"x");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_junction_should_refuse_to_make_it_private_without_touching_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        leaky_parent(&target);
+        let link = tmp.path().join("link");
+        let status = std::process::Command::new("cmd")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let err = create_private_dir(&link).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err}");
+        assert!(check_private(&target).is_err(), "target DACL was changed");
+    }
 
     #[test]
     fn given_new_private_dir_should_pass_check() {

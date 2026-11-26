@@ -796,6 +796,37 @@ async fn given_repo_fsmonitor_hook_should_not_run_under_git_exec() {
     assert!(!marker.exists(), "repository fsmonitor hook ran");
 }
 
+/// Git for Windows runs an fsmonitor hook through its bundled `sh`, so the
+/// repository-config guard matters there too.
+#[cfg(windows)]
+#[tokio::test(flavor = "current_thread")]
+async fn given_repo_fsmonitor_hook_should_not_run_under_git_exec() {
+    let (engine, tmp, root, _outside) = setup().await;
+    let slashes = |path: &Path| p(path).replace('\\', "/");
+    let marker = tmp.path().join("fsmonitor-ran");
+    let hook = tmp.path().join("fsmonitor-hook");
+    std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", slashes(&marker))).unwrap();
+    git(&root, &["config", "core.fsmonitor", &slashes(&hook)]);
+    // Prove the hook is live: plain git runs it.
+    git(&root, &["status", "--porcelain=v1"]);
+    assert!(marker.exists(), "fixture hook never ran under plain git");
+    std::fs::remove_file(&marker).unwrap();
+    let resp = engine
+        .handle_request(Request::GitExec {
+            cwd: p(&root),
+            program: "git".into(),
+            args: strings(&["status", "--porcelain=v1"]),
+            stdin_base64: None,
+            timeout_ms: 10_000,
+        })
+        .await;
+    assert!(
+        matches!(resp, Response::GitExecResult { exit_code: 0, .. }),
+        "{resp:?}"
+    );
+    assert!(!marker.exists(), "repository fsmonitor hook ran");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn given_program_other_than_git_or_gh_should_refuse_it() {
     let (engine, _tmp, root, _outside) = setup().await;
@@ -1958,4 +1989,39 @@ fn given_timed_out_helper_tree_should_be_killed_with_its_children() {
         start.elapsed()
     );
     assert!(!child.wait().unwrap().success());
+}
+
+/// The async tree kill runs `taskkill` off the runtime: on a current-thread
+/// runtime another task keeps running while it waits.
+#[cfg(windows)]
+#[tokio::test(flavor = "current_thread")]
+async fn given_async_tree_kill_should_not_block_the_runtime() {
+    use std::io::Read as _;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut child = std::process::Command::new("cmd")
+        .args(["/d", "/c", "ping -n 30 127.0.0.1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut first = [0u8; 1];
+    stdout.read_exact(&mut first).unwrap();
+    let ticks = std::sync::Arc::new(AtomicUsize::new(0));
+    let ticker = tokio::spawn({
+        let ticks = ticks.clone();
+        async move {
+            loop {
+                ticks.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }
+    });
+    kill_process_group_async(child.id()).await;
+    let during = ticks.load(Ordering::SeqCst);
+    ticker.abort();
+    let mut rest = Vec::new();
+    stdout.read_to_end(&mut rest).unwrap();
+    assert!(!child.wait().unwrap().success());
+    assert!(during > 0, "the runtime was blocked while taskkill ran");
 }

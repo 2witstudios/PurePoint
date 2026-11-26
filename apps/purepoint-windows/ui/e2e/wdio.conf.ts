@@ -3,8 +3,7 @@
 // and stages the app first.
 //
 // Every spec file gets its own worker, daemon fixture (temp HOME, git repo, `pu init`, a
-// `terminal` agent in the project root and one in the `e2e-wt` worktree) and tauri-driver, all
-// torn down in `afterSession`.
+// `terminal` agent) and tauri-driver, all torn down in `afterSession`.
 
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -13,8 +12,6 @@ import { workspace } from './fixtures/paths.ts';
 import { TauriDriver } from './fixtures/tauriDriver.ts';
 
 const runRoot = process.env.PU_E2E_RUN_ROOT;
-/** The worktree the fixture spawns its second agent into (the sidebar spec selects it). */
-const E2E_WORKTREE = 'e2e-wt';
 
 let fixture: DaemonFixture | null = null;
 let driver: TauriDriver | null = null;
@@ -83,8 +80,7 @@ export const config: WebdriverIO.Config = {
       await fixture.startDaemon();
       await fixture.init();
       await fixture.spawnTerminal();
-      await fixture.spawnTerminal(E2E_WORKTREE);
-      process.env.PU_E2E_WORKTREE = E2E_WORKTREE;
+      process.env.PU_E2E_ROOT = fixture.root;
       process.env.PU_E2E_HOME = fixture.home;
       process.env.PU_E2E_PROJECT_ROOT = fixture.projectRoot;
       driver = await TauriDriver.start(fixture.env, join(specArtifacts(), 'tauri-driver.log'));

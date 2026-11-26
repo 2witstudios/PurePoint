@@ -1210,6 +1210,16 @@ fn kill_process_group(pid: u32) {
         .status();
 }
 
+/// [`kill_process_group`] from async code. On Windows it runs and waits for
+/// `taskkill`, so it goes to the blocking pool; it still finishes before the
+/// caller kills the root.
+async fn kill_process_group_async(pid: u32) {
+    #[cfg(windows)]
+    let _ = tokio::task::spawn_blocking(move || kill_process_group(pid)).await;
+    #[cfg(unix)]
+    kill_process_group(pid);
+}
+
 /// SIGKILL the process group led by `pid` (git_exec children lead their own).
 #[cfg(unix)]
 fn kill_process_group(pid: u32) {
@@ -1481,7 +1491,7 @@ impl Engine {
             Ok((_, _, _, Err(e))) => fs_error("io_error", format!("{program} failed: {e}")),
             Err(_) => {
                 if let Some(pgid) = pgid {
-                    kill_process_group(pgid);
+                    kill_process_group_async(pgid).await;
                 }
                 let _ = child.start_kill();
                 fs_error(
