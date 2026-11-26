@@ -1,5 +1,7 @@
 pub mod agent_def;
+pub mod canon;
 pub mod config;
+pub mod env_path;
 pub mod error;
 pub mod id;
 pub mod machines;

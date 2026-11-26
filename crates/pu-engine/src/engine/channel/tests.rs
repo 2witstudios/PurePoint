@@ -153,3 +153,18 @@ async fn given_invalid_identity_or_corrupt_store_should_report_error() {
         matches!(engine.handle_request(read(&root, None)).await, Response::Error { code, .. } if code == "CHANNEL_VERSION")
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn given_windows_human_should_author_as_user_sid() {
+    let (temp, _) = setup();
+    let author = identity(temp.path(), None).unwrap();
+    let sid = pu_core::win_security::current_user_sid()
+        .unwrap()
+        .to_string_sid()
+        .unwrap();
+    assert!(sid.starts_with("S-1-5-"), "{sid}");
+    assert_eq!(author.id, format!("human:{sid}"));
+    assert_eq!(author.kind, "human");
+    assert!(!author.name.trim().is_empty());
+}

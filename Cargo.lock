@@ -954,6 +954,7 @@ name = "pu-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dunce",
  "fs4",
  "indexmap",
  "libc",
@@ -991,6 +992,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vt100",
+ "which",
  "windows-sys 0.61.2",
 ]
 

@@ -565,6 +565,7 @@ pub(super) async fn handle_fs_stream(
 #[cfg(test)]
 mod watch_tests {
     use super::*;
+    use pu_core::canon::CanonicalPath;
 
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
@@ -602,7 +603,7 @@ mod watch_tests {
     #[test]
     fn given_native_recursive_watch_fails_should_poll_and_still_report_changes() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
+        let root = tmp.path().canonical().unwrap();
         let (handler, rx) = collector();
         let interval = std::time::Duration::from_millis(200);
         let (_watcher, polling) =

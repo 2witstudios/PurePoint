@@ -33,10 +33,15 @@ fn identity(root: &Path, agent_id: Option<&str>) -> Result<ChannelAuthor, Channe
     // SAFETY: geteuid has no pointer arguments or preconditions.
     #[cfg(unix)]
     let uid = unsafe { libc::geteuid() };
-    // WIN-3.7: derive a stable human author id from the user's SID.
-    #[cfg(windows)]
-    let uid: u32 = 0;
+    #[cfg(unix)]
     let name = crate::os::user_name(uid).unwrap_or_else(|| format!("Developer {uid}"));
+    // Windows has no numeric uid: the stable identity is the user SID.
+    #[cfg(windows)]
+    let uid = pu_core::win_security::current_user_sid()
+        .and_then(|sid| sid.to_string_sid())
+        .map_err(|e| ChannelError::Invalid(format!("user SID unavailable: {e}")))?;
+    #[cfg(windows)]
+    let name = crate::os::user_name(0).unwrap_or_else(|| "Developer".into());
     Ok(ChannelAuthor {
         id: format!("human:{uid}"),
         name,

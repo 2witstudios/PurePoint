@@ -1,11 +1,12 @@
 use super::*;
+use pu_core::canon::CanonicalPath;
 use tempfile::TempDir;
 
 /// An engine with one registered (initialized, git-backed) project, plus a
 /// sibling directory outside every allowed root.
 async fn setup() -> (Engine, TempDir, PathBuf, PathBuf) {
     let tmp = TempDir::new().unwrap();
-    let base = tmp.path().canonicalize().unwrap();
+    let base = tmp.path().canonical().unwrap();
     let root = base.join("project");
     let outside = base.join("outside");
     std::fs::create_dir_all(&root).unwrap();
@@ -38,8 +39,10 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} failed");
 }
 
+/// Expected wire spelling: the stored form (WIN-3.11), so `join("a/b")`
+/// compares equal to the engine's separators on Windows.
 fn p(path: &Path) -> String {
-    path_string(path)
+    path_string(&pu_core::canon::normalize(path))
 }
 
 fn assert_error(response: Response, expected: &str) {
@@ -161,7 +164,7 @@ fn register_worktree(root: &Path, id: &str, path: &Path) {
 #[tokio::test(flavor = "current_thread")]
 async fn given_manifest_worktree_outside_worktrees_dir_should_refuse_it() {
     let (engine, tmp, root, outside) = setup().await;
-    let wt_dir = tmp.path().canonicalize().unwrap().join("elsewhere-wt");
+    let wt_dir = tmp.path().canonical().unwrap().join("elsewhere-wt");
     std::fs::create_dir_all(&wt_dir).unwrap();
     std::fs::write(wt_dir.join("a.txt"), "wt").unwrap();
     register_worktree(&root, "wt-x", &wt_dir);
@@ -182,7 +185,7 @@ async fn given_manifest_worktree_outside_worktrees_dir_should_refuse_it() {
 #[test]
 fn given_worktree_candidates_should_trust_only_children_of_worktrees_dir() {
     let tmp = TempDir::new().unwrap();
-    let base = tmp.path().canonicalize().unwrap();
+    let base = tmp.path().canonical().unwrap();
     let project = base.join("project");
     let worktrees = project.join(".pu/worktrees");
     let wt = worktrees.join("wt-a");
@@ -485,7 +488,7 @@ async fn given_more_entries_than_max_should_truncate() {
 async fn given_directory_outside_any_repo_should_list_without_ignored_flags() {
     let (engine, _tmp, _root, _outside) = setup().await;
     let home = TempDir::new().unwrap();
-    let home = home.path().canonicalize().unwrap();
+    let home = home.path().canonical().unwrap();
     let transcripts = home.join(".claude/projects");
     std::fs::create_dir_all(&transcripts).unwrap();
     std::fs::write(transcripts.join("t.jsonl"), "{}").unwrap();
@@ -557,7 +560,7 @@ async fn given_directories_only_should_list_folders_outside_registered_roots_wit
 #[test]
 fn given_directories_only_should_expand_home_and_refuse_files_and_relative_paths() {
     let home = TempDir::new().unwrap();
-    let home = home.path().canonicalize().unwrap();
+    let home = home.path().canonical().unwrap();
     std::fs::create_dir_all(home.join("code/app")).unwrap();
     std::fs::write(home.join("notes.txt"), "x").unwrap();
     match fs_browse("~", true, 10, Some(&home)) {
@@ -607,7 +610,7 @@ fn given_directories_only_over_max_should_truncate() {
 #[test]
 fn given_ancestor_of_a_root_should_refuse_delete() {
     let tmp = TempDir::new().unwrap();
-    let project = tmp.path().canonicalize().unwrap().join("p");
+    let project = tmp.path().canonical().unwrap().join("p");
     let worktree = project.join(".pu/worktrees/wt-1");
     std::fs::create_dir_all(&worktree).unwrap();
     std::fs::write(project.join(".pu/manifest.json"), "{}").unwrap();
@@ -673,7 +676,7 @@ async fn given_rewrite_should_keep_file_mode() {
 #[test]
 fn given_root_home_or_home_ancestor_should_be_too_broad_to_register() {
     let tmp = TempDir::new().unwrap();
-    let base = tmp.path().canonicalize().unwrap();
+    let base = tmp.path().canonical().unwrap();
     let home = base.join("users/me");
     let project = home.join("code/app");
     std::fs::create_dir_all(&project).unwrap();
@@ -1123,7 +1126,7 @@ async fn given_disallowed_git_args_should_refuse_git_exec() {
 #[tokio::test(flavor = "current_thread")]
 async fn given_git_exec_timeout_should_kill_spawned_helpers() {
     let tmp = TempDir::new().unwrap();
-    let base = tmp.path().canonicalize().unwrap();
+    let base = tmp.path().canonical().unwrap();
     let root = base.join("project");
     std::fs::create_dir_all(&root).unwrap();
     git(&root, &["init", "-q"]);
@@ -1446,7 +1449,7 @@ async fn given_planted_bare_repo_should_not_run_its_config() {
 #[tokio::test(flavor = "current_thread")]
 async fn given_root_without_repo_git_should_not_find_an_enclosing_one() {
     let tmp = TempDir::new().unwrap();
-    let base = tmp.path().canonicalize().unwrap();
+    let base = tmp.path().canonical().unwrap();
     // An enclosing repository (like a dotfiles repo at $HOME) above a project
     // that is not a repository itself.
     git(&base, &["init", "-q"]);
@@ -1477,7 +1480,7 @@ async fn given_root_without_repo_git_should_not_find_an_enclosing_one() {
 #[test]
 fn given_registered_home_should_never_be_an_fs_root() {
     let tmp = TempDir::new().unwrap();
-    let home = tmp.path().canonicalize().unwrap();
+    let home = tmp.path().canonical().unwrap();
     let project = home.join("code");
     std::fs::create_dir_all(&project).unwrap();
     let roots = allowed_roots(&[path_string(&home), path_string(&project)], Some(&home));
@@ -1836,7 +1839,7 @@ async fn given_symlink_to_outside_directory_operand_should_be_refused() {
 #[test]
 fn given_subcommand_named_like_an_outside_symlink_should_not_be_checked_as_a_path() {
     let tmp = TempDir::new().unwrap();
-    let base = tmp.path().canonicalize().unwrap();
+    let base = tmp.path().canonical().unwrap();
     let root = base.join("project");
     let outside = base.join("outside");
     std::fs::create_dir_all(&root).unwrap();

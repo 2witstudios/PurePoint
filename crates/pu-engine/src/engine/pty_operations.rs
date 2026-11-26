@@ -420,25 +420,34 @@ impl Engine {
             .unwrap_or_default();
 
         // Append common fallback dirs (guards against missing-binary issues)
-        let home = pu_core::paths::home_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        let fallbacks = [
-            format!("{home}/.local/bin"),
-            format!("{home}/.cargo/bin"),
-            "/usr/local/bin".to_string(),
-            "/opt/homebrew/bin".to_string(),
-        ];
-        let mut path = login_path;
-        for dir in fallbacks {
-            if !path.split(':').any(|p| p == dir) {
-                path = format!("{path}:{dir}");
+        #[cfg(unix)]
+        let path = {
+            let home = pu_core::paths::home_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let fallbacks = [
+                format!("{home}/.local/bin"),
+                format!("{home}/.cargo/bin"),
+                "/usr/local/bin".to_string(),
+                "/opt/homebrew/bin".to_string(),
+            ];
+            let mut path = login_path;
+            for dir in fallbacks {
+                if !path.split(':').any(|p| p == dir) {
+                    path = format!("{path}:{dir}");
+                }
             }
-        }
-        // Prepend ~/.pu/bin
-        if let Ok(pu_dir) = paths::global_pu_dir() {
-            path = format!("{}:{}", pu_dir.join("bin").display(), path);
-        }
+            // Prepend ~/.pu/bin
+            if let Ok(pu_dir) = paths::global_pu_dir() {
+                path = format!("{}:{}", pu_dir.join("bin").display(), path);
+            }
+            path
+        };
+        // Windows (WINAPP-007): the tool directories, then the registry and
+        // daemon PATH already merged by `resolve_login_env`.
+        #[cfg(windows)]
+        let path =
+            crate::win_env::agent_path(&mut env, paths::home_dir().ok().as_deref(), &login_path);
 
         // Override PATH, TERM, COLORTERM in the env
         env.retain(|(k, _)| k != "PATH" && k != "TERM" && k != "COLORTERM");

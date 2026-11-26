@@ -334,13 +334,14 @@ fn read_error(error: SourceError) -> Response {
 mod tests {
     use super::super::Engine;
     use crate::read_source::Binding;
+    use pu_core::canon::CanonicalPath;
     use pu_core::protocol::{Request, Response};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn given_two_codex_processes_in_one_directory_should_bind_their_owned_rollouts() {
         // given: actual PTYs, descriptors and native files; no model/network execution
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
+        let root = temp.path().canonical().unwrap();
         let root_s = root.to_str().unwrap();
         let engine = Engine::new();
         engine
@@ -431,7 +432,7 @@ sleep 30
         let temp = tempfile::tempdir().unwrap();
         let root = temp
             .path()
-            .canonicalize()
+            .canonical()
             .unwrap()
             .to_string_lossy()
             .into_owned();

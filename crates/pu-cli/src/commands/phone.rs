@@ -1,3 +1,4 @@
+use pu_core::canon::CanonicalPath;
 use std::io::{BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -157,7 +158,7 @@ pub async fn run(action: PhoneAction) -> Result<(), CliError> {
             Ok(())
         }
         PhoneAction::Cwd { path } => {
-            let path = std::fs::canonicalize(&path)?;
+            let path = pu_core::canon::canonicalize(&path)?;
             admin()?.call(json!({"operation": "runtime.configure", "cwd": path}))?;
             println!(
                 "working folder set to {}; apply it with `pu phone restart`",
@@ -268,7 +269,7 @@ fn current_payload() -> Result<(PathBuf, PathBuf), CliError> {
         }
     }
     let pu = std::env::current_exe()?
-        .canonicalize()
+        .canonical()
         .map_err(|e| CliError::Other(format!("cannot locate pu: {e}")))?;
     Ok((payload, pu))
 }

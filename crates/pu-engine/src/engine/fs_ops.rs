@@ -2,6 +2,7 @@
 //! confined to a registered project root, one of its worktrees, or an agent
 //! transcript directory under the daemon user's home.
 
+use pu_core::canon::CanonicalPath;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -132,10 +133,8 @@ pub(crate) async fn is_trusted_worktree(project_root: &str, path: &Path) -> bool
 fn is_trusted_worktree_path(project_root: &str, path: &Path) -> bool {
     let root = Path::new(project_root);
     let (Ok(project), Ok(dir)) = (
-        root.canonicalize(),
-        pu_core::paths::pu_dir(root)
-            .join("worktrees")
-            .canonicalize(),
+        root.canonical(),
+        pu_core::paths::pu_dir(root).join("worktrees").canonical(),
     ) else {
         return false;
     };
@@ -152,7 +151,7 @@ fn trusted_worktree(
     project: &Path,
     home: Option<&Path>,
 ) -> Option<PathBuf> {
-    let canonical = worktree.canonicalize().ok()?;
+    let canonical = worktree.canonical().ok()?;
     let inside = canonical.starts_with(worktrees_dir) && canonical != worktrees_dir;
     let too_broad = canonical.parent().is_none()
         || project.starts_with(&canonical)
@@ -174,7 +173,7 @@ fn allowed_roots(projects: &[String], home: Option<&Path>) -> FsRoots {
     let mut roots = Vec::new();
     for project in projects {
         let root = Path::new(project);
-        let Ok(canonical) = root.canonicalize() else {
+        let Ok(canonical) = root.canonical() else {
             continue;
         };
         // However it got registered (legacy registry entry, auto-registration of a
@@ -185,7 +184,7 @@ fn allowed_roots(projects: &[String], home: Option<&Path>) -> FsRoots {
         }
         let worktrees_dir = pu_core::paths::pu_dir(root)
             .join("worktrees")
-            .canonicalize()
+            .canonical()
             .ok();
         if let (Some(worktrees_dir), Ok(m)) = (worktrees_dir, manifest::read_manifest(root)) {
             roots.extend(m.worktrees.values().filter_map(|wt| {
@@ -199,7 +198,7 @@ fn allowed_roots(projects: &[String], home: Option<&Path>) -> FsRoots {
         all.extend(
             TRANSCRIPT_DIRS
                 .iter()
-                .filter_map(|dir| home.join(dir).canonicalize().ok()),
+                .filter_map(|dir| home.join(dir).canonical().ok()),
         );
     }
     FsRoots {
@@ -213,13 +212,13 @@ fn allowed_roots(projects: &[String], home: Option<&Path>) -> FsRoots {
 /// to fs requests).
 pub(crate) fn is_too_broad_project_root(project_root: &Path, home: Option<&Path>) -> bool {
     let root = project_root
-        .canonicalize()
+        .canonical()
         .unwrap_or_else(|_| project_root.to_path_buf());
     if root.parent().is_none() {
         return true;
     }
     home.is_some_and(|home| {
-        let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+        let home = home.canonical().unwrap_or_else(|_| home.to_path_buf());
         home.starts_with(&root)
     })
 }
@@ -258,7 +257,7 @@ fn resolve_confined(path: &str, roots: &[PathBuf], follow_leaf: bool) -> Result<
 #[allow(clippy::result_large_err)]
 fn resolve_existing_prefix(input: &Path) -> Result<PathBuf, Response> {
     for ancestor in input.ancestors() {
-        let Ok(canonical) = ancestor.canonicalize() else {
+        let Ok(canonical) = ancestor.canonical() else {
             continue;
         };
         let tail = input
@@ -482,7 +481,7 @@ fn fs_browse(
             format!("{path} is not an absolute path"),
         );
     }
-    let dir = match expanded.canonicalize() {
+    let dir = match expanded.canonical() {
         Ok(dir) => dir,
         Err(e) => return io_error(&expanded, &e),
     };
@@ -1025,9 +1024,9 @@ fn check_operand_targets(cwd: &Path, args: &[String], roots: &[PathBuf]) -> Resu
         let links_to_dir = meta.file_type().is_symlink()
             && std::fs::metadata(&candidate).is_ok_and(|target| target.is_dir());
         let resolved = if meta.file_type().is_symlink() && !links_to_dir {
-            candidate.parent().unwrap_or(cwd).canonicalize()
+            candidate.parent().unwrap_or(cwd).canonical()
         } else {
-            candidate.canonicalize()
+            candidate.canonical()
         };
         let inside = resolved.is_ok_and(|real| roots.iter().any(|root| real.starts_with(root)));
         if !inside {

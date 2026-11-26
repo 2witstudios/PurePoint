@@ -1,6 +1,7 @@
 // Talks to the daemon over its Unix socket.
 #![cfg(unix)]
 
+use pu_core::canon::CanonicalPath;
 use pu_core::protocol::{Request, Response};
 use std::path::Path;
 use std::time::Duration;
@@ -72,9 +73,9 @@ async fn given_cli_outside_projects_should_query_and_control_agents_globally_wit
     let second = tmp.path().join("second");
     std::fs::create_dir_all(&first).unwrap();
     std::fs::create_dir_all(&second).unwrap();
-    let first_root = first.canonicalize().unwrap();
+    let first_root = first.canonical().unwrap();
     let first_s = first_root.to_str().unwrap();
-    let second_root = second.canonicalize().unwrap();
+    let second_root = second.canonical().unwrap();
     let second_s = second_root.to_str().unwrap();
     for root in [first_s, second_s] {
         let result = json(&socket, &outside, &["--project", root, "init", "--json"]).await;
@@ -352,7 +353,7 @@ async fn given_projects_add_and_remove_should_change_what_every_client_lists() {
     });
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let root = project.canonicalize().unwrap();
+    let root = project.canonical().unwrap();
     let root_s = root.to_str().unwrap();
 
     // A relative path resolves against the current directory.

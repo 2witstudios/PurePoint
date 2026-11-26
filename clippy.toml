@@ -1,1 +1,9 @@
 msrv = "1.89"
+
+# WIN-3.11: one canonicalization helper, so stored and sent paths never carry
+# a Windows verbatim prefix.
+disallowed-methods = [
+    { path = "std::fs::canonicalize", reason = "use pu_core::canon::canonicalize (no verbatim prefix on Windows)" },
+    { path = "std::path::Path::canonicalize", reason = "use pu_core::canon::CanonicalPath::canonical" },
+    { path = "tokio::fs::canonicalize", reason = "use pu_core::canon::canonicalize in spawn_blocking" },
+]

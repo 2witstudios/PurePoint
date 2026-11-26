@@ -161,7 +161,7 @@ fn install(socket: &Path, custom_socket: bool, now: bool) -> Result<(), CliError
     let engine = daemon_ctrl::find_daemon_binary()
         .map_err(|reasons| CliError::Other(format!("no usable pu-engine ({reasons})")))?;
     // The service file outlives this shell; never record a relative path.
-    let engine = std::fs::canonicalize(&engine)?;
+    let engine = pu_core::canon::canonicalize(&engine)?;
     for note in service::install(manager, &engine, socket, now)? {
         println!("{note}");
     }

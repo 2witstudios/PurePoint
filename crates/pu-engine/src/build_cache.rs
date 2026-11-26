@@ -6,6 +6,7 @@
 //! nothing removed; the sweeper deletes those once idle and, when the disk is
 //! low, also drops idle caches of worktrees that still exist.
 
+use pu_core::canon::CanonicalPath;
 #[cfg(unix)]
 use std::fs::File;
 #[cfg(unix)]
@@ -87,7 +88,7 @@ pub fn worktree_target_dirs(project_root: &Path) -> Vec<PathBuf> {
 pub fn tmp_roots() -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = [PathBuf::from("/tmp"), std::env::temp_dir()]
         .into_iter()
-        .filter_map(|p| p.canonicalize().ok())
+        .filter_map(|p| p.canonical().ok())
         .collect();
     roots.sort();
     roots.dedup();

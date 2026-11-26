@@ -153,6 +153,7 @@ pub fn launchd_plist(engine: &Path, socket: &Path, path_env: &str, log: &Path) -
 /// directories PurePoint and agent CLIs are usually installed into, which a
 /// non-interactive SSH session's PATH lacks. The daemon still probes the login
 /// shell for agent environments; this only has to find `git`, `sh` and friends.
+#[cfg(unix)]
 pub fn service_path_env(current: Option<&str>, home: &Path) -> String {
     let mut dirs: Vec<String> = Vec::new();
     let mut push = |dir: String| {
@@ -177,6 +178,17 @@ pub fn service_path_env(current: Option<&str>, home: &Path) -> String {
         push(dir.to_string());
     }
     dirs.join(":")
+}
+
+/// Windows: the PurePoint and agent tool directories, then the current PATH,
+/// joined with `std::env::join_paths` (duplicates removed case-insensitively).
+#[cfg(windows)]
+pub fn service_path_env(current: Option<&str>, home: &Path) -> String {
+    let tools = pu_core::env_path::windows_tool_dirs(home, |key| std::env::var_os(key));
+    let current = current
+        .map(|path| std::env::split_paths(path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    pu_core::env_path::join_unique(tools.into_iter().chain(current))
 }
 
 #[cfg(windows)]
@@ -428,6 +440,7 @@ mod tests {
         assert!(plist.contains("<key>SuccessfulExit</key>\n    <false/>"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_minimal_path_should_add_install_dirs_without_duplicates() {
         let path = service_path_env(
@@ -450,10 +463,27 @@ mod tests {
         assert_eq!(unique.len(), dirs.len(), "{path}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_no_path_should_still_include_system_dirs() {
         let path = service_path_env(None, Path::new("/root"));
         assert!(path.split(':').any(|d| d == "/usr/bin"));
         assert!(!path.contains("::"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_windows_path_should_prepend_tool_dirs_without_duplicates() {
+        let path = service_path_env(
+            Some(r"C:\Program Files\Git\cmd;c:\users\me\.PU\bin\;C:\WINDOWS\system32"),
+            Path::new(r"C:\Users\me"),
+        );
+        let dirs: Vec<_> = std::env::split_paths(&path).collect();
+        assert_eq!(dirs[0], Path::new(r"C:\Users\me\.pu\bin"));
+        assert_eq!(dirs[1], Path::new(r"C:\Users\me\.cargo\bin"));
+        assert!(dirs.contains(&Path::new(r"C:\Users\me\.local\bin").to_path_buf()));
+        assert!(dirs.contains(&Path::new(r"C:\Program Files\Git\cmd").to_path_buf()));
+        assert!(!path.to_lowercase().contains(r"\.pu\bin\;"), "{path}");
+        assert!(!service_path_env(None, Path::new(r"C:\Users\me")).contains(":/"));
     }
 }
