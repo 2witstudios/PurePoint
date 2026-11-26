@@ -16,22 +16,29 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use tokio::sync::watch;
-use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::{
+    FILETIME, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
 use windows_sys::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
 };
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject,
+    SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
-    EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY,
-    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES,
-    STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+    EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, GetProcessTimes, INFINITE,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess,
+    PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+    PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 use super::{PtyHandle, SpawnConfig, pump_output};
@@ -44,6 +51,10 @@ const DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE: u32 = 2;
 /// How long the exit watcher waits for the reader to drain after the
 /// pseudoconsole closes, so the final output lands before the exit is reported.
 const READER_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Exit code of a job kill: Unix's `128 + SIGKILL`, so the existing "killed"
+/// handling matches.
+pub(super) const KILLED_EXIT_CODE: u32 = 137;
 
 /// Environment variables never passed to agents (WINAPP-007): `NO_COLOR` strips
 /// Claude's dim placeholder and breaks `input_phase`; the others are nesting
@@ -83,9 +94,10 @@ pub(super) struct ConPty {
     console: Arc<PseudoConsole>,
     input: File,
     output: Mutex<Option<File>>,
+    process: Arc<OwnedHandle>,
     /// Kill-on-close: dropping the last handle ends the whole tree, also when
-    /// the daemon crashes (REQ-WINAPP-016). Held for its drop.
-    _job: OwnedHandle,
+    /// the daemon crashes (REQ-WINAPP-016).
+    job: OwnedHandle,
     pid: u32,
     /// `(cols, rows)` last set; ConPTY has no `TIOCGWINSZ`.
     size: Mutex<(u16, u16)>,
@@ -135,6 +147,167 @@ impl Drop for ConPty {
         // the tree, so attached clients see the console go away first.
         self.console.close();
     }
+}
+
+impl ConPty {
+    /// `ClosePseudoConsole`: console clients are closed and the reader
+    /// reaches EOF. Idempotent.
+    pub(super) fn close_console(&self) {
+        self.console.close();
+    }
+
+    /// `TerminateJobObject(137)`: every process still in the job ends.
+    pub(super) fn terminate_job(&self) {
+        unsafe { TerminateJobObject(self.job.as_raw_handle(), KILLED_EXIT_CODE) };
+    }
+
+    /// The root's descendants now, opened so a later sweep cannot hit a
+    /// reused pid.
+    pub(super) fn descendants(&self) -> Vec<Process> {
+        descendants(self.pid, creation_time(self.process.as_raw_handle()))
+    }
+
+    /// End every snapshotted descendant still alive outside the job (one that
+    /// escaped it despite the desktop-app policy).
+    pub(super) fn sweep(&self, snapshot: Vec<Process>) {
+        sweep(snapshot, Some(self.job.as_raw_handle()));
+    }
+}
+
+// --- process tree (Toolhelp32) ----------------------------------------------
+
+/// A process opened while it was known to be a descendant. Holding the handle
+/// keeps its pid from being reused.
+pub(super) struct Process {
+    pub(super) pid: u32,
+    handle: OwnedHandle,
+}
+
+impl Process {
+    pub(super) fn is_alive(&self) -> bool {
+        unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 0) == WAIT_TIMEOUT }
+    }
+}
+
+fn open_process(pid: u32) -> Option<OwnedHandle> {
+    let access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE;
+    let raw = unsafe { OpenProcess(access, 0, pid) };
+    // SAFETY: a non-null OpenProcess result is a fresh handle we own.
+    (!raw.is_null()).then(|| unsafe { OwnedHandle::from_raw_handle(raw) })
+}
+
+fn creation_time(process: HANDLE) -> Option<u64> {
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    let ok = unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) };
+    (ok != 0).then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
+/// `(pid, parent pid, exe name)` of every process.
+fn process_table() -> Vec<(u32, u32, String)> {
+    let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snap == INVALID_HANDLE_VALUE || snap.is_null() {
+        return Vec::new();
+    }
+    // SAFETY: a valid snapshot handle we own.
+    let snap = unsafe { OwnedHandle::from_raw_handle(snap) };
+    let mut table = Vec::new();
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let mut more = unsafe { Process32FirstW(snap.as_raw_handle(), &mut entry) } != 0;
+    while more {
+        let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(0);
+        let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+        table.push((entry.th32ProcessID, entry.th32ParentProcessID, name));
+        more = unsafe { Process32NextW(snap.as_raw_handle(), &mut entry) } != 0;
+    }
+    table
+}
+
+/// Every descendant of `root_pid` by parent chain. A child created before its
+/// recorded parent is not its child (the parent pid was reused) and is skipped.
+pub(super) fn descendants(root_pid: u32, root_created: Option<u64>) -> Vec<Process> {
+    let table = process_table();
+    let mut found = Vec::new();
+    let mut queue = std::collections::VecDeque::from([(root_pid, root_created)]);
+    while let Some((parent, parent_created)) = queue.pop_front() {
+        for (pid, ppid, _) in &table {
+            if *ppid != parent || *pid == parent || *pid == root_pid {
+                continue;
+            }
+            let Some(handle) = open_process(*pid) else {
+                continue;
+            };
+            let created = creation_time(handle.as_raw_handle());
+            if let (Some(child), Some(parent)) = (created, parent_created)
+                && child < parent
+            {
+                continue;
+            }
+            if found.iter().any(|p: &Process| p.pid == *pid) {
+                continue;
+            }
+            queue.push_back((*pid, created));
+            found.push(Process { pid: *pid, handle });
+        }
+    }
+    found
+}
+
+/// Live descendants of `pid` with their exe names, for tests.
+#[cfg(test)]
+pub(super) fn named_descendants(pid: u32) -> Vec<(Process, String)> {
+    let root = open_process(pid);
+    let created = root.as_ref().and_then(|r| creation_time(r.as_raw_handle()));
+    let table = process_table();
+    descendants(pid, created)
+        .into_iter()
+        .map(|p| {
+            let name = table
+                .iter()
+                .find(|(id, _, _)| *id == p.pid)
+                .map(|(_, _, n)| n.clone())
+                .unwrap_or_default();
+            (p, name)
+        })
+        .collect()
+}
+
+/// Terminate each still-running process in `snapshot` that is not in `job`
+/// (the job kill already ended those).
+fn sweep(snapshot: Vec<Process>, job: Option<HANDLE>) {
+    for p in snapshot {
+        if !p.is_alive() {
+            continue;
+        }
+        if let Some(job) = job {
+            let mut in_job = 0;
+            if unsafe { IsProcessInJob(p.handle.as_raw_handle(), job, &mut in_job) } != 0
+                && in_job != 0
+            {
+                continue;
+            }
+        }
+        unsafe { TerminateProcess(p.handle.as_raw_handle(), KILLED_EXIT_CODE) };
+    }
+}
+
+/// Stop a process tree known only by its root pid (an agent that outlived its
+/// daemon): there is no console to type into, so the root and its
+/// descendants are terminated, the root first so it spawns nothing new.
+pub(super) fn stop_process_tree(pid: u32) {
+    let Some(root) = open_process(pid) else {
+        return;
+    };
+    let tree = descendants(pid, creation_time(root.as_raw_handle()));
+    unsafe {
+        TerminateProcess(root.as_raw_handle(), KILLED_EXIT_CODE);
+        WaitForSingleObject(root.as_raw_handle(), 3000);
+    }
+    sweep(tree, None);
 }
 
 fn coord(cols: u16, rows: u16) -> COORD {
@@ -320,7 +493,8 @@ pub(super) fn spawn(
         console: console.clone(),
         input: File::from(in_write),
         output: Mutex::new(Some(File::from(out_read))),
-        _job: job,
+        process: process.clone(),
+        job,
         pid: pi.dwProcessId,
         size: Mutex::new((config.cols, config.rows)),
     });
@@ -999,5 +1173,48 @@ mod tests {
         assert_eq!(handle.pty().size(), Some((120, 40)));
         let text = wait_for_screen(&handle, "SIZE=120x40", Duration::from_secs(10)).await;
         assert!(text.contains("SIZE=120x40"), "{text}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn given_generic_agent_kill_should_close_console_and_return_within_grace() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = NativePtyHost::new();
+        let handle = host
+            .spawn(config("cmd", &["/d", "/q", "/k"], dir.path()))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let started = std::time::Instant::now();
+        let state = host.kill(&handle, Duration::from_secs(2)).await.unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        // ClosePseudoConsole ended cmd before the job kill was needed.
+        assert!(state.exit_code.is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn given_claude_agent_kill_should_send_two_interrupts_before_closing() {
+        // A stand-in that, like Claude, exits only on the second ^C.
+        let dir = tempfile::tempdir().unwrap();
+        let script = "[Console]::TreatControlCAsInput = $true; $n = 0; \
+            while ($true) { $k = [Console]::ReadKey($true); \
+            if ($k.Key -eq 'C' -and $k.Modifiers -band 4) { $n++; Write-Output \"ctrl-c $n\"; if ($n -ge 2) { exit 0 } } }";
+        let host = NativePtyHost::new();
+        let mut handle = host
+            .spawn(config(
+                "pwsh",
+                &["-NoProfile", "-NoLogo", "-Command", script],
+                dir.path(),
+            ))
+            .await
+            .unwrap();
+        handle.agent_type = "claude".into();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let state = host.kill(&handle, Duration::from_secs(5)).await.unwrap();
+        assert_eq!(state.exit_code, Some(0), "{}", screen_text(&handle));
+        assert!(screen_text(&handle).contains("ctrl-c 2"));
     }
 }

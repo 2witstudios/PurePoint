@@ -162,3 +162,188 @@ async fn given_conpty_agent_should_stream_input_marker_and_resize_through_attach
     // Dropping the session closes the pseudoconsole and the kill-on-close job.
     engine.sessions.lock().await.clear();
 }
+
+/// `pu kill` on an agent whose Store-pwsh shell started long-running
+/// grandchildren (one attached to the pseudoconsole, one in a hidden window of
+/// its own, one under cmd) leaves no process from that tree.
+#[tokio::test(flavor = "multi_thread")]
+async fn given_agent_with_long_running_grandchildren_should_leave_no_survivors_after_kill() {
+    use base64::Engine as _;
+    use pu_core::protocol::{KillTarget, Request, Response};
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let pr = project.to_string_lossy().to_string();
+    let engine = Engine::new();
+    engine
+        .handle_request(Request::Init {
+            project_root: pr.clone(),
+        })
+        .await;
+
+    // Absolute paths: the agent PATH the engine builds is not Windows-shaped
+    // yet (the engine-env leaf owns it).
+    let script = "$p = Join-Path $env:SystemRoot 'System32\\PING.EXE'; \
+        Start-Process -NoNewWindow $p -ArgumentList '-t','localhost'; \
+        Start-Process $p -ArgumentList '-t','127.0.0.1' -WindowStyle Hidden; \
+        & $env:ComSpec /d /c $p -t 127.0.0.1";
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
+    let resp = engine
+        .handle_request(Request::Spawn {
+            project_root: pr.clone(),
+            prompt: String::new(),
+            agent: "terminal".into(),
+            name: None,
+            base: None,
+            root: true,
+            worktree: None,
+            command: Some(format!("pwsh -NoProfile -NoLogo -EncodedCommand {encoded}")),
+            no_auto: false,
+            extra_args: vec![],
+            plan_mode: false,
+            no_trigger: false,
+            trigger: None,
+            placement: None,
+        })
+        .await;
+    let agent_id = match resp {
+        Response::SpawnResult { agent_id, .. } => agent_id,
+        other => panic!("expected SpawnResult, got {other:?}"),
+    };
+    let root_pid = engine.sessions.lock().await[&agent_id].pid;
+
+    // Wait for the whole tree: three ping.exe under pwsh (one via cmd).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let tree = loop {
+        let tree = crate::pty_manager::descendant_probes(root_pid);
+        let pings = tree
+            .iter()
+            .filter(|p| p.name.eq_ignore_ascii_case("ping.exe"))
+            .count();
+        if pings >= 3 {
+            break tree;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let output = engine.sessions.lock().await[&agent_id]
+                .output_buffer
+                .read_all();
+            panic!(
+                "grandchildren never started: {:?}
+{}",
+                tree.iter().map(|p| (&p.name, p.pid)).collect::<Vec<_>>(),
+                String::from_utf8_lossy(&output)
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+
+    let started = std::time::Instant::now();
+    let resp = engine
+        .handle_request(Request::Kill {
+            project_root: pr,
+            target: KillTarget::Agent(agent_id.clone()),
+            exclude: vec![],
+        })
+        .await;
+    assert!(matches!(resp, Response::KillResult { .. }), "{resp:?}");
+    // kill_agents uses a 5 s grace; the stop must finish within grace + 1 s.
+    assert!(
+        started.elapsed() < Duration::from_secs(6),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(!engine.sessions.lock().await.contains_key(&agent_id));
+
+    // TerminateJobObject/TerminateProcess complete asynchronously.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while tree.iter().any(|p| p.is_alive()) && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let survivors: Vec<_> = tree
+        .iter()
+        .filter(|p| p.is_alive())
+        .map(|p| (&p.name, p.pid))
+        .collect();
+    assert!(survivors.is_empty(), "survived kill: {survivors:?}");
+}
+
+/// `kill_all_sessions` (shutdown) and `Engine::drop` stop the tree too.
+#[tokio::test(flavor = "multi_thread")]
+async fn given_shutdown_or_drop_should_end_every_agent_tree() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let spawn = || async {
+        NativePtyHost::new()
+            .spawn(SpawnConfig {
+                command: "cmd".into(),
+                args: vec!["/d".into(), "/c".into(), "ping -t 127.0.0.1".into()],
+                cwd: tmp.path().display().to_string(),
+                env: vec![],
+                env_remove: vec![],
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap()
+    };
+    async fn ping_of(pid: u32) -> crate::pty_manager::DescendantProbe {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(p) = crate::pty_manager::descendant_probes(pid)
+                .into_iter()
+                .find(|p| p.name.eq_ignore_ascii_case("ping.exe"))
+            {
+                return p;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "ping never started");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+    async fn gone(p: &crate::pty_manager::DescendantProbe) -> bool {
+        for _ in 0..40 {
+            if !p.is_alive() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        false
+    }
+
+    // Shutdown: marked killed by shutdown, tree gone.
+    let engine = Engine::new();
+    let handle = spawn().await;
+    let (pid, mut exit) = (handle.pid, handle.exit_rx.clone());
+    engine.sessions.lock().await.insert("a".into(), handle);
+    let ping = ping_of(pid).await;
+    engine.kill_all_sessions(Duration::from_millis(200)).await;
+    assert!(gone(&ping).await, "ping survived kill_all_sessions");
+    assert!(engine.shutdown_killed.lock().unwrap().contains(&pid));
+    let code = tokio::time::timeout(Duration::from_secs(2), async {
+        while exit.borrow_and_update().is_none() {
+            exit.changed().await.unwrap();
+        }
+        *exit.borrow()
+    })
+    .await
+    .unwrap();
+    assert!(code.is_some());
+
+    // Drop: a hard job kill, reported as 137.
+    let engine = Engine::new();
+    let handle = spawn().await;
+    let (pid, mut exit) = (handle.pid, handle.exit_rx.clone());
+    engine.sessions.lock().await.insert("b".into(), handle);
+    let ping = ping_of(pid).await;
+    drop(engine);
+    assert!(gone(&ping).await, "ping survived Engine::drop");
+    let code = tokio::time::timeout(Duration::from_secs(3), async {
+        while exit.borrow_and_update().is_none() {
+            exit.changed().await.unwrap();
+        }
+        *exit.borrow()
+    })
+    .await
+    .unwrap();
+    assert_eq!(code, Some(137));
+}

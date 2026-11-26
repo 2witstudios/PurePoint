@@ -338,18 +338,48 @@ impl Engine {
             .unwrap_or_default()
     }
 
-    /// Drain every active session and kill its process group (SIGTERM, brief wait, SIGKILL).
-    /// Used by the managed-mode parent-died path so a force-quit of the macOS app reaps
-    /// agents and their grandchildren (vitest/node workers, dev servers) before the
-    /// daemon exits — `process::exit(0)` skips `Drop`, so this must run explicitly.
+    /// Drain every active session and stop its whole tree with the `kill`
+    /// stop sequence (keystrokes, `ClosePseudoConsole`, grace, job kill).
+    /// Used by shutdown and the managed-mode parent-died path, since
+    /// `process::exit(0)` skips `Drop`.
     ///
     /// Only processes still running when drained are recorded as killed by
     /// shutdown (and so left resumable); an agent that had already exited keeps
     /// its natural exit.
     #[cfg(windows)]
-    pub async fn kill_all_sessions(&self, _grace: Duration) {
-        // WIN-3.3: terminate every session's job object (grace, then hard kill),
-        // recording still-running agents in `shutdown_killed` first.
+    pub async fn kill_all_sessions(&self, grace: Duration) {
+        let handles: Vec<AgentHandle> = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.drain().map(|(_, h)| h).collect()
+        };
+        if handles.is_empty() {
+            return;
+        }
+        // Mark only the agents still running before their stop starts, as on
+        // Unix, so the exit watcher always sees the mark.
+        {
+            let mut killed = self
+                .shutdown_killed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            killed.extend(
+                handles
+                    .iter()
+                    .filter(|h| h.exit_rx.borrow().is_none())
+                    .map(|h| h.pid),
+            );
+        }
+        // Every agent runs the same stop sequence as `kill`, concurrently, so
+        // the whole drain takes one grace period.
+        let mut stops = tokio::task::JoinSet::new();
+        for handle in handles {
+            stops.spawn(async move {
+                if let Err(e) = NativePtyHost::new().kill(&handle, grace).await {
+                    tracing::debug!(pid = handle.pid, "kill failed: {e}");
+                }
+            });
+        }
+        while stops.join_next().await.is_some() {}
     }
 
     /// Drain every active session and kill its process group (SIGTERM, brief wait, SIGKILL).
@@ -1058,7 +1088,12 @@ impl Engine {
 impl Drop for Engine {
     #[cfg(windows)]
     fn drop(&mut self) {
-        // WIN-3.3: kill each session's job object so descendants do not outlive the daemon.
+        // Terminate each agent's job so descendants do not outlive the daemon.
+        if let Ok(sessions) = self.sessions.try_lock() {
+            for handle in sessions.values() {
+                self.pty_host.kill_now(handle);
+            }
+        }
     }
 
     #[cfg(unix)]

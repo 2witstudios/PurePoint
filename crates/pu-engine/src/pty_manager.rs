@@ -196,6 +196,66 @@ async fn collect_process_descendants(root_pid: i32) -> Vec<i32> {
 #[cfg(unix)]
 const FD_CLOSE_UPPER_BOUND: i32 = 10240;
 
+/// Stop sequence: the longest the agent's quit keystrokes may take.
+#[cfg(windows)]
+const STOP_KEYSTROKE_BUDGET: Duration = Duration::from_secs(1);
+/// Stop sequence: pause between Claude's two ^C (WIN-1.1 section 6).
+#[cfg(windows)]
+const CLAUDE_INTERRUPT_GAP: Duration = Duration::from_millis(300);
+/// Stop sequence: how long to wait for the exit report after the job kill.
+#[cfg(windows)]
+const STOP_EXIT_REPORT_WAIT: Duration = Duration::from_millis(500);
+
+/// Wait until the agent's exit is reported or `deadline` passes.
+#[cfg(windows)]
+async fn wait_for_exit(handle: &AgentHandle, deadline: tokio::time::Instant) -> bool {
+    let mut rx = handle.exit_rx.clone();
+    let _ = tokio::time::timeout_at(deadline, async {
+        while rx.borrow_and_update().is_none() {
+            if rx.changed().await.is_err() {
+                break;
+            }
+        }
+    })
+    .await;
+    handle.exit_rx.borrow().is_some()
+}
+
+/// Stop a process tree known only by its root pid (an agent that outlived its
+/// daemon). Blocks.
+#[cfg(windows)]
+pub(crate) fn stop_process_tree(pid: u32) {
+    conpty::stop_process_tree(pid);
+}
+
+/// A descendant held open, so tests can check it did not survive a kill.
+#[cfg(all(test, windows))]
+pub(crate) struct DescendantProbe {
+    pub(crate) pid: u32,
+    pub(crate) name: String,
+    process: conpty::Process,
+}
+
+#[cfg(all(test, windows))]
+impl DescendantProbe {
+    pub(crate) fn is_alive(&self) -> bool {
+        self.process.is_alive()
+    }
+}
+
+/// The live descendants of `pid` (Toolhelp32, by parent chain).
+#[cfg(all(test, windows))]
+pub(crate) fn descendant_probes(pid: u32) -> Vec<DescendantProbe> {
+    conpty::named_descendants(pid)
+        .into_iter()
+        .map(|(process, name)| DescendantProbe {
+            pid: process.pid,
+            name,
+            process,
+        })
+        .collect()
+}
+
 /// Chunked-submit tuning: bytes per write (small enough to avoid TUI paste-mode).
 const CHUNK_SIZE: usize = 8;
 /// Chunked-submit tuning: delay between chunks to simulate typing (ms).
@@ -229,6 +289,9 @@ pub struct AgentHandle {
     /// through screen-confirmed delivery (`crate::delivery`).
     pub screen_aware: bool,
     pty: Pty,
+    /// The same terminal as `pty`, for the job and console stop steps.
+    #[cfg(windows)]
+    conpty: Arc<conpty::ConPty>,
 }
 
 impl AgentHandle {
@@ -262,10 +325,10 @@ impl NativePtyHost {
         let (exit_tx, exit_rx) = watch::channel(None);
         let cwd = config.cwd.clone();
         let read_buf = buffer.clone();
-        let pty: Pty =
-            tokio::task::spawn_blocking(move || conpty::spawn(&config, read_buf, exit_tx))
-                .await
-                .map_err(std::io::Error::other)??;
+        let conpty = tokio::task::spawn_blocking(move || conpty::spawn(&config, read_buf, exit_tx))
+            .await
+            .map_err(std::io::Error::other)??;
+        let pty: Pty = conpty.clone();
         Ok(AgentHandle {
             project_root: None,
             cwd,
@@ -276,6 +339,7 @@ impl NativePtyHost {
             pid: pty.pid(),
             output_buffer: buffer,
             pty,
+            conpty,
             exit_rx,
             screen_aware: false,
         })
@@ -453,14 +517,74 @@ impl NativePtyHost {
         Ok(ProcessState { exit_code })
     }
 
+    /// Stop an agent's whole tree (PTY host contract, stop sequence): the
+    /// agent's own quit keystrokes, then `ClosePseudoConsole` and a wait until
+    /// the grace period ends, then `TerminateJobObject(137)`, then a sweep of
+    /// descendants snapshotted first that escaped the job. Console control
+    /// events are never used: they leave a `.cmd` wrapper asking
+    /// `Terminate batch job (Y/N)?`.
     #[cfg(windows)]
     pub async fn kill(
         &self,
-        _handle: &AgentHandle,
-        _grace_period: Duration,
+        handle: &AgentHandle,
+        grace_period: Duration,
     ) -> Result<ProcessState, std::io::Error> {
-        // WIN-3.3: terminate the agent's job object (tree kill) with a grace period.
-        Err(crate::os::unsupported("agent kill"))
+        let deadline = tokio::time::Instant::now() + grace_period;
+        let conpty = handle.conpty.clone();
+        let snapshot = tokio::task::spawn_blocking(move || conpty.descendants())
+            .await
+            .map_err(std::io::Error::other)?;
+
+        // 1. Keystrokes, at most 1 s. Claude needs two ^C (the first only shows
+        // its exit hint); Codex gets exactly one, because a second reaches a
+        // `.cmd` wrapper's cmd.exe and leaves it at a prompt.
+        let keys_deadline = tokio::time::Instant::now() + STOP_KEYSTROKE_BUDGET;
+        let interrupts = match handle.agent_type.as_str() {
+            "claude" => 2,
+            "codex" => 1,
+            _ => 0,
+        };
+        for n in 0..interrupts {
+            if handle.exit_rx.borrow().is_some() {
+                break;
+            }
+            if n > 0 {
+                let pause = tokio::time::Instant::now() + CLAUDE_INTERRUPT_GAP;
+                if wait_for_exit(handle, pause.min(keys_deadline)).await {
+                    break;
+                }
+            }
+            self.write_to_pty(&handle.pty, b"\x03").await.ok();
+        }
+        if interrupts > 0 {
+            wait_for_exit(handle, keys_deadline).await;
+        }
+
+        // 2. Close the pseudoconsole and give the tree the rest of the grace.
+        let conpty = handle.conpty.clone();
+        tokio::task::spawn_blocking(move || conpty.close_console())
+            .await
+            .map_err(std::io::Error::other)?;
+        wait_for_exit(handle, deadline).await;
+
+        // 3 and 4. End whatever is left, in the job and out of it.
+        let conpty = handle.conpty.clone();
+        tokio::task::spawn_blocking(move || {
+            conpty.terminate_job();
+            conpty.sweep(snapshot);
+        })
+        .await
+        .map_err(std::io::Error::other)?;
+        wait_for_exit(handle, tokio::time::Instant::now() + STOP_EXIT_REPORT_WAIT).await;
+        self.check(handle).await
+    }
+
+    /// Hard-kill an agent's tree at once (`Engine::drop`, which cannot await):
+    /// `TerminateJobObject(137)`, then `ClosePseudoConsole`.
+    #[cfg(windows)]
+    pub fn kill_now(&self, handle: &AgentHandle) {
+        handle.conpty.terminate_job();
+        handle.conpty.close_console();
     }
 
     #[cfg(unix)]
