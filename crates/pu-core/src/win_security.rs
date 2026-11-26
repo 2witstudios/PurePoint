@@ -21,6 +21,7 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+const ACCESS_DENIED_ACE_TYPE: u8 = 1;
 
 pub(crate) fn wide(s: &OsStr) -> Vec<u16> {
     s.encode_wide().chain(std::iter::once(0)).collect()
@@ -324,8 +325,12 @@ unsafe fn check_descriptor(path: &Path, owner: PSID, dacl: *mut ACL) -> io::Resu
         }
         let header = ace as *const ACE_HEADER;
         // SAFETY: every ACE starts with an ACE_HEADER.
-        if unsafe { (*header).AceType } != ACCESS_ALLOWED_ACE_TYPE {
-            continue;
+        match unsafe { (*header).AceType } {
+            ACCESS_ALLOWED_ACE_TYPE => {}
+            ACCESS_DENIED_ACE_TYPE => continue,
+            // Object, callback and conditional ACEs: fail closed rather
+            // than guess whom they grant.
+            _ => return Err(denied(path, "has an access entry of an unsupported type")),
         }
         let allowed = ace as *const ACCESS_ALLOWED_ACE;
         // SAFETY: allow ACEs carry their SID at SidStart.
@@ -457,8 +462,12 @@ pub fn check_trusted_file(path: &Path) -> Result<(), &'static str> {
         let header = ace as *const ACE_HEADER;
         // SAFETY: every ACE starts with an ACE_HEADER.
         let (ace_type, flags) = unsafe { ((*header).AceType, (*header).AceFlags) };
-        if ace_type != ACCESS_ALLOWED_ACE_TYPE || flags & INHERIT_ONLY_ACE != 0 {
+        if flags & INHERIT_ONLY_ACE != 0 || ace_type == ACCESS_DENIED_ACE_TYPE {
             continue;
+        }
+        if ace_type != ACCESS_ALLOWED_ACE_TYPE {
+            // Object, callback and conditional ACEs: fail closed.
+            return Err("has an access entry of an unsupported type");
         }
         let allowed = ace as *const ACCESS_ALLOWED_ACE;
         // SAFETY: allow ACEs carry their mask and SID at SidStart.
@@ -526,6 +535,39 @@ mod tests {
         );
         apply_sddl(&path, &sddl).unwrap();
         assert_eq!(check_trusted_binary(&path), Ok(()));
+    }
+
+    /// A conditional (callback) allow ACE: type 9, not type 0.
+    const CONDITIONAL_ALLOW_EVERYONE: &str = "(XA;;FA;;;WD;(Member_of {SID(BA)}))";
+
+    #[test]
+    fn given_conditional_allow_ace_should_not_be_private() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let user = current_user_sid().unwrap().to_string_sid().unwrap();
+        apply_sddl(&path, &private_sddl(&user, false)).unwrap();
+        check_private(&path).unwrap();
+        let deny = format!("D:P(D;;FA;;;AN){}", &private_sddl(&user, false)[3..]);
+        apply_sddl(&path, &deny).unwrap();
+        check_private(&path).unwrap();
+        let sddl = format!("{}{CONDITIONAL_ALLOW_EVERYONE}", private_sddl(&user, false));
+        apply_sddl(&path, &sddl).unwrap();
+        let err = check_private(&path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+    }
+
+    #[test]
+    fn given_exe_with_conditional_allow_ace_should_not_be_trusted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = exe(tmp.path());
+        let user = current_user_sid().unwrap().to_string_sid().unwrap();
+        let sddl = format!("{}{CONDITIONAL_ALLOW_EVERYONE}", private_sddl(&user, false));
+        apply_sddl(&path, &sddl).unwrap();
+        assert_eq!(
+            check_trusted_binary(&path),
+            Err("has an access entry of an unsupported type")
+        );
     }
 
     #[test]
