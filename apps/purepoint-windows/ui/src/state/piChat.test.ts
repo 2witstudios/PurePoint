@@ -104,13 +104,13 @@ async function connected(
   const chat = new PiChatModel({
     transport: bridge.transport,
     recovery,
-    secrets: memorySecretStore(),
+    secrets: memorySecretStore({ [ENDPOINT]: SECRET }),
     preferences: memoryPreferences(),
     writerDelayMs: 0,
     retryUnitMs: 5,
     ...options,
   });
-  await chat.bindManagedConnection(ENDPOINT, SECRET, CLIENT);
+  chat.bindManagedConnection(ENDPOINT, CLIENT);
   await vi.waitFor(() => {
     expect(chat.connected).toBe(true);
   });
@@ -127,11 +127,11 @@ describe('PiChatModel connection', () => {
     const chat = new PiChatModel({
       transport: bridge.transport,
       recovery: memoryRecoveryStore(),
-      secrets: memorySecretStore(),
+      secrets: memorySecretStore({ [ENDPOINT]: SECRET }),
       preferences: memoryPreferences(),
     });
     const hooks = pointGuardChatBinding(chat);
-    hooks.onConnection({ endpoint: ENDPOINT, secret: SECRET, clientId: CLIENT });
+    hooks.onConnection({ endpoint: ENDPOINT, clientId: CLIENT });
     await vi.waitFor(() => {
       expect(chat.connected).toBe(true);
     });
@@ -147,15 +147,30 @@ describe('PiChatModel connection', () => {
     const chat = new PiChatModel({
       transport: bridge.transport,
       recovery: memoryRecoveryStore(),
-      secrets: memorySecretStore(),
+      secrets: memorySecretStore({ [ENDPOINT]: SECRET }),
       preferences: memoryPreferences(),
     });
-    await chat.bindManagedConnection(ENDPOINT, SECRET, 'not-a-uuid');
+    chat.bindManagedConnection(ENDPOINT, 'not-a-uuid');
     expect(chat.error).toBe('Invalid managed desktop identity.');
     await chat.pair('ws://8.8.8.8:1/v1', SECRET);
     expect(chat.error).toContain('ending in /v1');
     await chat.pair(ENDPOINT, 'short');
     expect(chat.error).toContain('at least 32 characters');
+    expect(bridge.opens).toBe(0);
+  });
+
+  it('given no saved secret should ask for one and open nothing', async () => {
+    const bridge = new ScriptedBridge();
+    const chat = new PiChatModel({
+      transport: bridge.transport,
+      recovery: memoryRecoveryStore(),
+      secrets: memorySecretStore(),
+      preferences: memoryPreferences(),
+    });
+    chat.bindManagedConnection(ENDPOINT, CLIENT);
+    await vi.waitFor(() => {
+      expect(chat.error).toBe('Add the pairing secret in Connection settings.');
+    });
     expect(bridge.opens).toBe(0);
   });
 
@@ -165,11 +180,11 @@ describe('PiChatModel connection', () => {
     const chat = new PiChatModel({
       transport: bridge.transport,
       recovery: memoryRecoveryStore(),
-      secrets: memorySecretStore(),
+      secrets: memorySecretStore({ [ENDPOINT]: SECRET }),
       preferences: memoryPreferences(),
       retryUnitMs: 5,
     });
-    await chat.bindManagedConnection(ENDPOINT, SECRET, CLIENT);
+    chat.bindManagedConnection(ENDPOINT, CLIENT);
     await vi.waitFor(() => {
       expect(bridge.opens).toBeGreaterThanOrEqual(3);
     });

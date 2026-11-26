@@ -3,8 +3,9 @@
 //
 // The bridge's v1 chat socket authenticates only by the upgrade's `Authorization: Bearer
 // <secret>` and `X-PointGuard-Client-ID` headers and refuses any `Origin`, so a page cannot
-// open it. The backend holds the socket and relays each text record over a Tauri Channel;
-// the chat state (`state/piChat.ts`) sees only the {@link PiChatTransport} interface, which
+// open it. The backend holds the socket and relays each text record over a Tauri Channel. It
+// also reads the secret itself, from Credential Manager by endpoint, so the secret never
+// enters the page; the chat state (`state/piChat.ts`) sees only the {@link PiChatTransport} interface, which
 // tests replace with a Node `ws` client against the real bridge.
 import { Channel, invoke } from '@tauri-apps/api/core';
 
@@ -27,9 +28,9 @@ export interface PiSocket {
   close(): void;
 }
 
+/** Which socket to open: the backend authenticates it with the secret saved for `endpoint`. */
 export interface PiSocketCredentials {
   endpoint: string;
-  secret: string;
   clientId: string;
 }
 
@@ -43,7 +44,7 @@ type BackendEvent =
 
 /** The backend-held socket. */
 export const tauriChatTransport: PiChatTransport = {
-  async open({ endpoint, secret, clientId }, handlers) {
+  async open({ endpoint, clientId }, handlers) {
     let closed = false;
     const channel = new Channel<BackendEvent>();
     channel.onmessage = (event) => {
@@ -56,7 +57,6 @@ export const tauriChatTransport: PiChatTransport = {
     };
     const socketId = await invoke<number>('pointguard_chat_open', {
       endpoint,
-      secret,
       clientId,
       onEvent: channel,
     });
@@ -72,19 +72,24 @@ export const tauriChatTransport: PiChatTransport = {
 
 // MARK: - Pairing secrets (the Swift PiPairingSecret)
 
-/** Where the pairing secret for an endpoint lives (`services/pairingSecret.ts`). */
+/**
+ * Where the pairing secret for an endpoint lives (`services/pairingSecret.ts`). A secret goes in,
+ * never out: the socket's backend reads it.
+ */
 export interface PiSecretStore {
-  /** The saved secret, or '' when there is none. */
-  read(endpoint: string): Promise<string>;
+  /** Whether a secret is saved for `endpoint`. */
+  has(endpoint: string): Promise<boolean>;
   save(secret: string, endpoint: string): Promise<void>;
 }
 
-/** Secrets kept for this run only, for previews and tests. */
-export function memorySecretStore(): PiSecretStore & { secrets: Map<string, string> } {
-  const secrets = new Map<string, string>();
+/** Secrets kept for this run only, for previews and tests (`initial`: endpoint → secret). */
+export function memorySecretStore(
+  initial: Record<string, string> = {},
+): PiSecretStore & { secrets: Map<string, string> } {
+  const secrets = new Map<string, string>(Object.entries(initial));
   return {
     secrets,
-    read: (endpoint) => Promise.resolve(secrets.get(endpoint) ?? ''),
+    has: (endpoint) => Promise.resolve((secrets.get(endpoint) ?? '') !== ''),
     save: (secret, endpoint) => {
       secrets.set(endpoint, secret);
       return Promise.resolve();

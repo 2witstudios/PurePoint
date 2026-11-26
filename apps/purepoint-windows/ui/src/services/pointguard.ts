@@ -28,10 +28,12 @@ export interface PointGuardSnapshot {
   restarts: number;
 }
 
-/** The local Point Guard chat endpoint and secret (WIN-9.4 binds the chat to it). */
+/**
+ * The local Point Guard chat (WIN-9.4 binds the chat to it). Its secret stays in the backend,
+ * saved in Credential Manager under `endpoint`.
+ */
 export interface PointGuardChatConnection {
   endpoint: string;
-  secret: string;
   clientId: string;
 }
 

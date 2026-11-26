@@ -154,7 +154,7 @@ pub fn run() {
             pointguard::chat::pointguard_chat_close,
             pointguard::recovery::pointguard_recovery_load,
             pointguard::recovery::pointguard_recovery_save,
-            secrets::pairing::pointguard_pairing_read,
+            secrets::pairing::pointguard_pairing_has,
             secrets::pairing::pointguard_pairing_save,
             secrets::pairing::pointguard_pairing_import,
         ])

@@ -57,7 +57,7 @@ function fakeBackend(handler: Handler) {
     restart: mocks.restart,
     request: mocks.request,
     chatConnection: vi.fn(() =>
-      Promise.resolve({ endpoint: 'ws://127.0.0.1:1/v1', secret: 's', clientId: 'c' }),
+      Promise.resolve({ endpoint: 'ws://127.0.0.1:1/v1', clientId: 'c' }),
     ),
     validateFolder: vi.fn((path: string) =>
       path.startsWith('C:\\')
@@ -170,7 +170,7 @@ describe('PointGuardServiceState', () => {
     expect(s.remoteEndpoint).toBe('wss://100.100.1.2:8787/v1');
     expect(s.providers).toHaveLength(1);
     expect(s.devices).toHaveLength(1);
-    expect(connections).toEqual([{ endpoint: 'ws://127.0.0.1:1/v1', secret: 's', clientId: 'c' }]);
+    expect(connections).toEqual([{ endpoint: 'ws://127.0.0.1:1/v1', clientId: 'c' }]);
     expect(fake.sent.map((r) => r.operation)).toEqual(['status', 'providers', 'devices.list']);
   });
 

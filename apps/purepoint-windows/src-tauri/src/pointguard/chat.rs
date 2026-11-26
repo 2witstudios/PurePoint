@@ -314,15 +314,22 @@ impl ChatSockets {
 }
 
 /// Connect to the local bridge with the desktop chat credentials and stream its records to
-/// `on_event`. Returns the socket id.
+/// `on_event`. Returns the socket id. The secret is read from Credential Manager by endpoint
+/// (`secrets::pairing`), never passed in by the page.
 #[tauri::command]
 pub async fn pointguard_chat_open(
     sockets: State<'_, ChatSockets>,
+    secrets: State<'_, crate::secrets::pairing::PairingSecrets>,
     endpoint: String,
-    secret: String,
     client_id: String,
     on_event: Channel<ChatSocketEvent>,
 ) -> Result<u32, String> {
+    let store = secrets.0.clone();
+    let (endpoint, secret) = tauri::async_runtime::spawn_blocking(move || {
+        crate::secrets::pairing::chat_secret(store.as_ref(), &endpoint)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     sockets
         .open(&endpoint, &secret, &client_id, Arc::new(on_event))
         .await
