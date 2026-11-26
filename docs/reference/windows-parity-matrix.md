@@ -42,7 +42,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Models/PointGuardRuntime.swift` | 96 | `ui/src/model/pointGuardRuntime.ts` | WIN-8.13 | todo | — |
 | `Models/ProjectKey.swift` | 159 | `ui/src/model/projectKey.ts` | WIN-6.5 | ported | — |
 | `Models/ProjectOrder.swift` | 67 | `ui/src/model/projectOrder.ts` | WIN-6.5 | ported | — |
-| `Models/ScheduleEvent.swift` | 231 | `ui/src/model/scheduleEvent.ts` | WIN-8.8 | todo | — |
+| `Models/ScheduleEvent.swift` | 231 | `ui/src/model/scheduleEvent.ts` (local calendar math in `ui/src/model/scheduleCalendar.ts`) | WIN-8.8 | ported | — |
 | `Models/SidebarItem.swift` | 136 | `ui/src/model/sidebarItem.ts` | WIN-6.5 | ported | — |
 | `Models/StreamEvent.swift` | 122 | `src-tauri/src/conversations/stream_event.rs` | WIN-8.12 | ported | — |
 | `Models/TriggerItem.swift` | 59 | `ui/src/model/triggerItem.ts` | WIN-8.9 | todo | — |
@@ -130,7 +130,7 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `State/PointGuardServiceModel.swift` | 516 | `src-tauri/src/pointguard/service.rs`, `ui/src/state/pointGuardService.ts` | WIN-9.3 | todo | — |
 | `State/ProjectState.swift` | 748 | `ui/src/state/projectState.ts`, `ui/src/state/remoteLayoutSaver.ts`, `ui/src/state/cachedWorkspacePersistence.ts`, `ui/src/services/fs.ts`, `src-tauri/src/files/text.rs` | WIN-6.0 | ported | — |
 | `State/RemoteFolderBrowser+iOS.swift` | 242 | — | — | excluded | `+iOS` file (iPad build only) |
-| `State/ScheduleState.swift` | 282 | `ui/src/state/scheduleState.ts` | WIN-8.8 | todo | — |
+| `State/ScheduleState.swift` | 282 | `ui/src/state/scheduleState.ts` | WIN-8.8 | ported | — |
 | `State/SessionListState.swift` | 164 | `ui/src/state/sessions.ts` | WIN-8.16 | ported | — |
 | `State/SettingsState.swift` | 111 | `ui/src/state/settingsState.ts` | WIN-8.11 | todo | — |
 | `State/SidebarExpansionStore.swift` | 45 | `ui/src/state/sidebarExpansionStore.ts` | WIN-6.5 | ported | — |
@@ -221,16 +221,16 @@ Summary: run `node scripts/check-parity-matrix.mjs` for live counts (kept out of
 | `Views/PaneGrid/PaneTabDragInteraction+iOS.swift` | 172 | — | — | excluded | `+iOS` file (iPad build only) |
 | `Views/PaneGrid/WorkspacePersistence.swift` | 562 | `ui/src/model/workspacePersistence.ts`, `ui/src/model/swiftJson.ts`, `ui/src/model/workspaceSelection.ts` | WIN-6.3 | ported | — |
 | `Views/PresentedControlDefaults.swift` | 17 | — | — | excluded | DEC-11: unreferenced |
-| `Views/Schedule/DayCalendarView.swift` | 28 | `ui/src/views/schedule/DayCalendarView.tsx` | WIN-8.8 | todo | — |
-| `Views/Schedule/EventBlockView.swift` | 67 | `ui/src/views/schedule/EventBlockView.tsx` | WIN-8.8 | todo | — |
-| `Views/Schedule/EventPillView.swift` | 32 | `ui/src/views/schedule/EventPillView.tsx` | WIN-8.8 | todo | — |
-| `Views/Schedule/MonthCalendarView.swift` | 103 | `ui/src/views/schedule/MonthCalendarView.tsx` | WIN-8.8 | todo | — |
+| `Views/Schedule/DayCalendarView.swift` | 28 | `ui/src/views/schedule/DayCalendarView.tsx` | WIN-8.8 | ported | — |
+| `Views/Schedule/EventBlockView.swift` | 67 | `ui/src/views/schedule/EventBlockView.tsx` | WIN-8.8 | ported | — |
+| `Views/Schedule/EventPillView.swift` | 32 | `ui/src/views/schedule/EventPillView.tsx` | WIN-8.8 | ported | — |
+| `Views/Schedule/MonthCalendarView.swift` | 103 | `ui/src/views/schedule/MonthCalendarView.tsx` | WIN-8.8 | ported | — |
 | `Views/Schedule/ScheduleEventSheet.swift` | 331 | `ui/src/views/schedule/ScheduleEventSheet.tsx` | WIN-8.17 | todo | — |
-| `Views/Schedule/ScheduleHeaderView.swift` | 86 | `ui/src/views/schedule/ScheduleHeaderView.tsx` | WIN-8.8 | todo | — |
-| `Views/Schedule/ScheduleListView.swift` | 162 | `ui/src/views/schedule/ScheduleListView.tsx` | WIN-8.8 | todo | — |
-| `Views/Schedule/ScheduleView.swift` | 63 | `ui/src/views/schedule/ScheduleView.tsx` | WIN-8.8 | todo | — |
-| `Views/Schedule/TimeGridView.swift` | 177 | `ui/src/views/schedule/TimeGridView.tsx` | WIN-8.8 | todo | — |
-| `Views/Schedule/WeekCalendarView.swift` | 55 | `ui/src/views/schedule/WeekCalendarView.tsx` | WIN-8.8 | todo | — |
+| `Views/Schedule/ScheduleHeaderView.swift` | 86 | `ui/src/views/schedule/ScheduleHeaderView.tsx` | WIN-8.8 | ported | — |
+| `Views/Schedule/ScheduleListView.swift` | 162 | `ui/src/views/schedule/ScheduleListView.tsx` | WIN-8.8 | ported | — |
+| `Views/Schedule/ScheduleView.swift` | 63 | `ui/src/views/schedule/ScheduleView.tsx`, `ui/src/views/schedule/schedule.css` | WIN-8.8 | ported | — |
+| `Views/Schedule/TimeGridView.swift` | 177 | `ui/src/views/schedule/TimeGridView.tsx` | WIN-8.8 | ported | — |
+| `Views/Schedule/WeekCalendarView.swift` | 55 | `ui/src/views/schedule/WeekCalendarView.tsx` | WIN-8.8 | ported | — |
 | `Views/Settings/SettingsAboutView.swift` | 74 | `ui/src/views/settings/SettingsAboutView.tsx` | WIN-8.11 | todo | — |
 | `Views/Settings/SettingsAgentsView.swift` | 296 | `ui/src/views/settings/SettingsAgentsView.tsx` | WIN-8.11 | todo | — |
 | `Views/Settings/SettingsDisplayView.swift` | 49 | `ui/src/views/settings/SettingsDisplayView.tsx` | WIN-8.11 | todo | — |

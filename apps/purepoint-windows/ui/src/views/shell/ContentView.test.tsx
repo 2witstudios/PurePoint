@@ -106,7 +106,7 @@ describe('ContentView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Agents' }));
     expect(screen.getByText('AgentsHubView')).toBeInTheDocument();
     runMenu('Navigation', /^Schedule/);
-    expect(screen.getByText('ScheduleView')).toBeInTheDocument();
+    expect(screen.getByRole('tablist', { name: 'Schedule view' })).toBeInTheDocument();
   });
 
   it('shows menu accelerators from the key binding store', () => {

@@ -11,6 +11,7 @@ import { useAppState } from '../shell/appContext.ts';
 import { useTitlebarClearance } from '../shell/TitlebarClearance.tsx';
 import { useAgentSelection } from '../terminal/agentSelection.ts';
 import { AgentTerminalsView } from '../terminal/AgentTerminals.tsx';
+import { ScheduleView } from '../schedule/ScheduleView.tsx';
 import { ScreenPlaceholder } from './placeholders.tsx';
 import { ProjectDetailView } from './ProjectDetailView.tsx';
 import { WorkspaceFilesLayout } from './WorkspaceFilesLayout.tsx';
@@ -89,7 +90,7 @@ function SelectedContent({ selection }: { selection: SidebarSelection }) {
         case 'agents':
           return <ScreenPlaceholder icon="cpu" title="Agents" view="AgentsHubView" />;
         case 'schedule':
-          return <ScreenPlaceholder icon="calendar" title="Schedule" view="ScheduleView" />;
+          return <ScheduleView />;
       }
       break;
     case 'worktree': {

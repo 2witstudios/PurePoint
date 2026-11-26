@@ -1,0 +1,517 @@
+/*
+ * The Schedule screen (WIN-8.8, WIN-8.17). Metrics come from theme/tokens.css (the calendar
+ * tokens); the event palette is SwiftUI's system colors in light and dark; the rest mirrors the
+ * paddings and font sizes of Views/Schedule/*.swift.
+ */
+:root {
+  --schedule-color-blue: #007aff;
+  --schedule-color-purple: #af52de;
+  --schedule-color-teal: #30b0c7;
+  --schedule-color-indigo: #5856d6;
+  --schedule-color-orange: #ff9500;
+  --schedule-color-pink: #ff2d55;
+  --schedule-color-green: #34c759;
+  --schedule-color-yellow: #ffcc00;
+  --schedule-accent: #007aff;
+  --schedule-now: #ff3b30;
+  --schedule-divider: rgba(0, 0, 0, 0.1);
+  --schedule-tertiary-text: rgba(0, 0, 0, 0.3);
+  --schedule-row-hover: rgba(0, 0, 0, 0.04);
+  --schedule-field-background: #ffffff;
+  --schedule-field-border: rgba(0, 0, 0, 0.15);
+  --schedule-destructive: #d70015;
+}
+
+:root[data-theme='dark'] {
+  --schedule-color-blue: #0a84ff;
+  --schedule-color-purple: #bf5af2;
+  --schedule-color-teal: #40c8e0;
+  --schedule-color-indigo: #5e5ce6;
+  --schedule-color-orange: #ff9f0a;
+  --schedule-color-pink: #ff375f;
+  --schedule-color-green: #30d158;
+  --schedule-color-yellow: #ffd60a;
+  --schedule-accent: #0a84ff;
+  --schedule-now: #ff453a;
+  --schedule-divider: rgba(255, 255, 255, 0.1);
+  --schedule-tertiary-text: rgba(255, 255, 255, 0.3);
+  --schedule-row-hover: rgba(255, 255, 255, 0.05);
+  --schedule-field-background: rgba(255, 255, 255, 0.06);
+  --schedule-field-border: rgba(255, 255, 255, 0.14);
+  --schedule-destructive: #ff6961;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --schedule-color-blue: #0a84ff;
+    --schedule-color-purple: #bf5af2;
+    --schedule-color-teal: #40c8e0;
+    --schedule-color-indigo: #5e5ce6;
+    --schedule-color-orange: #ff9f0a;
+    --schedule-color-pink: #ff375f;
+    --schedule-color-green: #30d158;
+    --schedule-color-yellow: #ffd60a;
+    --schedule-accent: #0a84ff;
+    --schedule-now: #ff453a;
+    --schedule-divider: rgba(255, 255, 255, 0.1);
+    --schedule-tertiary-text: rgba(255, 255, 255, 0.3);
+    --schedule-row-hover: rgba(255, 255, 255, 0.05);
+    --schedule-field-background: rgba(255, 255, 255, 0.06);
+    --schedule-field-border: rgba(255, 255, 255, 0.14);
+    --schedule-destructive: #ff6961;
+  }
+}
+
+.schedule-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--pp-app-text);
+  font-family: var(--pp-font-ui);
+}
+
+.schedule-view button {
+  font-family: inherit;
+  color: inherit;
+}
+
+/* Header (ScheduleHeaderView) */
+.schedule-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--schedule-divider);
+  white-space: nowrap;
+}
+
+.schedule-mode-picker {
+  width: 240px;
+}
+
+.schedule-mode-picker button {
+  flex: 1;
+}
+
+.schedule-spacer {
+  flex: 1;
+}
+
+.schedule-navigation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.schedule-borderless {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  padding: 3px 4px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.schedule-borderless:hover {
+  background: var(--schedule-row-hover);
+}
+
+.schedule-date-label {
+  min-width: 160px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Calendars */
+.schedule-calendar {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.schedule-day-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: var(--pp-calendar-header-height);
+  padding: 0 16px;
+  border-bottom: 1px solid var(--schedule-divider);
+}
+
+.schedule-day-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.schedule-today-text {
+  color: var(--schedule-accent);
+}
+
+.schedule-week-header {
+  flex: none;
+  display: grid;
+  height: var(--pp-calendar-header-height);
+  border-bottom: 1px solid var(--schedule-divider);
+}
+
+.schedule-week-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.schedule-week-day-name {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--secondary-text);
+}
+
+.schedule-week-day-number {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.schedule-today-badge {
+  background: var(--schedule-accent);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+/* Time grid (TimeGridView) */
+.schedule-time-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.schedule-time-grid-content {
+  position: relative;
+  display: grid;
+}
+
+.schedule-gutter {
+  position: relative;
+}
+
+.schedule-hour-label {
+  position: absolute;
+  right: 8px;
+  font: 10px var(--pp-font-mono);
+  color: var(--schedule-tertiary-text);
+  transform: translateY(0);
+}
+
+.schedule-column {
+  position: relative;
+  border-left: 0.5px solid var(--pp-calendar-grid-line);
+}
+
+.schedule-column:first-of-type {
+  border-left: none;
+}
+
+.schedule-slot {
+  border-top: 0.5px solid var(--pp-calendar-grid-line);
+  cursor: default;
+}
+
+.schedule-slot-major {
+  border-top-width: 1px;
+}
+
+.schedule-block {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  display: flex;
+  align-items: stretch;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  overflow: hidden;
+  text-align: left;
+  background: color-mix(in srgb, var(--event-color) 12%, transparent);
+  cursor: pointer;
+}
+
+.schedule-block:hover {
+  background: color-mix(in srgb, var(--event-color) 20%, transparent);
+}
+
+.schedule-block-bar {
+  flex: none;
+  width: 3px;
+  border-radius: 1.5px;
+  background: var(--event-color);
+}
+
+.schedule-block-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0 2px 4px;
+}
+
+.schedule-block-name {
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schedule-block-time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font: 10px var(--pp-font-mono);
+  color: var(--secondary-text);
+}
+
+.schedule-block-subtitle {
+  font-size: 9px;
+  color: var(--schedule-tertiary-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schedule-block-badge,
+.schedule-list-badge {
+  align-self: center;
+  flex: none;
+  margin-right: 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 600;
+  color: var(--event-color);
+  background: color-mix(in srgb, var(--event-color) 20%, transparent);
+}
+
+.schedule-now-line {
+  position: absolute;
+  right: 0;
+  height: 1px;
+  background: var(--schedule-now);
+  pointer-events: none;
+}
+
+.schedule-now-dot {
+  position: absolute;
+  left: 0;
+  top: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--schedule-now);
+}
+
+/* Month (MonthCalendarView, EventPillView) */
+.schedule-month-weekdays {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  padding: 0 4px;
+  border-bottom: 1px solid var(--schedule-divider);
+}
+
+.schedule-month-weekdays span {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--secondary-text);
+}
+
+.schedule-month-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
+  padding: 0 4px 4px;
+}
+
+.schedule-month-cell {
+  min-height: 80px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+}
+
+.schedule-month-today {
+  background: var(--pp-calendar-today-background);
+}
+
+.schedule-month-day {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 11px;
+}
+
+.schedule-month-day-outside {
+  color: var(--schedule-tertiary-text);
+}
+
+.schedule-month-more {
+  padding-left: 4px;
+  font-size: 8px;
+  font-weight: 500;
+  color: var(--secondary-text);
+}
+
+.schedule-view .schedule-pill {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  height: var(--pp-calendar-pill-height);
+  padding: 0 4px;
+  border: none;
+  border-radius: 3px;
+  color: var(--event-color);
+  background: color-mix(in srgb, var(--event-color) 15%, transparent);
+  cursor: pointer;
+  flex: none;
+}
+
+.schedule-pill-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.schedule-pill-badge {
+  flex: none;
+  padding: 1px 3px;
+  border-radius: 2px;
+  font-size: 7px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--event-color) 30%, transparent);
+}
+
+/* List (ScheduleListView) */
+.schedule-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 16px;
+}
+
+.schedule-list-header {
+  padding: 16px 16px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--secondary-text);
+}
+
+.schedule-list-row {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.schedule-list-row::after {
+  content: '';
+  position: absolute;
+  left: 80px;
+  right: 0;
+  bottom: 0;
+  border-bottom: 1px solid var(--schedule-divider);
+}
+
+.schedule-list-row:hover {
+  background: var(--schedule-row-hover);
+}
+
+.schedule-list-row.schedule-list-disabled {
+  opacity: 0.55;
+}
+
+.schedule-list-time {
+  flex: none;
+  width: 64px;
+  text-align: right;
+  font: 12px var(--pp-font-mono);
+  color: var(--secondary-text);
+}
+
+.schedule-list-bar {
+  flex: none;
+  width: 3px;
+  height: 32px;
+  border-radius: 1.5px;
+  background: var(--event-color);
+}
+
+.schedule-list-details {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.schedule-list-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule-list-icon {
+  color: var(--event-color);
+}
+
+.schedule-list-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.schedule-list-badge {
+  margin: 0;
+  padding: 1px 5px;
+  font-size: 9px;
+  background: color-mix(in srgb, var(--event-color) 15%, transparent);
+}
+
+.schedule-list-subtitle {
+  font-size: 11px;
+  color: var(--schedule-tertiary-text);
+}
