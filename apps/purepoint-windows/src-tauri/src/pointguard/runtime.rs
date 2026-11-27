@@ -118,9 +118,9 @@ pub fn load_bundled(dir: &Path, pu: Result<PathBuf, String>) -> Result<Runtime, 
     }
     #[cfg(windows)]
     for binary in [&node, &lock_helper] {
-        if pu_core::win_security::check_trusted_file(binary).is_err() {
+        if let Err(reason) = pu_core::win_security::check_trusted_file(binary) {
             return Err(format!(
-                "{} is writable by other users; Point Guard won't run it. Reinstall PurePoint.",
+                "Point Guard won't run {}: it can't be trusted ({reason}). Reinstall PurePoint.",
                 binary.display()
             ));
         }

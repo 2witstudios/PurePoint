@@ -436,8 +436,12 @@ fn stage_bundle(root: &Path, node: &Path) -> PathBuf {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, file).unwrap();
     }
-    if std::fs::hard_link(node, dir.join(r"bin\node.exe")).is_err() {
-        std::fs::copy(node, dir.join(r"bin\node.exe")).unwrap();
+    // A copy, never a hard link: the binaries get an install's owner-only DACL below, and a link
+    // would share (and change) the source's. The runtime refuses binaries other users can write,
+    // and a CI runner's tool cache, where `node` comes from, grants that.
+    std::fs::copy(node, dir.join(r"bin\node.exe")).unwrap();
+    for binary in [r"bin\node.exe", r"bin\point-guard-lock.exe"] {
+        pu_core::win_security::set_private_dacl(&dir.join(binary), false).unwrap();
     }
     std::fs::create_dir_all(dir.join("bridge")).unwrap();
     std::fs::copy(fake_bridge(), dir.join(r"bridge\main.js")).unwrap();
