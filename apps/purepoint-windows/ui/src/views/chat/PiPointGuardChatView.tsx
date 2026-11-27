@@ -60,6 +60,7 @@ import { ChatMarkdown } from './ChatMarkdown.tsx';
 import { PiTranscriptScrollCoordinator } from './piTranscriptScrollCoordinator.ts';
 import { PointGuardConversationLayout } from './PointGuardConversationLayout.tsx';
 import { PointGuardCourtView } from './PointGuardCourtView.tsx';
+import { useConversationListReload } from './useConversationListReload.ts';
 import { ChatSheet, ConfirmDialog, MenuButton, TypingIndicatorBubble } from './pointGuardParts.tsx';
 import { toolStatusLabel } from './ToolCallCardView.tsx';
 import { onToggleChatSidebar } from './chatSidebarEvents.ts';
@@ -140,10 +141,8 @@ export function PiPointGuardChatView({
   const recoverableCount = state.submissions.filter((x) => x.recoverable).length;
   const sending = state.submissions.some((x) => x.status === 'Sending');
 
-  // Lifecycle: the conversation list follows the connection, idle and session changes.
-  useEffect(() => {
-    if (state.connected) void chat.loadConversations();
-  }, [chat, state.connected, busy, sessionId]);
+  // Lifecycle: the conversation list follows the connection, going idle and session changes.
+  useConversationListReload(() => void chat.loadConversations(), state.connected, busy, sessionId);
   // A new snapshot or a failed send brings the court back (render-time reset, not an effect).
   const replyKey = String(revision) + ':' + String(recoverableCount);
   const [seenReplyKey, setSeenReplyKey] = useState(replyKey);
