@@ -119,3 +119,52 @@ export function installUpdate(
   if (status.state !== 'readyToRestart') return Promise.resolve();
   return run(store, () => commands.install(), { state: 'installing', version: status.version });
 }
+
+/**
+ * A check nobody asked for (Sparkle's scheduled check): it shows the dialog only when an update
+ * is available, and stays out of the way while the dialog is open, an update is under way or
+ * already found, or updates are not configured.
+ */
+export function checkForUpdatesInBackground(
+  store: UpdaterStore = useUpdaterStore,
+  commands: UpdaterCommands = backend,
+): Promise<void> {
+  const { status, dialogOpen } = store.getState();
+  const settled =
+    status.state === 'available' ||
+    status.state === 'readyToRestart' ||
+    status.state === 'notConfigured';
+  if (dialogOpen || settled || !canCheckForUpdates(status)) return Promise.resolve();
+  return commands.check().then(
+    (result) => {
+      store.getState().setStatus(result);
+      if (result.state === 'available') store.getState().openDialog();
+    },
+    () => {
+      // A failed background check stays quiet; the next one, or Check for Updates…, retries.
+    },
+  );
+}
+
+/** First automatic check after launch, then one a day (Sparkle's default interval). */
+export const AUTOMATIC_CHECK_DELAY_MS = 30_000;
+export const AUTOMATIC_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/** Check for updates shortly after launch and then daily; returns its stop. */
+export function startAutomaticUpdateChecks(
+  store: UpdaterStore = useUpdaterStore,
+  commands: UpdaterCommands = backend,
+): () => void {
+  const check = () => {
+    void checkForUpdatesInBackground(store, commands);
+  };
+  let interval: ReturnType<typeof setInterval> | null = null;
+  const first = setTimeout(() => {
+    check();
+    interval = setInterval(check, AUTOMATIC_CHECK_INTERVAL_MS);
+  }, AUTOMATIC_CHECK_DELAY_MS);
+  return () => {
+    clearTimeout(first);
+    if (interval !== null) clearInterval(interval);
+  };
+}
