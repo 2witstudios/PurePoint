@@ -5,14 +5,21 @@ name: Release
 # on the builds the build jobs produced. Build provenance and SBOM
 # attestations come from a job that runs no repository code. Only the final
 # publish job can write to the repository, and it runs no build code either.
+#
+# A manual run (workflow_dispatch, on any branch) is a Windows dry run: it builds
+# version 0.0.0 for both Windows architectures and runs sign-windows with no
+# environment and no secrets (its unsigned path). The macOS and Linux jobs,
+# attest and publish run only for a `v*` tag push, so a dry run publishes,
+# uploads and pushes nothing.
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 concurrency:
-  group: release
+  group: ${{ github.event_name == 'push' && 'release' || format('release-dry-run-{0}', github.ref) }}
   cancel-in-progress: false
 
 permissions: {}
@@ -30,10 +37,18 @@ jobs:
       - name: Extract version from tag
         id: version
         # The tag reaches the shell only through the environment, and must be a
-        # plain X.Y.Z: later jobs interpolate the extracted version.
+        # plain X.Y.Z: later jobs interpolate the extracted version. A dry run
+        # (workflow_dispatch) builds 0.0.0, which no release ever carries.
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            echo "::notice::dry run: building version 0.0.0 from $RELEASE_TAG; nothing is published"
+            echo "raw=0.0.0" >> "$GITHUB_OUTPUT"
+            echo "build_number=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           TAG="${RELEASE_TAG#v}"
           if ! printf '%s' "$TAG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::release tag must be vX.Y.Z, got: $RELEASE_TAG"
@@ -51,6 +66,7 @@ jobs:
   build-macos:
     name: Build macOS app (unsigned)
     needs: version
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-26
     timeout-minutes: 45
     permissions:
@@ -371,6 +387,7 @@ jobs:
   # Built natively per arch against musl, so no glibc version floor applies.
   linux:
     needs: version
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     strategy:
       fail-fast: false
       matrix:
@@ -541,6 +558,7 @@ jobs:
   sbom:
     name: Generate SBOMs
     needs: version
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -764,10 +782,11 @@ jobs:
   sign-windows:
     name: Sign Windows artifacts
     needs: [version, windows]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     runs-on: windows-latest
     timeout-minutes: 20
-    environment: release
+    # A dry run gets no environment and no secrets, so it takes every unsigned path.
+    environment: ${{ github.event_name == 'push' && 'release' || '' }}
     permissions:
       contents: read
     defaults:
@@ -803,7 +822,7 @@ jobs:
       - name: Check for an Authenticode certificate
         id: authenticode
         env:
-          WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
+          WINDOWS_CERTIFICATE_PFX: ${{ github.event_name == 'push' && secrets.WINDOWS_CERTIFICATE_PFX || '' }}
         run: |
           if [ -z "$WINDOWS_CERTIFICATE_PFX" ]; then
             echo "::warning title=Windows binaries are not Authenticode-signed::WINDOWS_CERTIFICATE_PFX is not set in the release environment (WIN-10.6), so SmartScreen warns about the installer and the binaries. See docs/architecture/distribution.md."
@@ -819,8 +838,8 @@ jobs:
         if: steps.authenticode.outputs.enabled == 'true'
         shell: pwsh
         env:
-          WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_PFX: ${{ github.event_name == 'push' && secrets.WINDOWS_CERTIFICATE_PFX || '' }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ github.event_name == 'push' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
           TIMESTAMP_URL: http://timestamp.digicert.com
         run: |
           $ErrorActionPreference = 'Stop'
@@ -860,7 +879,7 @@ jobs:
       - name: Sign archives
         id: sign
         env:
-          RELEASE_MINISIGN_KEY: ${{ secrets.RELEASE_MINISIGN_KEY }}
+          RELEASE_MINISIGN_KEY: ${{ github.event_name == 'push' && secrets.RELEASE_MINISIGN_KEY || '' }}
         run: |
           if [ -z "$RELEASE_MINISIGN_KEY" ]; then
             echo "::warning title=Windows archives are unsigned::RELEASE_MINISIGN_KEY is not set in the release environment, so this release has no Windows .minisig files. See docs/architecture/distribution.md."
@@ -892,8 +911,8 @@ jobs:
       - name: Sign installers for the updater and write latest-windows.json
         working-directory: apps/purepoint-windows
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
           TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
           PUREPOINT_RELEASE_NOTES: See https://github.com/2witstudios/PurePoint/releases/tag/v${{ needs.version.outputs.raw }}
         run: |
@@ -937,6 +956,7 @@ jobs:
   attest:
     name: Attest release artifacts
     needs: [version, sign-macos, linux, linux-phone, sbom, sign-windows]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1018,6 +1038,7 @@ jobs:
   publish:
     name: Publish release
     needs: [version, sign-macos, linux, linux-phone, sbom, sign-linux, windows, sign-windows, attest]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

@@ -92,6 +92,8 @@ The release CI workflow (`.github/workflows/release.yml`) runs on a `v*` tag pus
 2. `sign-macos`, in the protected `release` environment, re-signs the app inside-out with Developer ID (`.github/scripts/sign-macos-app.sh`), notarizes and staples it, builds the DMG, signs, notarizes and staples the DMG, and signs it for Sparkle. Sparkle's `sign_update` and `create-dmg` are downloaded at pinned versions and checked against committed SHA-256 sums.
 3. `publish` creates the GitHub release with the DMG and Linux tarballs in one step, then updates the Sparkle appcast on the `appcast` release.
 
+Run by hand (`gh workflow run release.yml --ref <branch>`), the workflow is a Windows dry run instead: it builds and checks the Windows zips and installers as version `0.0.0`, signs nothing, skips the macOS and Linux jobs and publishes nothing (`apps/purepoint-windows/README.md`, Releases).
+
 A failed job can be re-run from the Actions page. The release is created only once every build is signed, so a re-run never replaces published assets. See DIST-005 in `docs/architecture/distribution.md` for the security model and the repository settings it relies on.
 
 ## Toolchain
