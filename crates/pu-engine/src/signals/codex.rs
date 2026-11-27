@@ -8,7 +8,8 @@ use crate::output_buffer::OutputBuffer;
 use crate::read_source::Binding;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(all(test, unix))]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -17,6 +18,9 @@ pub(super) struct Observer {
     expected: Option<String>,
     initial_cursor: Cursor,
     initial_session: Option<String>,
+    /// The Codex home the launch's environment names; Windows discovery scans it.
+    #[cfg(windows)]
+    home: Option<std::path::PathBuf>,
 }
 
 fn same_native_root(bound: &Binding, current: &Binding) -> bool {
@@ -35,6 +39,10 @@ pub(super) async fn prepare_launch(
     env: &[(String, String)],
 ) -> Option<Prepared> {
     let mut prepared = prepare(project, agent, worktree, session)?;
+    #[cfg(windows)]
+    if let Some(NativeObserver::Codex(observer)) = prepared.observer.as_mut() {
+        observer.home = crate::read_source::codex_home(env);
+    }
     if let Some(session) = session {
         let (session, cwd, env) = (session.to_owned(), cwd.to_owned(), env.to_vec());
         let cursor = tokio::time::timeout(
@@ -76,7 +84,7 @@ pub(super) fn prepare(
     }
     let launch = pu_core::id::session_id();
     let artifacts = install::Artifacts::new(Path::new(project), &launch).ok()?;
-    let socket = tokio::net::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
+    let socket = artifacts.bind_signal().ok()?;
     Some(Prepared {
         socket,
         token: String::new(),
@@ -100,6 +108,8 @@ pub(super) fn prepare(
             expected: session.map(str::to_owned),
             initial_cursor: Cursor::default(),
             initial_session: None,
+            #[cfg(windows)]
+            home: None,
         })),
     })
 }
@@ -123,19 +133,16 @@ impl Cursor {
         })
     }
     fn read(&mut self, path: &Path, history: &mut History, cwd: &str) -> Option<()> {
+        use pu_core::private_fs as pfs;
         if self.poisoned {
             return None;
         }
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .ok()?;
+        let mut file = pfs::open_no_follow(path).ok()?;
         self.poisoned = true;
         let meta = file.metadata().ok()?;
-        let inode = (meta.dev(), meta.ino());
+        let inode = pfs::file_identity(&file).ok()?;
         if !meta.is_file()
-            || meta.uid() != unsafe { libc::geteuid() }
+            || !pfs::owned_by_current_user(&file).ok()?
             || meta.len() < self.offset
             || meta.len() < self.observed_length
             || self.inode.is_some_and(|old| old != inode)
@@ -168,7 +175,7 @@ impl Cursor {
         self.poisoned = false;
         Some(())
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn unchanged(&self, path: &Path) -> bool {
         self.partial.is_empty()
             && std::fs::symlink_metadata(path).is_ok_and(|m| {
@@ -206,7 +213,7 @@ impl Observer {
         mut exit: tokio::sync::watch::Receiver<Option<i32>>,
         channels: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
         output: Arc<OutputBuffer>,
-        discovery: Arc<super::batch::Sampler<(u32, String), crate::read_source::CodexCandidate>>,
+        discovery: Arc<super::batch::Sampler<super::CodexKey, crate::read_source::CodexCandidate>>,
     ) {
         let Some(launch) = state
             .upgrade()
@@ -214,7 +221,11 @@ impl Observer {
         else {
             return;
         };
-        let Some(registration) = discovery.register(launch.clone(), (pid, cwd.clone())) else {
+        #[cfg(unix)]
+        let key = (pid, cwd.clone());
+        #[cfg(windows)]
+        let key = (pid, cwd.clone(), self.home.clone());
+        let Some(registration) = discovery.register(launch.clone(), key) else {
             return;
         };
         tokio::spawn(async move {
@@ -811,6 +822,7 @@ mod tests {
     fn event(kind: &str, turn: &str) -> Value {
         json!({"type":"event_msg","payload":{"type":kind,"turn_id":turn,"root_turn_id":turn}})
     }
+    #[cfg(unix)]
     #[test]
     fn given_large_native_image_record_should_preserve_the_current_turn_and_completion() {
         let root = tempfile::tempdir().unwrap();
@@ -835,6 +847,7 @@ mod tests {
         assert!(cursor.unchanged(&path));
         assert_eq!(history.outcome.unwrap().kind, OutcomeKind::Completed);
     }
+    #[cfg(unix)]
     #[test]
     fn existing_large_history_is_consumed_in_bounded_batches() {
         let root = tempfile::tempdir().unwrap();
@@ -1208,6 +1221,7 @@ mod tests {
         assert_ne!(events[0], events[1]);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires sandbox native Codex probe context"]
     async fn native_interactive_observer_probe() {

@@ -39,7 +39,6 @@ struct SizeClaim {
     claimed_at: u64,
 }
 
-use std::os::fd::OwnedFd;
 use std::sync::Arc;
 
 use pu_core::paths;
@@ -47,6 +46,7 @@ use pu_core::protocol::Response;
 
 use crate::delivery::{DeliveryError, DeliveryOptions, deliver_prompt};
 use crate::output_buffer::OutputBuffer;
+use crate::pty_manager::Pty;
 
 use super::Engine;
 
@@ -155,7 +155,7 @@ impl Engine {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn attachment_size(&self, agent_id: &str) -> PtySize {
         self.sizes
             .lock()
@@ -281,15 +281,15 @@ impl Engine {
                 },
             };
         }
-        // Clone the fd Arc under the lock, then drop the lock before the blocking write
-        let master_fd = {
+        // Clone the PTY Arc under the lock, then drop the lock before the blocking write
+        let pty = {
             let sessions = self.sessions.lock().await;
             match sessions.get(agent_id) {
-                Some(handle) => handle.master_fd(),
+                Some(handle) => handle.pty(),
                 None => return Self::agent_not_found(agent_id),
             }
         };
-        match self.pty_host.write_to_fd(&master_fd, data).await {
+        match self.pty_host.write_to_pty(&pty, data).await {
             Ok(()) => Response::Ok,
             Err(e) => Response::Error {
                 code: "IO_ERROR".into(),
@@ -316,17 +316,17 @@ impl Engine {
         };
         let _guard = lock.lock().await;
 
-        let (master_fd, output, screen_aware) = {
+        let (pty, output, screen_aware) = {
             let sessions = self.sessions.lock().await;
             match sessions.get(agent_id) {
-                Some(h) => (h.master_fd(), h.output_buffer.clone(), h.screen_aware),
+                Some(h) => (h.pty(), h.output_buffer.clone(), h.screen_aware),
                 None => return Ok(false),
             }
         };
         if screen_aware {
             deliver_prompt(
                 &self.pty_host,
-                &master_fd,
+                &pty,
                 &output,
                 text,
                 &DeliveryOptions::default(),
@@ -334,7 +334,7 @@ impl Engine {
             .await?;
         } else {
             self.pty_host
-                .write_chunked_submit(&master_fd, text.as_bytes())
+                .write_chunked_submit(&pty, text.as_bytes())
                 .await?;
         }
         Ok(true)
@@ -358,28 +358,15 @@ impl Engine {
     }
 
     pub(super) async fn handle_resize(&self, agent_id: &str, cols: u16, rows: u16) -> Response {
-        let (master_fd, buffer) = {
+        let (pty, buffer) = {
             let sessions = self.sessions.lock().await;
             match sessions.get(agent_id) {
-                Some(handle) => (handle.master_fd(), handle.output_buffer.clone()),
+                Some(handle) => (handle.pty(), handle.output_buffer.clone()),
                 None => return Self::agent_not_found(agent_id),
             }
         };
         let result = tokio::task::spawn_blocking(move || {
-            buffer.resize_transaction(rows, cols, || {
-                use std::os::fd::AsRawFd;
-                let size = libc::winsize {
-                    ws_row: rows,
-                    ws_col: cols,
-                    ws_xpixel: 0,
-                    ws_ypixel: 0,
-                };
-                if unsafe { libc::ioctl(master_fd.as_raw_fd(), libc::TIOCSWINSZ, &size) } < 0 {
-                    Err(std::io::Error::last_os_error())
-                } else {
-                    Ok(())
-                }
-            })
+            buffer.resize_transaction(rows, cols, || pty.resize(cols, rows))
         })
         .await
         .unwrap_or_else(|e| Err(std::io::Error::other(e)));
@@ -392,35 +379,30 @@ impl Engine {
         }
     }
 
-    /// Write data to a PTY fd via the pty host (avoids duplicating unsafe write logic).
-    pub async fn write_to_pty(&self, fd: &Arc<OwnedFd>, data: &[u8]) -> Result<(), std::io::Error> {
-        self.pty_host.write_to_fd(fd, data).await
+    /// Write data to a PTY via the pty host.
+    pub async fn write_to_pty(&self, pty: &Pty, data: &[u8]) -> Result<(), std::io::Error> {
+        self.pty_host.write_to_pty(pty, data).await
     }
 
-    /// Resize a PTY fd via the pty host (avoids duplicating unsafe ioctl logic).
-    pub async fn resize_pty(
-        &self,
-        fd: &Arc<OwnedFd>,
-        cols: u16,
-        rows: u16,
-    ) -> Result<(), std::io::Error> {
-        self.pty_host.resize_fd(fd, cols, rows).await
+    /// Resize a PTY via the pty host.
+    pub async fn resize_pty(&self, pty: &Pty, cols: u16, rows: u16) -> Result<(), std::io::Error> {
+        self.pty_host.resize_pty(pty, cols, rows).await
     }
 
-    /// Return the output buffer, master PTY fd, and exit receiver for an agent,
+    /// Return the output buffer, PTY handle, and exit receiver for an agent,
     /// if it has an active session.
     pub async fn get_attach_handles(
         &self,
         agent_id: &str,
     ) -> Option<(
         Arc<OutputBuffer>,
-        Arc<OwnedFd>,
+        Pty,
         tokio::sync::watch::Receiver<Option<i32>>,
     )> {
         let sessions = self.sessions.lock().await;
         sessions
             .get(agent_id)
-            .map(|h| (h.output_buffer.clone(), h.master_fd(), h.exit_rx.clone()))
+            .map(|h| (h.output_buffer.clone(), h.pty(), h.exit_rx.clone()))
     }
 
     /// Build the full environment for spawned agents.
@@ -438,23 +420,34 @@ impl Engine {
             .unwrap_or_default();
 
         // Append common fallback dirs (guards against missing-binary issues)
-        let home = std::env::var("HOME").unwrap_or_default();
-        let fallbacks = [
-            format!("{home}/.local/bin"),
-            format!("{home}/.cargo/bin"),
-            "/usr/local/bin".to_string(),
-            "/opt/homebrew/bin".to_string(),
-        ];
-        let mut path = login_path;
-        for dir in fallbacks {
-            if !path.split(':').any(|p| p == dir) {
-                path = format!("{path}:{dir}");
+        #[cfg(unix)]
+        let path = {
+            let home = pu_core::paths::home_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let fallbacks = [
+                format!("{home}/.local/bin"),
+                format!("{home}/.cargo/bin"),
+                "/usr/local/bin".to_string(),
+                "/opt/homebrew/bin".to_string(),
+            ];
+            let mut path = login_path;
+            for dir in fallbacks {
+                if !path.split(':').any(|p| p == dir) {
+                    path = format!("{path}:{dir}");
+                }
             }
-        }
-        // Prepend ~/.pu/bin
-        if let Ok(pu_dir) = paths::global_pu_dir() {
-            path = format!("{}:{}", pu_dir.join("bin").display(), path);
-        }
+            // Prepend ~/.pu/bin
+            if let Ok(pu_dir) = paths::global_pu_dir() {
+                path = format!("{}:{}", pu_dir.join("bin").display(), path);
+            }
+            path
+        };
+        // Windows (WINAPP-007): the tool directories, then the registry and
+        // daemon PATH already merged by `resolve_login_env`.
+        #[cfg(windows)]
+        let path =
+            crate::win_env::agent_path(&mut env, paths::home_dir().ok().as_deref(), &login_path);
 
         // Override PATH, TERM, COLORTERM in the env
         env.retain(|(k, _)| k != "PATH" && k != "TERM" && k != "COLORTERM");
@@ -468,7 +461,9 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use pu_core::protocol::Request;
+    #[cfg(unix)]
     use tokio::io::AsyncWriteExt;
 
     impl super::Engine {
@@ -478,10 +473,11 @@ mod tests {
             let tmp = tempfile::TempDir::new().unwrap();
             let engine = Self::new();
             let id = "quiet-screen".to_string();
+            let mut words = crate::test_helpers::ECHO_COMMAND.split_whitespace();
             let mut session = crate::pty_manager::NativePtyHost::new()
                 .spawn(crate::pty_manager::SpawnConfig {
-                    command: "/bin/cat".into(),
-                    args: vec![],
+                    command: words.next().unwrap().into(),
+                    args: words.map(str::to_owned).collect(),
                     cwd: tmp.path().display().to_string(),
                     env: vec![],
                     env_remove: vec![],
@@ -491,6 +487,16 @@ mod tests {
                 .await
                 .unwrap();
             session.screen_aware = true;
+            // conhost repaints its whole screen after every resize (WIN-1.1
+            // section 4), so ConPTY is never quiet: give the session a buffer
+            // the console's output does not reach. Resizes still go through
+            // the real `ResizePseudoConsole`.
+            #[cfg(windows)]
+            {
+                let buffer = crate::output_buffer::OutputBuffer::new();
+                buffer.resize_terminal(40, 120);
+                session.output_buffer = std::sync::Arc::new(buffer);
+            }
             engine.sessions.lock().await.insert(id.clone(), session);
             (engine, id, tmp)
         }
@@ -538,6 +544,7 @@ mod tests {
         task.await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_disconnected_prompt_waiting_for_readiness_should_never_type_when_box_appears() {
         let engine = super::Engine::new();

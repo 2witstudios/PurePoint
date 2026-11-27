@@ -10,11 +10,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { privateTemp } from "./private-temp.test-helper.js";
 async function trustedTransport(
   controller,
   { terminals = "control", workspaceManagement = true } = {},
 ) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-e2e-"));
+  const directory = await privateTemp("pg-e2e-");
   const trust = await openTrustStore({ directory });
   const remote = await serve(controller, {
     host: "127.0.0.1",

@@ -48,6 +48,9 @@ pub async fn run(
             return Ok(());
         }
 
+        // `--json` prints one array (as for no worktrees), not one document
+        // per worktree, so the output parses as JSON.
+        let mut results = Vec::new();
         for wt_id in &wt_ids {
             let resp = client::send_request(
                 socket,
@@ -58,7 +61,14 @@ pub async fn run(
             )
             .await?;
             let resp = output::check_response(resp, json)?;
-            output::print_response(&resp, json)?;
+            if json {
+                results.push(resp);
+            } else {
+                output::print_response(&resp, false)?;
+            }
+        }
+        if json {
+            println!("{}", json_array(&results)?);
         }
     } else if let Some(wt_id) = worktree {
         let resp = client::send_request(
@@ -74,4 +84,36 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+fn json_array(results: &[Response]) -> Result<String, CliError> {
+    Ok(serde_json::to_string_pretty(results)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn given_several_cleaned_worktrees_json_should_be_one_array() {
+        // given
+        let result = |id: &str| Response::DeleteWorktreeResult {
+            worktree_id: id.into(),
+            killed_agents: vec![],
+            branch_deleted: true,
+            remote_deleted: false,
+            directory_removed: true,
+            error: None,
+        };
+
+        // when
+        let out = json_array(&[result("wt-1"), result("wt-2")]).expect("serialize");
+
+        // then
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        let items = parsed.as_array().expect("array");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["type"], "delete_worktree_result");
+        assert_eq!(items[1]["worktree_id"], "wt-2");
+    }
 }

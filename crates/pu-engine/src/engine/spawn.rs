@@ -23,8 +23,8 @@ impl Engine {
 
         let env = self.agent_env().await;
         let spawn_config = SpawnConfig {
+            args: crate::os::interactive_shell_args(&shell),
             command: shell,
-            args: vec!["-l".to_string()],
             cwd: cwd.to_string(),
             env,
             env_remove: vec![],
@@ -183,7 +183,8 @@ impl Engine {
 
             let (cmd_bin, cmd_args) = if has_metacharacters {
                 let shell = crate::os::login_shell();
-                (shell, vec!["-c".to_string(), cmd.clone()])
+                let args = crate::os::shell_command_args(&shell, cmd);
+                (shell, args)
             } else {
                 let parts: Vec<&str> = cmd.split_whitespace().collect();
                 if parts.is_empty() {
@@ -388,7 +389,7 @@ impl Engine {
                 .insert(agent_id.clone(), prompt_bytes.clone());
 
             let output_buffer = handle.output_buffer.clone();
-            let master_fd = handle.master_fd();
+            let pty = handle.pty();
             let mut exit_rx = handle.exit_rx.clone();
             let pty_host = NativePtyHost::new();
             let aid = agent_id.clone();
@@ -420,7 +421,7 @@ impl Engine {
                 }
 
                 // Inject the prompt
-                if inject_initial_prompt(&pty_host, &master_fd, &aid, &prompt_bytes).await {
+                if inject_initial_prompt(&pty_host, &pty, &aid, &prompt_bytes).await {
                     tracing::debug!(agent_id = %aid, "prompt injected at spawn time");
                 } else {
                     tracing::warn!(agent_id = %aid, "failed to inject prompt at spawn time");
@@ -645,6 +646,7 @@ impl Engine {
 mod launch_tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn given_wrapper_command_should_execute_agent_with_launch_args() {
         // given: a wrapper that becomes its first argument, like agent-launch.sh
@@ -680,6 +682,81 @@ mod launch_tests {
             String::from_utf8_lossy(&output.stdout),
             "-s\ndanger-full-access\n-a\non-request\n"
         );
+    }
+
+    /// Windows: the same wrapper contract with a pwsh wrapper and agent.
+    #[cfg(windows)]
+    #[test]
+    fn given_wrapper_command_should_execute_agent_with_launch_args() {
+        // given: a wrapper that runs its first argument with the rest
+        let dir = tempfile::tempdir().unwrap();
+        let wrapper = dir.path().join("agent-launch.ps1");
+        std::fs::write(
+            &wrapper,
+            "$agent, $rest = $args\n& $agent @rest\nexit $LASTEXITCODE\n",
+        )
+        .unwrap();
+        let agent = dir.path().join("agent.ps1");
+        std::fs::write(&agent, "$args | ForEach-Object { $_ }\n").unwrap();
+        let mut args = vec![
+            "pwsh".into(),
+            "-NoProfile".into(),
+            "-File".into(),
+            agent.display().to_string(),
+        ];
+
+        // when
+        Engine::append_launch_args(
+            &mut args,
+            vec![
+                "-s".into(),
+                "danger-full-access".into(),
+                "-a".into(),
+                "on-request".into(),
+            ],
+        );
+        let output = std::process::Command::new("pwsh")
+            .args(["-NoProfile", "-File"])
+            .arg(wrapper)
+            .args(args)
+            .output()
+            .unwrap();
+
+        // then: the wrapper runs the agent, rather than trying to run -s
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+            "-s\ndanger-full-access\n-a\non-request\n"
+        );
+    }
+
+    /// A terminal command with shell metacharacters runs under the login
+    /// shell with that shell's own script flags (pwsh `-Command`, not `-c`).
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn given_piped_terminal_command_should_run_under_the_windows_login_shell() {
+        let (engine, id, _tmp) = crate::test_helpers::init_and_spawn_command(Some(
+            "Write-Output ('pu-' + 'piped') | ForEach-Object { $_ + '-ok' }",
+        ))
+        .await;
+        let buffer = engine.get_attach_handles(&id).await.unwrap().0;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let found = loop {
+            let mut parser = vt100::Parser::new(40, 120, 0);
+            parser.process(&buffer.read_all());
+            let screen = parser.screen().contents();
+            if screen.contains("pu-piped-ok") || tokio::time::Instant::now() >= deadline {
+                break screen;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        engine.kill_agents(&[id]).await;
+        assert!(found.contains("pu-piped-ok"), "{found}");
     }
 
     #[test]

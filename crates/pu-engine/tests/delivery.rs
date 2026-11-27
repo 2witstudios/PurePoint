@@ -1,4 +1,5 @@
-//! Prompt delivery against a slow-rendering fake Claude TUI.
+//! Prompt delivery against a slow-rendering fake Claude TUI: the Python
+//! fake in a Unix PTY, or its Node twin in a ConPTY on Windows.
 
 use std::time::Duration;
 
@@ -17,17 +18,26 @@ struct Fake {
 async fn spawn_fake(env: &[(&str, &str)]) -> Fake {
     let tmp = tempfile::TempDir::new().unwrap();
     let log = tmp.path().join("submits.jsonl");
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_tui.py");
     let mut env: Vec<(String, String)> = env
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     env.push(("SUBMIT_LOG".into(), log.display().to_string()));
     env.push(("PYTHONUNBUFFERED".into(), "1".into()));
+    #[cfg(unix)]
+    let (command, script) = (
+        "python3",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_tui.py"),
+    );
+    #[cfg(windows)]
+    let (command, script) = (
+        "node",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_tui.mjs"),
+    );
     let host = NativePtyHost::new();
     let handle = host
         .spawn(SpawnConfig {
-            command: "python3".into(),
+            command: command.into(),
             args: vec![script.into()],
             cwd: tmp.path().display().to_string(),
             env,
@@ -49,7 +59,12 @@ impl Drop for Fake {
     fn drop(&mut self) {
         // The PTY reader is a blocking read; without killing the child the
         // runtime never shuts down.
-        unsafe { libc::kill(self.handle.pid as i32, libc::SIGKILL) };
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(self.handle.pid as i32, libc::SIGKILL)
+        };
+        #[cfg(windows)]
+        self.host.kill_now(&self.handle);
     }
 }
 
@@ -64,6 +79,11 @@ impl Fake {
 }
 
 async fn deliver(f: &Fake, text: &str) -> Result<(), String> {
+    // Shortened from the production timings to keep the suite fast. On
+    // Windows every keystroke's full redraw also goes through conhost, which
+    // a machine loaded by other work can stall past 800ms, so the fake runs
+    // with the production stall and retry timings there.
+    #[cfg(unix)]
     let opts = DeliveryOptions {
         ready_timeout: Duration::from_secs(10),
         type_stall: Duration::from_millis(800),
@@ -71,9 +91,14 @@ async fn deliver(f: &Fake, text: &str) -> Result<(), String> {
         submit_timeout: Duration::from_secs(3),
         ..DeliveryOptions::default()
     };
+    #[cfg(windows)]
+    let opts = DeliveryOptions {
+        ready_timeout: Duration::from_secs(10),
+        ..DeliveryOptions::default()
+    };
     deliver_prompt(
         &f.host,
-        &f.handle.master_fd(),
+        &f.handle.pty(),
         &f.handle.output_buffer,
         text,
         &opts,
@@ -145,7 +170,7 @@ async fn given_input_box_that_never_appears_should_fail_loudly() {
     // when
     let r = deliver_prompt(
         &f.host,
-        &f.handle.master_fd(),
+        &f.handle.pty(),
         &f.handle.output_buffer,
         LONG_PROMPT,
         &opts,

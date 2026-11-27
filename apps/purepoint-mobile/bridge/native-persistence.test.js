@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js";
 import { installManagedPersistence } from "./native-persistence.js";
-test("given managed native setup with no prompt should persist native tree and restore its exact session without fake messages", async () => {
+// Skipped on Windows (WIN-9.1): POSIX file modes (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "POSIX file modes (Unix only)",
+};
+test("given managed native setup with no prompt should persist native tree and restore its exact session without fake messages", unixOnly, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pi-managed-persist-"));
   try {
     installManagedPersistence(SessionManager);

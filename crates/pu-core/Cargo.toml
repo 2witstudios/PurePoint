@@ -17,6 +17,27 @@ indexmap = { workspace = true }
 fs4 = "1.1"
 sha2 = "0.11"
 shell-words = "1"
+dunce = "1"
+# TypeScript bindings for the Windows app (WIN-5.2); off by default.
+# `no-serde-warnings`: the serde attributes ts-rs cannot read (`other`, `deserialize_with`)
+# are covered by `#[ts(...)]` overrides; without it every build prints a pseudo-warning.
+ts-rs = { version = "12", optional = true, features = ["chrono-impl", "indexmap-impl", "serde-json-impl", "no-serde-warnings"] }
+
+[features]
+# Derive `ts_rs::TS` on the wire protocol types; see apps/purepoint-windows/README.md.
+ts = ["dep:ts-rs"]
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 tempfile = "3"

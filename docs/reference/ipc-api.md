@@ -1,14 +1,15 @@
 # IPC API Reference
 
-The PurePoint daemon communicates with clients (CLI, macOS app) via NDJSON over a Unix domain socket.
+The PurePoint daemon communicates with clients (CLI, macOS app, Windows app) via NDJSON over a Unix domain socket on Unix, or a private named pipe on Windows. The protocol is identical on both.
 
 ## Transport
 
 | Property | Value |
 |---|---|
-| Socket path | `~/.pu/daemon.sock` (mode 0600; the daemon keeps `~/.pu` at 0700) |
-| Access | Only processes running as the daemon's user: every accepted connection's peer uid must equal the daemon's effective uid, or it is closed |
-| Protocol version | 13 |
+| Socket path | `~/.pu/daemon.sock` (Unix: mode 0600; the daemon keeps `~/.pu` at 0700) |
+| Windows endpoint | `\\.\pipe\purepoint-<hash16>-daemon`, where `<hash16>` is the first 8 bytes of SHA-256 of the normalized socket path. The socket path is not created but still names the `.pid`, `.lock` and `.projects.json` siblings. Protected owner-only DACL, remote clients rejected ([windows-app.md](../product/windows-app.md) WINAPP-003/004) |
+| Access | Only processes running as the daemon's user. Unix: every accepted connection's peer uid must equal the daemon's effective uid, or it is closed. Windows: the client token's user SID must equal the daemon's, and clients refuse a server whose SID differs or whose PID is not the live PID in `daemon.sock.pid` |
+| Protocol version | 14 |
 | Framing | Newline-delimited JSON (one JSON object per line) |
 | Max message size | 1 MB (1,048,576 bytes); a longer line gets one `FRAME_TOO_LARGE` error and the connection is closed |
 | First request | Must arrive within 30 seconds of connecting, or the connection is closed |
@@ -545,11 +546,11 @@ Gate evaluation timeouts: 60 seconds per command, 5 minutes total.
 ## Daemon lifecycle
 
 - **Auto-start**: CLI calls `ensure_daemon()`, finds binary, spawns detached, polls health with exponential backoff (up to 3s)
-- **Single instance**: before touching the socket, every daemon takes an exclusive `flock` on `daemon.sock.lock` beside it; if another live daemon holds it, the new one logs "already running" and exits 0
+- **Single instance**: before touching the socket, every daemon takes an exclusive lock on `daemon.sock.lock` beside it (`flock` on Unix, `fs4` on Windows); if another live daemon holds it, the new one logs "already running" and exits 0
 - **PID file**: written to `~/.pu/daemon.sock.pid` in both modes; on exit the PID file and socket are removed only if the PID file still names this daemon
-- **Managed mode**: `--managed` flag (for macOS app); exits when parent process dies
+- **Managed mode**: `--managed` flag (for the macOS and Windows apps); exits when parent process dies (on Windows with `--parent-pid <pid>`, by waiting on that process handle)
 - **Connection limit**: at most 1024 concurrent connections; further connections get one `BUSY` error line and are closed
-- **Signals**: SIGTERM and SIGINT trigger graceful shutdown
+- **Signals**: SIGTERM and SIGINT trigger graceful shutdown (Unix); console Ctrl-C, Ctrl-Break, close and shutdown events on Windows
 
 ## Project channel
 
@@ -570,7 +571,8 @@ returned top-level parent across the full store. `self_author_id` identifies the
 requesting producer even on empty/unchanged history. `known_revision` skips only
 cursor-free reads with neither query nor parent filter.
 
-Human producers are resolved by the daemon as `human:<effective Unix UID>`;
+Human producers are resolved by the daemon as `human:<effective Unix UID>`
+(`human:<user SID>` on Windows, REQ-WINAPP-052);
 CLI and app clients on the daemon's account therefore share an identity.
 Display names come from `/usr/bin/id -un <UID>`, with `Developer <UID>` as fallback,
 not client-provided names or username environment variables. Agent IDs are

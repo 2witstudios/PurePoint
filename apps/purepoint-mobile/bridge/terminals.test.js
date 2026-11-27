@@ -11,6 +11,8 @@ import { createDaemons } from "./daemon.js";
 import { terminalConnection } from "./terminals.js";
 import { serve } from "./network.js";
 import { openTrustStore } from "./trust.js";
+import { daemonEndpoint } from "./pipe-name.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 
 async function until(fn) {
   for (let i = 0; i < 300; i++) {
@@ -20,7 +22,7 @@ async function until(fn) {
   throw new Error("Timed out waiting for requirement");
 }
 async function fixture(t) {
-  const home = await mkdtemp(path.join(os.tmpdir(), "pt-"));
+  const home = await privateTemp("pt-");
   const sockets = new Set();
   const attached = [];
   const inputs = [];
@@ -81,7 +83,8 @@ async function fixture(t) {
     });
   });
   await new Promise((resolve) =>
-    server.listen(path.join(home, "daemon.sock"), resolve),
+    // Windows: the pipe the bridge derives from the socket path.
+    server.listen(daemonEndpoint(path.join(home, "daemon.sock")), resolve),
   );
   t.after(async () => {
     for (const socket of sockets) socket.destroy();
@@ -659,6 +662,8 @@ test("authenticated WebSocket fences inventory/input on immediate trust downgrad
   assert.equal(trust.authorize(enrolled.credential), null);
   await revoke;
   assert.equal((await close)[0], 4001);
+  // Windows cannot remove a held lock file: release it before the fixture cleanup.
+  await trust.close();
 });
 
 test("isolated output bursts recover repeatedly after stable drained progress and own close is idempotent", async (t) => {

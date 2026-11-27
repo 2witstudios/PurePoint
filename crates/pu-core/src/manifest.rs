@@ -40,12 +40,12 @@ pub fn write_manifest(project_root: &Path, manifest: &Manifest) -> Result<(), Pu
             .into_inner()
             .map_err(std::io::IntoInnerError::into_error)?;
         file.sync_all()?;
-        std::fs::rename(&tmp_path, &path)
+        crate::fs_retry::rename(&tmp_path, &path)
     };
     // The temp name is unique per write, so a failed write must clean up after
     // itself or every failure leaves another file in .pu/.
     write().inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp_path);
+        let _ = crate::fs_retry::remove_file(&tmp_path);
     })?;
     Ok(())
 }

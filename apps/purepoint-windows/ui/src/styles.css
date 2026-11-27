@@ -1,0 +1,23 @@
+/* App styles; colors, fonts and metrics come from theme/tokens.css (WIN-5.8), the window
+   shell's layout from views/shell/layout.css (WIN-7.1). */
+:root {
+  font-family: var(--pp-font-ui);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--pp-app-background);
+  color: var(--pp-app-text);
+  overflow: hidden;
+  user-select: none;
+}

@@ -2,11 +2,17 @@ use std::path::Path;
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 
 use pu_core::protocol::{Request, Response};
 
 use crate::error::CliError;
+
+/// Connect to the daemon behind `socket`: its Unix socket, or on Windows the
+/// private named pipe derived from that path (verified before any byte is
+/// sent). Never starts a daemon.
+pub(crate) async fn connect(socket: &Path) -> std::io::Result<pu_transport::Stream> {
+    pu_transport::connect(&pu_transport::Endpoint::for_socket(socket)?).await
+}
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -59,14 +65,19 @@ pub async fn send_request(socket: &Path, request: &Request) -> Result<Response, 
 async fn send_raw_request(socket: &Path, request: &Request) -> Result<Response, CliError> {
     let timeout = timeout_for(request);
     let result = tokio::time::timeout(timeout, async {
-        let stream = UnixStream::connect(socket)
-            .await
-            .map_err(|e| match e.kind() {
-                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound => {
-                    CliError::DaemonNotRunning
-                }
-                _ => CliError::Io(e),
-            })?;
+        // A machine connection on Windows: one ssh exec relay per request.
+        #[cfg(windows)]
+        if let Some(relay) = crate::machine_target::relay_for(socket) {
+            // Boxed: every command's future embeds this one, and the main
+            // thread's 1 MiB Windows stack has no room for it inline.
+            return Box::pin(exchange_over_relay(&relay, request)).await;
+        }
+        let stream = connect(socket).await.map_err(|e| match e.kind() {
+            std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound => {
+                CliError::DaemonNotRunning
+            }
+            _ => CliError::Io(e),
+        })?;
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
 
@@ -87,6 +98,38 @@ async fn send_raw_request(socket: &Path, request: &Request) -> Result<Response, 
     match result {
         Ok(inner) => inner,
         Err(_) => Err(CliError::RequestTimeout(timeout.as_secs())),
+    }
+}
+
+/// Send one request through a fresh relay and read its reply line. A relay
+/// that closes first is explained by its exit status (69: no daemon).
+#[cfg(windows)]
+async fn exchange_over_relay(
+    relay: &crate::machine_target::Relay,
+    request: &Request,
+) -> Result<Response, CliError> {
+    let crate::machine_target::RelayConnection {
+        reader,
+        mut writer,
+        exit,
+    } = relay.open()?;
+    let json = serde_json::to_string(request)?;
+    // A write error means the relay already exited; its status says why.
+    let sent = async {
+        writer.write_all(json.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+        writer.flush().await
+    }
+    .await;
+    let mut line = String::new();
+    let read = match sent {
+        Ok(()) => BufReader::new(reader).read_line(&mut line).await,
+        Err(e) => Err(e),
+    };
+    drop(writer);
+    match read {
+        Ok(n) if n > 0 && !line.trim().is_empty() => Ok(serde_json::from_str(line.trim())?),
+        _ => Err(exit.failure().await),
     }
 }
 

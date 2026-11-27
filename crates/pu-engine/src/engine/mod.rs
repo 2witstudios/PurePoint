@@ -2,6 +2,8 @@ mod agent_lifecycle;
 mod attach_file;
 mod build_cache;
 mod channel;
+#[cfg(all(test, windows))]
+mod conpty_tests;
 mod definitions;
 mod fs_ops;
 mod helpers;
@@ -34,9 +36,9 @@ use pu_core::protocol::{AgentConfigInfo, GridCommand, PROTOCOL_VERSION, Request,
 use pu_core::types::{Manifest, format_launch_args};
 use tokio::sync::OnceCell;
 
-use crate::pty_manager::{
-    AgentHandle, NativePtyHost, descendants_from_tree, snapshot_process_tree,
-};
+use crate::pty_manager::{AgentHandle, NativePtyHost};
+#[cfg(unix)]
+use crate::pty_manager::{descendants_from_tree, snapshot_process_tree};
 
 /// Parameters for spawning an agent, extracted to avoid too many positional args.
 pub(super) struct SpawnParams {
@@ -170,6 +172,28 @@ fn agent_origin(name: &str, ac: &pu_core::types::AgentConfig) -> &'static str {
 
 /// Root-cwd executable hint using Spawn parsing and login PATH, without running it.
 /// A worktree-relative command or its arguments may still fail at launch.
+#[cfg(windows)]
+fn catalog_executable_available(
+    ac: &pu_core::types::AgentConfig,
+    id: &str,
+    cwd: &Path,
+    env: &[(String, String)],
+) -> bool {
+    let Ok((command, _)) = Engine::parse_agent_command(ac, id) else {
+        return false;
+    };
+    // PATHEXT-aware, so `claude.exe` and npm's `codex.cmd` shims both count.
+    let path = env
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+        .map(|(_, path)| path.as_str());
+    which::which_in(&command, path, cwd).is_ok()
+}
+
+/// Root-cwd executable hint using Spawn parsing and login PATH, without running it.
+/// A worktree-relative command or its arguments may still fail at launch.
+#[cfg(unix)]
 fn catalog_executable_available(
     ac: &pu_core::types::AgentConfig,
     id: &str,
@@ -213,7 +237,7 @@ impl Engine {
             native_sources: Arc::default(),
             project_registry_path: None,
             project_registry_updates: Arc::new(Mutex::new(())),
-            home: std::env::var_os("HOME").map(std::path::PathBuf::from),
+            home: pu_core::paths::home_dir().ok(),
             start_time: Instant::now(),
             pty_host: NativePtyHost::new(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -283,6 +307,18 @@ impl Engine {
         });
     }
 
+    /// Windows has no login shell to replay: the daemon's environment merged
+    /// with the current registry environment (WINAPP-007).
+    #[cfg(windows)]
+    async fn resolve_login_env() -> Vec<(String, String)> {
+        tokio::task::spawn_blocking(|| {
+            crate::win_env::login_env(crate::win_env::daemon_env(), &crate::win_env::LiveRegistry)
+        })
+        .await
+        .unwrap_or_else(|_| crate::win_env::daemon_env())
+    }
+
+    #[cfg(unix)]
     async fn resolve_login_env() -> Vec<(String, String)> {
         let shell = crate::os::login_shell();
         // Every spawn and resume waits on this one probe (it fills a OnceCell),
@@ -322,6 +358,50 @@ impl Engine {
             .unwrap_or_default()
     }
 
+    /// Drain every active session and stop its whole tree with the `kill`
+    /// stop sequence (keystrokes, `ClosePseudoConsole`, grace, job kill).
+    /// Used by shutdown and the managed-mode parent-died path, since
+    /// `process::exit(0)` skips `Drop`.
+    ///
+    /// Only processes still running when drained are recorded as killed by
+    /// shutdown (and so left resumable); an agent that had already exited keeps
+    /// its natural exit.
+    #[cfg(windows)]
+    pub async fn kill_all_sessions(&self, grace: Duration) {
+        let handles: Vec<AgentHandle> = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.drain().map(|(_, h)| h).collect()
+        };
+        if handles.is_empty() {
+            return;
+        }
+        // Mark only the agents still running before their stop starts, as on
+        // Unix, so the exit watcher always sees the mark.
+        {
+            let mut killed = self
+                .shutdown_killed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            killed.extend(
+                handles
+                    .iter()
+                    .filter(|h| h.exit_rx.borrow().is_none())
+                    .map(|h| h.pid),
+            );
+        }
+        // Every agent runs the same stop sequence as `kill`, concurrently, so
+        // the whole drain takes one grace period.
+        let mut stops = tokio::task::JoinSet::new();
+        for handle in handles {
+            stops.spawn(async move {
+                if let Err(e) = NativePtyHost::new().kill(&handle, grace).await {
+                    tracing::debug!(pid = handle.pid, "kill failed: {e}");
+                }
+            });
+        }
+        while stops.join_next().await.is_some() {}
+    }
+
     /// Drain every active session and kill its process group (SIGTERM, brief wait, SIGKILL).
     /// Used by the managed-mode parent-died path so a force-quit of the macOS app reaps
     /// agents and their grandchildren (vitest/node workers, dev servers) before the
@@ -330,6 +410,7 @@ impl Engine {
     /// Only processes still running when drained are recorded as killed by
     /// shutdown (and so left resumable); an agent that had already exited keeps
     /// its natural exit.
+    #[cfg(unix)]
     pub async fn kill_all_sessions(&self, grace: Duration) {
         let handles: Vec<AgentHandle> = {
             let mut sessions = self.sessions.lock().await;
@@ -908,7 +989,7 @@ impl Engine {
             let content = match serde_json::to_string_pretty(&m) {
                 Ok(c) => c + "\n",
                 Err(e) => {
-                    let _ = std::fs::remove_file(&manifest_path);
+                    let _ = pu_core::fs_retry::remove_file(&manifest_path);
                     return Response::Error {
                         code: "IO_ERROR".into(),
                         message: format!("failed to serialize manifest: {e}"),
@@ -920,7 +1001,7 @@ impl Engine {
                 .write_all(content.as_bytes())
                 .and_then(|_| file.sync_all())
             {
-                let _ = std::fs::remove_file(&manifest_path);
+                let _ = pu_core::fs_retry::remove_file(&manifest_path);
                 return Response::Error {
                     code: "IO_ERROR".into(),
                     message: format!("failed to write manifest: {e}"),
@@ -1025,6 +1106,17 @@ impl Engine {
 }
 
 impl Drop for Engine {
+    #[cfg(windows)]
+    fn drop(&mut self) {
+        // Terminate each agent's job so descendants do not outlive the daemon.
+        if let Ok(sessions) = self.sessions.try_lock() {
+            for handle in sessions.values() {
+                self.pty_host.kill_now(handle);
+            }
+        }
+    }
+
+    #[cfg(unix)]
     fn drop(&mut self) {
         // Kill the whole process group of each child (PID == PGID via setsid at spawn)
         // so descendants like vitest/node workers don't orphan to launchd.
@@ -1042,6 +1134,7 @@ impl Drop for Engine {
 mod tests {
     use super::*;
     use crate::test_helpers::init_and_spawn;
+    use pu_core::canon::CanonicalPath;
     use pu_core::protocol::{Request, Response};
     use tempfile::TempDir;
 
@@ -1050,7 +1143,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp
             .path()
-            .canonicalize()
+            .canonical()
             .unwrap()
             .to_string_lossy()
             .into_owned();
@@ -1627,9 +1720,11 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// These probe /bin executables and Unix mode bits.
+#[cfg(all(test, unix))]
 mod workspace_catalog_tests {
     use super::*;
+    use pu_core::canon::CanonicalPath;
     use std::os::unix::fs::PermissionsExt;
 
     fn agent(command: &str) -> pu_core::types::AgentConfig {
@@ -1676,7 +1771,7 @@ mod workspace_catalog_tests {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
         std::fs::create_dir(&project).unwrap();
-        let project = project.canonicalize().unwrap();
+        let project = project.canonical().unwrap();
         for args in [
             vec!["init", "-q"],
             vec![
@@ -1822,5 +1917,101 @@ mod workspace_catalog_tests {
             root.path(),
             &env
         ));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_catalog_tests {
+    use super::*;
+
+    fn agent(command: &str) -> pu_core::types::AgentConfig {
+        pu_core::types::AgentConfig {
+            name: "Agent".into(),
+            command: command.into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: None,
+            machine_launch_args: None,
+            project_command: None,
+            machine_command: None,
+        }
+    }
+
+    #[test]
+    fn given_cmd_only_agent_in_path_with_spaces_should_be_available() {
+        let root = tempfile::tempdir().unwrap();
+        let tools = root.path().join("Program Files").join("npm tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join("codex.cmd"), "@echo off\r\n").unwrap();
+        let elsewhere = root.path().join("empty dir");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let path = pu_core::env_path::join_unique([elsewhere, tools.clone()]);
+        let env = [("PATH".to_string(), path)];
+
+        assert!(catalog_executable_available(
+            &agent("codex --flag"),
+            "codex",
+            root.path(),
+            &env
+        ));
+        assert!(!catalog_executable_available(
+            &agent("claude"),
+            "claude",
+            root.path(),
+            &env
+        ));
+        // A root-relative command resolves against the cwd, PATHEXT included.
+        std::fs::create_dir(root.path().join("bin")).unwrap();
+        std::fs::write(root.path().join("bin").join("worker.bat"), "@echo off\r\n").unwrap();
+        assert!(catalog_executable_available(
+            &agent(r".\bin\worker"),
+            "custom",
+            root.path(),
+            &[]
+        ));
+        assert!(!catalog_executable_available(
+            &agent(""),
+            "custom",
+            root.path(),
+            &env
+        ));
+    }
+
+    #[tokio::test]
+    async fn given_windows_agent_env_should_find_cmd_and_ping_through_its_path() {
+        let env = Engine::new().agent_env().await;
+        let path: Vec<_> = env
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("PATH"))
+            .collect();
+        assert_eq!(path.len(), 1, "{path:?}");
+        let parts: Vec<_> = std::env::split_paths(&path[0].1).collect();
+        assert!(parts.iter().all(|p| !p.as_os_str().is_empty()), "{parts:?}");
+        assert_eq!(std::env::join_paths(&parts).unwrap(), path[0].1.as_str());
+        for tool in ["cmd", "ping"] {
+            assert!(
+                which::which_in(tool, Some(&path[0].1), ".").is_ok(),
+                "{tool} not found in {}",
+                path[0].1
+            );
+        }
+        assert!(!env.iter().any(|(k, _)| k.eq_ignore_ascii_case("NO_COLOR")));
+    }
+
+    #[test]
+    fn given_shell_sentinel_should_resolve_windows_shell() {
+        let (command, args) =
+            Engine::parse_agent_command(&agent("shell -NoLogo"), "terminal").unwrap();
+        assert_eq!(command, crate::os::login_shell());
+        assert_eq!(args, ["-NoLogo"]);
+        let name = std::path::Path::new(&command)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_lowercase();
+        assert!(
+            ["pwsh.exe", "powershell.exe", "cmd.exe"].contains(&name.as_str()),
+            "{command}"
+        );
     }
 }

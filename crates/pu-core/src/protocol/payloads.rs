@@ -4,14 +4,17 @@ use serde::{Deserialize, Serialize};
 use crate::types::AgentStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SwarmRosterEntryPayload {
     pub agent_def: String,
     pub role: String,
     #[serde(default = "crate::serde_defaults::default_quantity")]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
     pub quantity: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TemplateInfo {
     pub name: String,
     pub description: String,
@@ -23,6 +26,7 @@ pub struct TemplateInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AgentDefInfo {
     pub name: String,
     pub agent_type: String,
@@ -37,6 +41,7 @@ pub struct AgentDefInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SwarmDefInfo {
     pub name: String,
     pub worktree_count: u32,
@@ -47,6 +52,7 @@ pub struct SwarmDefInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ScheduleInfo {
     pub name: String,
     pub enabled: bool,
@@ -65,6 +71,7 @@ pub struct ScheduleInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ScheduleTriggerPayload {
     AgentDef {
@@ -73,16 +80,19 @@ pub enum ScheduleTriggerPayload {
     SwarmDef {
         name: String,
         #[serde(default)]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         vars: std::collections::HashMap<String, String>,
     },
     InlinePrompt {
         prompt: String,
         #[serde(default = "crate::serde_defaults::default_agent_type")]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         agent: String,
     },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TriggerActionPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inject: Option<String>,
@@ -93,6 +103,7 @@ pub struct TriggerActionPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GatePayload {
     pub run: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,6 +111,7 @@ pub struct GatePayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TriggerInfo {
     pub name: String,
     pub description: Option<String>,
@@ -170,6 +182,7 @@ impl From<GatePayload> for crate::trigger_def::GateDef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub struct AgentStatusReport {
     /// Optional passive observation; absence means unknown, never idle.
@@ -185,8 +198,10 @@ pub struct AgentStatusReport {
     pub worktree_id: Option<String>,
     pub started_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
     pub prompt: Option<String>,
     #[serde(default)]
     pub suspended: bool,
@@ -201,6 +216,7 @@ pub struct AgentStatusReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub struct WorktreeDiffEntry {
     pub worktree_id: String,
@@ -216,6 +232,7 @@ pub struct WorktreeDiffEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AgentConfigInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -249,6 +266,7 @@ pub struct AgentConfigInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub struct AgentPulseEntry {
     pub id: String,
@@ -262,6 +280,7 @@ pub struct AgentPulseEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub struct WorktreePulseEntry {
     pub worktree_id: String,
@@ -278,6 +297,7 @@ pub struct WorktreePulseEntry {
 
 /// One directory entry in an `FsListResult`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct FsEntry {
     pub name: String,
     pub path: String,

@@ -4,6 +4,7 @@ import { readFile, mkdir, lstat } from "node:fs/promises";
 import { AuthStorage } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/auth-storage.js";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { privatePath } from "./runtime-state.js";
+import { assertNotWritableByOthers } from "./acl.js";
 import { ProviderSetup } from "./provider.js";
 // Pi may create this directory with the process umask. Read/traverse access
 // does not expose private auth.json; write access could replace credentials.
@@ -11,9 +12,11 @@ async function nativeDirectory(dir) {
   try {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const s = await lstat(dir);
-    if (
-      s.isSymbolicLink() ||
-      !s.isDirectory() ||
+    if (s.isSymbolicLink() || !s.isDirectory())
+      throw new Error("Unsafe native directory.");
+    // Windows: no mode bits or uids; no other principal may write (acl.js).
+    if (process.platform === "win32") await assertNotWritableByOthers(dir);
+    else if (
       (s.mode & 0o022) !== 0 ||
       (typeof process.getuid === "function" && s.uid !== process.getuid())
     )

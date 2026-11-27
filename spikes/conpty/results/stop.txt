@@ -1,0 +1,51 @@
+== stop claude via ctrlc-write
+  ready=true phase=input_ready job_active=5 root_pid=14108
+  RESULT claude ctrlc-write: root exited within 2s = false (code None, 2.0011372s); job ActiveProcesses after = 1
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\claude-stop-ctrlc-write.txt
+== stop codex via ctrlc-write
+  ready=true phase=busy job_active=2 root_pid=15396
+  RESULT codex ctrlc-write: root exited within 2s = true (code Some(0), 200.5731ms); job ActiveProcesses after = 0
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\codex-stop-ctrlc-write.txt
+== stop codex-exe via ctrlc-write
+  ready=true phase=busy job_active=1 root_pid=14652
+  RESULT codex-exe ctrlc-write: root exited within 2s = true (code Some(0), 159.413ms); job ActiveProcesses after = 0
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\codex-exe-stop-ctrlc-write.txt
+== stop claude via ctrlc-write-x2
+  ready=true phase=input_ready job_active=1 root_pid=4504
+  RESULT claude ctrlc-write-x2: root exited within 2s = true (code Some(0), 682.0629ms); job ActiveProcesses after = 0
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\claude-stop-ctrlc-write-x2.txt
+== stop codex via ctrlc-write-x2
+  ready=true phase=busy job_active=2 root_pid=9676
+  RESULT codex ctrlc-write-x2: root exited within 2s = false (code None, 2.3052663s); job ActiveProcesses after = 2
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\codex-stop-ctrlc-write-x2.txt
+== stop codex-exe via ctrlc-write-x2
+  ready=true phase=busy job_active=1 root_pid=2828
+  RESULT codex-exe ctrlc-write-x2: root exited within 2s = true (code Some(3221225786), 314.6628ms); job ActiveProcesses after = 0
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\codex-exe-stop-ctrlc-write-x2.txt
+== stop claude via generate-ctrl-event
+  ready=true phase=input_ready job_active=6 root_pid=7460
+  helper: AttachConsole=1 SetConsoleCtrlHandler=1 GenerateConsoleCtrlEvent=1 lastError=187
+  RESULT claude generate-ctrl-event: root exited within 2s = true (code Some(0), 618.5006ms); job ActiveProcesses after = 0
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\claude-stop-generate-ctrl-event.txt
+== stop codex via generate-ctrl-event
+  ready=true phase=busy job_active=2 root_pid=5996
+  helper: AttachConsole=1 SetConsoleCtrlHandler=1 GenerateConsoleCtrlEvent=1 lastError=187
+  RESULT codex generate-ctrl-event: root exited within 2s = false (code None, 2.0231031s); job ActiveProcesses after = 1
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\codex-stop-generate-ctrl-event.txt
+== stop codex-exe via generate-ctrl-event
+  ready=true phase=busy job_active=1 root_pid=5248
+  helper: AttachConsole=1 SetConsoleCtrlHandler=1 GenerateConsoleCtrlEvent=1 lastError=187
+  RESULT codex-exe generate-ctrl-event: root exited within 2s = true (code Some(3221225786), 43.7867ms); job ActiveProcesses after = 0
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\codex-exe-stop-generate-ctrl-event.txt
+== stop claude via close-pseudoconsole
+  ready=true phase=input_ready job_active=1 root_pid=2992
+  ClosePseudoConsole returned after 18.7µs
+  RESULT claude close-pseudoconsole: root exited within 2s = true (code Some(129), 673.0108ms); job ActiveProcesses after = 0
+== stop codex via close-pseudoconsole
+  ready=true phase=busy job_active=2 root_pid=15396
+  ClosePseudoConsole returned after 368.4µs
+  RESULT codex close-pseudoconsole: root exited within 2s = true (code Some(3221225786), 24.1783ms); job ActiveProcesses after = 0
+== stop codex-exe via close-pseudoconsole
+  ready=true phase=busy job_active=1 root_pid=3424
+  ClosePseudoConsole returned after 13.2µs
+  RESULT codex-exe close-pseudoconsole: root exited within 2s = true (code Some(3221225786), 33.5296ms); job ActiveProcesses after = 0

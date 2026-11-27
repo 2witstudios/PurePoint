@@ -1,0 +1,104 @@
+# Its own workspace (DEC-7): the Tauri dependency tree stays out of the root
+# workspace's Cargo.lock and cargo-deny scan. The root Cargo.toml excludes it.
+[workspace]
+
+[package]
+name = "purepoint-windows"
+version = "0.1.0"
+description = "PurePoint desktop app for Windows"
+edition = "2024"
+license = "MIT"
+# Matches the root rust-toolchain.toml. Edition 2024 resolves dependencies
+# MSRV-aware (resolver 3), so Cargo.lock picks crate versions that build on it.
+rust-version = "1.89"
+publish = false
+
+[lib]
+name = "purepoint_windows_lib"
+
+[build-dependencies]
+# Tauri 2.12 raised its MSRV to 1.90; stay on 2.11 until the root toolchain moves.
+tauri-build = { version = "~2.6", features = [] }
+
+[dependencies]
+tauri = { version = "~2.11", features = [] }
+pu-core = { path = "../../../crates/pu-core" }
+# Daemon endpoints: the private named pipe and its server check (WIN-5.3).
+pu-transport = { path = "../../../crates/pu-transport" }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `git_exec` and `fs_read` replies carry bytes as base64 (WIN-8.1).
+base64 = "0.22"
+# Resolves `git` and `gh` on PATH (WIN-8.1).
+which = "8"
+# Project watchers (WIN-5.6); the same major as pu-engine, pinned to the root lock.
+notify = "8.2"
+# Attach `client_id`s are `win:<uuid>` (WIN-5.4); the version Tauri already locks.
+uuid = { version = "1", features = ["v4"] }
+# Ctrl+click on a terminal link opens it outside the app (WIN-7.3).
+tauri-plugin-opener = "~2.5"
+# Open Project's folder picker (WIN-8.15, REQ-WINAPP-074); 2.8 needs Rust 1.90.
+tauri-plugin-dialog = "~2.7"
+# Agent signal toasts (WIN-7.7, REQ-WINAPP-078); 2.4 builds on Tauri 2.11 and Rust 1.89.
+tauri-plugin-notification = "~2.4"
+# In-place updates (WIN-10.3, REQ-WINAPP-076). 2.12 is the last release on Tauri 2.11 / Rust 1.89
+# (2.13 needs Tauri 2.12 and Rust 1.90). NSIS updates need neither `zip` nor rustls: the
+# installer is downloaded as-is and Windows TLS (schannel) fetches the feed.
+tauri-plugin-updater = { version = "~2.12", default-features = false, features = ["native-tls"] }
+# Point Guard runtime seal: SHA-256 of every bundled file (WIN-9.3); the version pu-core uses.
+sha2 = "0.11"
+# Point Guard chat (WIN-9.4): the bridge authenticates the v1 WebSocket by request headers a
+# page cannot set, so the backend holds the socket. Plain `ws://` to loopback only: no TLS.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# Pairing secret in Credential Manager (WIN-9.7, REQ-WINAPP-075). MIT OR Apache-2.0; 3.x keeps
+# the plain `Entry` API on the Rust 1.89 toolchain (4.x moved to keyring-core stores).
+keyring = { version = "3.6", features = ["windows-native"] }
+# Pairing addresses (WIN-9.7); the version Tauri already locks.
+url = "2.5"
+# The update's publish date as RFC 3339 (WIN-10.3); the version the updater plugin locks.
+time = { version = "0.3", features = ["formatting"] }
+
+# Same versions Tauri 2.11's WebView2 runtime links, so the COM types match.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows-core = "0.61"
+# The taskbar overlay badge (WIN-7.7): `ITaskbarList3` is a COM interface, which windows-sys
+# does not wrap. The version Tauri and webview2-com already lock.
+windows = { version = "0.61", features = ["Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# Daemon lifecycle: find, wait on and stop the running `pu-engine.exe` (WIN-5.3).
+# Installer (WIN-10.1): the user PATH in HKCU\Environment and the WM_SETTINGCHANGE broadcast.
+# Window chrome and placement (WIN-7.1): the caption sink, subclassing, regions and monitors.
+# Point Guard (WIN-9.3): adapter addresses for the tailnet check, the Quit prompt.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_System_Environment",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+# Mock runtime for the updater tests (WIN-10.3): the plugin is built only from an app handle.
+tauri = { version = "~2.11", features = ["test"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# The Point Guard seal hashes the whole ~230 MB runtime before each launch (WIN-9.3); unoptimized
+# SHA-256 takes minutes, so debug builds and tests optimize it.
+[profile.dev.package.sha2]
+opt-level = 3

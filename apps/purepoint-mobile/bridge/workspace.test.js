@@ -12,9 +12,11 @@ import { workspaceConnection, projectMetadata } from "./workspace.js";
 import { terminalConnection } from "./terminals.js";
 import { openTrustStore } from "./trust.js";
 import { serve } from "./network.js";
+import { daemonEndpoint } from "./pipe-name.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 
 async function fixture(t) {
-  const home = await mkdtemp(path.join(os.tmpdir(), "mw-"));
+  const home = await privateTemp("mw-");
   const events = new EventEmitter();
   const sockets = new Set(),
     requests = [],
@@ -155,7 +157,8 @@ async function fixture(t) {
     });
   });
   await new Promise((resolve) =>
-    server.listen(path.join(home, "daemon.sock"), resolve),
+    // Windows: the pipe the bridge derives from the socket path.
+    server.listen(daemonEndpoint(path.join(home, "daemon.sock")), resolve),
   );
   t.after(async () => {
     for (const s of sockets) s.destroy();
@@ -743,6 +746,8 @@ test("real authenticated TLS WS old grants deny management, off leaks no fleet, 
   );
   assert.equal(f.requests.filter((r) => r.type === "spawn").length, 2);
   assert.equal((await c.request({ op: "sync" })).data.chatReady, true);
+  // Windows cannot remove a held lock file: release it before the fixture cleanup.
+  await trust.close();
 });
 
 test("opaque bounded config keys preserve dotted, spaced and Unicode agent types in catalog, presets and fixed launches", async (t) => {

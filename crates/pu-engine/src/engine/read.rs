@@ -30,10 +30,15 @@ impl Engine {
             .unwrap()
             .get(&agent_id)
             .map(|state| state.launch_id());
-        let Some(discovery) = self
-            .native_sources
-            .codex_reader(launch.as_deref(), pid, &cwd)
-        else {
+        #[cfg(unix)]
+        let key = (pid, cwd.clone());
+        #[cfg(windows)]
+        let key = (
+            pid,
+            cwd.clone(),
+            crate::read_source::codex_home(&self.agent_env().await),
+        );
+        let Some(discovery) = self.native_sources.codex_reader(launch.as_deref(), key) else {
             tracing::warn!(
                 agent_id,
                 "native identity discovery capacity unavailable; exact ID required"
@@ -232,7 +237,13 @@ impl Engine {
                         .unwrap_or_else(|e| Err(SourceError::Io(std::io::Error::other(e))))
                 } else if runtime == Runtime::Codex {
                     match &live {
+                        #[cfg(unix)]
                         Some((_, _, pid, ..)) => discover_codex(*pid, &cwd).await,
+                        #[cfg(windows)]
+                        Some((_, _, pid, ..)) => {
+                            let home = crate::read_source::codex_home(&env);
+                            discover_codex(*pid, &cwd, home).await
+                        }
                         None => Err(SourceError::IdentityUnavailable),
                     }
                 } else {
@@ -334,13 +345,17 @@ fn read_error(error: SourceError) -> Response {
 mod tests {
     use super::super::Engine;
     use crate::read_source::Binding;
+    use pu_core::canon::CanonicalPath;
     use pu_core::protocol::{Request, Response};
 
+    // Ownership by held descriptor (`exec 3<`); the Windows counterpart below
+    // proves the same binding with creation-time ownership.
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn given_two_codex_processes_in_one_directory_should_bind_their_owned_rollouts() {
         // given: actual PTYs, descriptors and native files; no model/network execution
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
+        let root = temp.path().canonical().unwrap();
         let root_s = root.to_str().unwrap();
         let engine = Engine::new();
         engine
@@ -425,13 +440,118 @@ sleep 30
         }
     }
 
+    /// Windows: two Codex stand-ins in one directory, each writing a dated
+    /// rollout under the `CODEX_HOME` of the agent environment, are bound to
+    /// their own rollouts by the background binder and read through `Read`.
+    /// Ownership there comes from creation time, so each launch writes its
+    /// rollout before the next one starts (concurrent startup in one cwd is
+    /// ambiguous by design, WINAPP-051).
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn given_two_codex_processes_in_one_directory_should_bind_their_owned_rollouts() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonical().unwrap();
+        let root_s = root.to_str().unwrap();
+        let codex_home = root.join("codex-home");
+        let engine = Engine::new();
+        let mut env = crate::win_env::daemon_env();
+        env.retain(|(k, _)| !k.eq_ignore_ascii_case("CODEX_HOME"));
+        env.push((
+            "CODEX_HOME".into(),
+            codex_home.to_string_lossy().into_owned(),
+        ));
+        engine.login_env.set(env).unwrap();
+        engine
+            .handle_request(Request::Init {
+                project_root: root_s.into(),
+            })
+            .await;
+        let script = root.join("worker.ps1");
+        std::fs::write(
+            &script,
+            r#"$dir = Join-Path $env:CODEX_HOME ("sessions\{0:yyyy}\{0:MM}\{0:dd}" -f (Get-Date))
+New-Item -ItemType Directory -Force $dir | Out-Null
+$cwd = [System.IO.Directory]::GetCurrentDirectory()
+$meta = @{ type = 'session_meta'; payload = @{ id = $env:PU_AGENT_ID; source = 'cli'; cwd = $cwd } } | ConvertTo-Json -Compress -Depth 5
+$text = @{ type = 'output_text'; text = $env:PU_AGENT_ID }
+$item = @{ type = 'response_item'; payload = @{ type = 'message'; role = 'assistant'; content = @($text) } } | ConvertTo-Json -Compress -Depth 6
+[System.IO.File]::WriteAllText((Join-Path $dir "rollout-$env:PU_AGENT_ID.jsonl"), "$meta`n$item`n")
+Start-Sleep 60
+"#,
+        )
+        .unwrap();
+        let command = format!("pwsh -NoProfile -NoLogo -File {}", script.display());
+        std::fs::write(
+            root.join(".pu/config.yaml"),
+            format!(
+                "agents:\n  codex:\n    name: Codex\n    command: {}\n    interactive: true\n    launchArgs: []\n",
+                serde_json::to_string(&command).unwrap()
+            ),
+        )
+        .unwrap();
+        let mut agents = Vec::new();
+        for _ in 0..2 {
+            let req = serde_json::from_value(serde_json::json!({"type":"spawn","project_root":root_s,"prompt":"","agent":"codex","root":true,"no_trigger":true})).unwrap();
+            let id = match engine.handle_request(req).await {
+                Response::SpawnResult { agent_id, .. } => agent_id,
+                other => panic!("{other:?}"),
+            };
+            // Wait for the background binder itself (Read has its own
+            // discovery fallback, which would hide a broken watcher).
+            let bound = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                loop {
+                    let manifest = pu_core::manifest::read_manifest(&root).unwrap();
+                    if manifest
+                        .agents
+                        .get(&id)
+                        .is_some_and(|agent| agent.session_id.as_deref() == Some(id.as_str()))
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            })
+            .await;
+            agents.push(id);
+            if bound.is_err() {
+                engine.kill_agents(&agents).await;
+                panic!("Automatic owned-session binding must finish without Read");
+            }
+        }
+        let mut reports = Vec::new();
+        for id in &agents {
+            match engine
+                .handle_request(Request::Read {
+                    project_root: root_s.into(),
+                    agent_id: id.clone(),
+                    limit: 50,
+                    since: None,
+                    session_id: None,
+                })
+                .await
+            {
+                Response::ReadResult(report) => reports.push(report),
+                other => {
+                    engine.kill_agents(&agents).await;
+                    panic!("{other:?}");
+                }
+            }
+        }
+        engine.kill_agents(&agents).await;
+        assert_ne!(reports[0].session_id, reports[1].session_id);
+        for (report, id) in reports.iter().zip(&agents) {
+            assert_eq!(&report.session_id, id);
+            assert_eq!(&report.page.records[0].text, id);
+        }
+    }
+
     #[tokio::test]
     async fn given_suspended_agent_should_read_its_bound_transcript_without_a_live_terminal() {
         // given
         let temp = tempfile::tempdir().unwrap();
         let root = temp
             .path()
-            .canonicalize()
+            .canonical()
             .unwrap()
             .to_string_lossy()
             .into_owned();

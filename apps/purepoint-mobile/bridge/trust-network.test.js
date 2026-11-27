@@ -9,6 +9,7 @@ import WebSocket from "ws";
 import { serve } from "./network.js";
 import { openTrustStore } from "./trust.js";
 import { Controller } from "./controller.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 function connect(url, credential, clientId) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, {
@@ -55,7 +56,7 @@ function request(base, route, body, credential) {
   });
 }
 test("remote credentials bind ownership, reject admin rights and close revoked sockets without disturbing others", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-network-"));
+  const directory = await privateTemp("pg-network-");
   const trust = await openTrustStore({ directory });
   const c = new EventEmitter();
   let dispatched = 0;
@@ -177,7 +178,7 @@ const tiers = {
   manage: ["control", true],
 };
 async function chatHarness(fn) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-chat-grant-"));
+  const directory = await privateTemp("pg-chat-grant-");
   const trust = await openTrustStore({ directory });
   const c = new EventEmitter();
   const dispatched = [];

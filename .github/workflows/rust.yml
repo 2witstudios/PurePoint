@@ -12,6 +12,8 @@ on:
       - "clippy.toml"
       - "deny.toml"
       - ".github/workflows/rust.yml"
+      - "scripts/windows-smoke.ps1"
+      - "docs/reference/cli-commands-map.csv"
   pull_request:
     paths: *rust-paths
 
@@ -59,6 +61,40 @@ jobs:
         run: printf 'CARGO_TARGET_DIR=%s/rust-ci-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo test --all-targets
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # Every workspace crate passes natively on Windows (WIN-3.12, WIN-4.5).
+      WINDOWS_CRATES: --workspace
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.89"
+          components: clippy
+      - name: Isolate Rust output
+        run: printf 'CARGO_TARGET_DIR=%s/rust-ci-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: windows
+      - run: cargo clippy --all-targets $WINDOWS_CRATES
+      - run: cargo test --all-targets $WINDOWS_CRATES
+      - run: cargo build -p pu-cli -p pu-engine
+      # End-to-end CLI run against a real daemon under a temp HOME (WIN-4.6).
+      - name: CLI smoke run
+        shell: pwsh
+        run: >-
+          ./scripts/windows-smoke.ps1 -Agent terminal
+          -PuPath "$env:CARGO_TARGET_DIR/debug/pu.exe"
+          -EnginePath "$env:CARGO_TARGET_DIR/debug/pu-engine.exe"
 
   linux-musl:
     name: Static Linux build

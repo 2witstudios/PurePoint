@@ -4,8 +4,8 @@
 
 use std::path::Path;
 
+use pu_transport::Stream;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::net::UnixStream;
 
 use crate::error::CliError;
 
@@ -24,8 +24,8 @@ pub async fn run(socket: &Path) -> Result<(), CliError> {
     relay(stream, tokio::io::stdin(), tokio::io::stdout()).await
 }
 
-async fn connect(socket: &Path) -> Result<UnixStream, CliError> {
-    UnixStream::connect(socket).await.map_err(|e| {
+async fn connect(socket: &Path) -> Result<Stream, CliError> {
+    crate::client::connect(socket).await.map_err(|e| {
         CliError::Other(format!(
             "cannot connect to the daemon at {} ({e}); start it with `pu daemon start`",
             socket.display()
@@ -35,8 +35,9 @@ async fn connect(socket: &Path) -> Result<UnixStream, CliError> {
 
 /// Copy `input` to the daemon and the daemon to `output` until the daemon
 /// closes. Input EOF half-closes the socket so the daemon still finishes its
-/// replies; the daemon closing ends the relay even while input stays open.
-pub async fn relay<R, W>(stream: UnixStream, input: R, output: W) -> Result<(), CliError>
+/// replies (a named pipe has no half-close: the daemon just sees no more
+/// bytes); the daemon closing ends the relay even while input stays open.
+pub async fn relay<R, W>(stream: Stream, input: R, output: W) -> Result<(), CliError>
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -62,18 +63,25 @@ where
     Ok(())
 }
 
+// These relay through fake daemons on the platform transport.
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pu_transport::{Endpoint, Listener};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::UnixListener;
 
-    /// Echoes everything it reads, then closes once its peer half-closes.
-    fn echo_server(listener: UnixListener) -> tokio::task::JoinHandle<()> {
+    fn listen(socket: &Path) -> Listener {
+        Listener::bind(&Endpoint::for_socket(socket).unwrap()).unwrap()
+    }
+
+    /// Echoes `len` bytes, then closes (a pipe cannot signal input EOF).
+    fn echo_server(mut listener: Listener, len: u64) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let (mut reader, mut writer) = stream.into_split();
-            tokio::io::copy(&mut reader, &mut writer).await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            tokio::io::copy(&mut reader.take(len), &mut writer)
+                .await
+                .unwrap();
             writer.shutdown().await.unwrap();
         })
     }
@@ -83,8 +91,8 @@ mod tests {
         // given
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("d.sock");
-        let server = echo_server(UnixListener::bind(&socket).unwrap());
         let payload: Vec<u8> = (0..=255u8).cycle().take(256 * 1024).collect();
+        let server = echo_server(listen(&socket), payload.len() as u64);
         let (mut stdin_tx, stdin_rx) = tokio::io::duplex(4096);
         let (stdout_tx, mut stdout_rx) = tokio::io::duplex(4096);
         let sent = payload.clone();
@@ -107,12 +115,14 @@ mod tests {
         server.await.unwrap();
     }
 
+    // Needs a half-close, which named pipes do not have.
+    #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn given_stdin_eof_should_half_close_and_keep_draining_replies() {
         // given: a daemon that replies only after its peer half-closes
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("d.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
+        let mut listener = listen(&socket);
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = Vec::new();
@@ -138,7 +148,7 @@ mod tests {
         // given: a daemon that answers one line and hangs up
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("d.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
+        let mut listener = listen(&socket);
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             stream.write_all(b"bye\n").await.unwrap();
@@ -179,7 +189,8 @@ mod tests {
                 assert!(message.contains(&socket.display().to_string()), "{message}");
                 assert!(message.contains("pu daemon start"), "{message}");
             }
-            other => panic!("expected connect failure, got {other:?}"),
+            Err(other) => panic!("expected a connect failure message, got {other:?}"),
+            Ok(_) => panic!("expected connect failure, got a connection"),
         }
     }
 }

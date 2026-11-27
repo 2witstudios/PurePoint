@@ -708,6 +708,7 @@ mod resume_command_tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_wrapped_agents_should_run_wrapper_setup_on_resume() {
         // given: setup performed by a wrapper, then an executable supplied by config
@@ -780,6 +781,92 @@ mod resume_command_tests {
             );
         }
     }
+    /// Windows: the same resume contract with a pwsh wrapper and agent.
+    #[cfg(windows)]
+    #[test]
+    fn given_wrapped_agents_should_run_wrapper_setup_on_resume() {
+        // given: setup performed by a wrapper, then an executable supplied by config
+        let dir = tempfile::tempdir().unwrap();
+        let wrapper = dir.path().join("agent-launch.ps1");
+        std::fs::write(
+            &wrapper,
+            "Write-Output wrapper-ready\n$agent, $rest = $args\n& $agent @rest\nexit $LASTEXITCODE\n",
+        )
+        .unwrap();
+        let agent = dir.path().join("agent.ps1");
+        std::fs::write(&agent, "$args | ForEach-Object { $_ }\n").unwrap();
+        let engine = Engine::new();
+        for (agent_type, session_id, resume_args) in [
+            ("claude", Some("sess-123"), vec!["--resume", "sess-123"]),
+            (
+                "codex",
+                Some("sess-123"),
+                vec!["--no-daemon", "resume", "sess-123"],
+            ),
+            (
+                "opencode",
+                Some("ses_exact"),
+                vec!["--session", "ses_exact"],
+            ),
+        ] {
+            let cfg = pu_core::types::AgentConfig {
+                name: agent_type.into(),
+                command: format!(
+                    "pwsh -NoProfile -File {} pwsh -NoProfile -File {} --configured shared",
+                    wrapper.display(),
+                    agent.display()
+                ),
+                prompt_flag: None,
+                interactive: true,
+                launch_args: Some(vec!["--first".into(), "shared".into()]),
+                machine_launch_args: None,
+                project_command: None,
+                machine_command: None,
+            };
+
+            // when
+            let (command, args, sid) = engine
+                .build_resume_command(agent_type, &cfg, session_id)
+                .unwrap();
+
+            // then: config prefix and launch options precede the resume arguments
+            assert_eq!(command, "pwsh", "{agent_type}");
+            let mut expected_args = vec![
+                "-NoProfile".to_string(),
+                "-File".into(),
+                wrapper.to_string_lossy().into_owned(),
+                "pwsh".into(),
+                "-NoProfile".into(),
+                "-File".into(),
+                agent.to_string_lossy().into_owned(),
+                "--configured".into(),
+                "shared".into(),
+                "--first".into(),
+                "shared".into(),
+            ];
+            expected_args.extend(resume_args.iter().map(|arg| arg.to_string()));
+            assert_eq!(args, expected_args, "{agent_type}");
+            assert_eq!(sid.as_deref(), session_id, "{agent_type}");
+            let output = std::process::Command::new(command)
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{agent_type}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+                format!(
+                    "wrapper-ready\n--configured\nshared\n--first\nshared\n{}\n",
+                    resume_args.join("\n")
+                ),
+                "{agent_type}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -803,10 +890,12 @@ mod bare_launch_resume_tests {
                 project_root: pr.clone(),
             })
             .await;
-        // `-i` stands in for any configured launch arg (project or machine).
+        // `LAUNCH_ARG` stands in for any configured launch arg (project or machine).
         std::fs::write(
             pu_core::paths::config_path(&root),
-            "agents:\n  terminal:\n    name: terminal\n    command: shell\n    launchArgs: -i\n",
+            format!(
+                "agents:\n  terminal:\n    name: terminal\n    command: shell\n    launchArgs: {LAUNCH_ARG}\n"
+            ),
         )
         .unwrap();
         let agent_id = match engine
@@ -852,18 +941,36 @@ mod bare_launch_resume_tests {
             panic!("agent missing from manifest");
         };
         let pid = agent.pid.expect("resumed agent has a pid");
-        let ps = std::process::Command::new("ps")
-            .args(["-o", "args=", "-p", &pid.to_string()])
-            .output()
-            .unwrap();
-        let argv = String::from_utf8_lossy(&ps.stdout).trim().to_string();
+        let argv = resumed_argv(pid);
         let bare = agent.bare_launch;
         engine.kill_agents(&[agent_id]).await;
         (bare, argv)
     }
 
+    /// A launch arg the login shell accepts and keeps running with.
+    #[cfg(unix)]
+    const LAUNCH_ARG: &str = "-i";
+    #[cfg(windows)]
+    const LAUNCH_ARG: &str = "-NoLogo";
+
+    /// The resumed process's argv as `ps` reports it.
+    #[cfg(unix)]
+    fn resumed_argv(pid: u32) -> String {
+        let ps = std::process::Command::new("ps")
+            .args(["-o", "args=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&ps.stdout).trim().to_string()
+    }
+
+    /// The resumed process's command line (Windows has no `ps`).
+    #[cfg(windows)]
+    fn resumed_argv(pid: u32) -> String {
+        crate::os::process_command(pid).expect("resumed agent is running")
+    }
+
     fn has_launch_arg(argv: &str) -> bool {
-        argv.split_whitespace().skip(1).any(|arg| arg == "-i")
+        argv.split_whitespace().skip(1).any(|arg| arg == LAUNCH_ARG)
     }
 
     #[tokio::test(flavor = "multi_thread")]

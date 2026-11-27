@@ -1,0 +1,120 @@
+/* The file pane (WIN-8.5): header, tree column and editor column. */
+.file-pane {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: var(--pp-card-background);
+  color: var(--pp-app-text);
+  font-family: var(--pp-font-ui);
+}
+
+.file-pane-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--file-tree-divider);
+}
+
+.file-pane-file-icon {
+  flex: none;
+  color: var(--secondary-text);
+}
+
+.file-pane-file-name {
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-pane-root-name {
+  font-size: 12px;
+  color: var(--secondary-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-pane-dirty {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ff9500;
+}
+
+.file-pane-spacer {
+  flex: 1;
+}
+
+.file-pane-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.file-pane-tree {
+  flex: none;
+  min-width: 140px;
+  border-right: 1px solid var(--file-tree-divider);
+}
+
+.file-editor-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-pane-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--secondary-text);
+}
+
+.file-pane-placeholder-icon {
+  opacity: 0.4;
+}
+
+.file-pane-picker {
+  display: inline-flex;
+  padding: 1px;
+  border: 1px solid var(--file-tree-divider);
+  border-radius: 6px;
+  background: var(--pp-system-control-background);
+}
+
+.file-pane-picker button {
+  min-width: 60px;
+  padding: 1px 10px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--secondary-text);
+  font: 11px var(--pp-font-ui);
+}
+
+.file-pane-picker button[aria-checked='true'] {
+  background: var(--control-pressed);
+  color: var(--pp-app-text);
+}
+
+.markdown-preview {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  background: var(--pp-card-background);
+}

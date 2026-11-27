@@ -4,7 +4,10 @@ members = [
     "crates/pu-core",
     "crates/pu-engine",
     "crates/pu-cli",
+    "crates/pu-transport",
 ]
+# The Windows Tauri app is its own workspace with its own Cargo.lock (DEC-7).
+exclude = ["spikes", "apps/purepoint-windows/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

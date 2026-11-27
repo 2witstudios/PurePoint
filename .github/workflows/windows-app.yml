@@ -1,0 +1,223 @@
+name: Windows App
+
+on:
+  push:
+    branches: [main, pu/windows]
+    paths: &windows-app-paths
+      - "apps/purepoint-windows/**"
+      - "apps/purepoint-mobile/bridge/**"
+      - "apps/purepoint-mobile/package.json"
+      - "apps/purepoint-mobile/package-lock.json"
+      - "apps/purepoint-mobile/tsconfig.json"
+      - "crates/**"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/windows-app.yml"
+  pull_request:
+    paths: *windows-app-paths
+  # The installer job (WIN-10.2) runs on pushes and on demand only.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows App build & test
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/purepoint-windows
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.23.3"
+          cache: npm
+          cache-dependency-path: |
+            apps/purepoint-windows/package-lock.json
+            apps/purepoint-mobile/package-lock.json
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.89"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            apps/purepoint-windows/src-tauri -> target
+            . -> target
+          key: windows-app
+      - run: npm ci --ignore-scripts
+      - name: Protocol TypeScript types are up to date
+        run: |
+          npm run gen:protocol
+          git diff --exit-code -- ui/src/protocol/generated
+          untracked="$(git status --porcelain --untracked-files=all -- ui/src/protocol/generated)"
+          if [ -n "$untracked" ]; then
+            echo "$untracked"
+            echo "::error::ui/src/protocol/generated is stale: run 'npm run gen:protocol' and commit the result."
+            exit 1
+          fi
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - name: Rust format, lint and test
+        working-directory: apps/purepoint-windows/src-tauri
+        run: |
+          cargo fmt -- --check
+          cargo clippy --locked --all-targets
+          cargo test --locked --all-targets
+      - run: npm run tauri -- build --debug --no-bundle
+
+  # End-to-end tests (WIN-5.7), in their own job so the build job reports the build, the unit
+  # tests and the Rust checks alone. The e2e must pass all the same. run.mjs builds the debug app
+  # (with the bundled UI), sets up the drivers (ui/e2e/setup-drivers.ps1: tauri-driver and the
+  # msedgedriver matching the runner's WebView2) and stages the app beside the workspace-built
+  # daemon and CLI. Every spec runs, the parity walkthrough (WIN-11.1, specs/walkthrough.e2e.ts)
+  # included; it and the Point Guard spec chat through the development runtime, which runs the
+  # repo's bridge on the runner's node.
+  e2e:
+    name: Windows e2e
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/purepoint-windows
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.23.3"
+          cache: npm
+          cache-dependency-path: |
+            apps/purepoint-windows/package-lock.json
+            apps/purepoint-mobile/package-lock.json
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.89"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            apps/purepoint-windows/src-tauri -> target
+            . -> target
+          key: windows-e2e
+      - run: npm ci --ignore-scripts
+      - name: Build pu and pu-engine
+        working-directory: .
+        run: cargo build --locked -p pu-cli -p pu-engine
+      - name: Install the Point Guard bridge dependencies
+        working-directory: apps/purepoint-mobile
+        run: npm ci --ignore-scripts
+      - name: End-to-end tests
+        run: npm run e2e
+      - name: Retain e2e screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-app-e2e
+          path: apps/purepoint-windows/ui/e2e/artifacts
+          if-no-files-found: warn
+          retention-days: 7
+      # The walkthrough's one screenshot per step (NN-step.png, and a failed step's), on its own.
+      - name: Retain the parity walkthrough screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-app-walkthrough
+          path: apps/purepoint-windows/ui/e2e/artifacts/walkthrough/*.png
+          if-no-files-found: warn
+          retention-days: 14
+
+  bridge-windows:
+    name: Point Guard bridge (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/purepoint-mobile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.23.3"
+          cache: npm
+          cache-dependency-path: apps/purepoint-mobile/package-lock.json
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.89"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: bridge-windows
+      # The daemon pipe integration test runs against the workspace-built engine;
+      # the bridge state tests hold their locks through the built lock helper.
+      - name: Build pu-engine and the Point Guard lock helper
+        working-directory: .
+        run: |
+          cargo build --locked -p pu-engine
+          cargo build --locked -p pu-cli --bin pu-point-guard-lock
+          printf 'POINT_GUARD_LOCK_HELPER_PATH=%s/target/debug/pu-point-guard-lock.exe\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+        env:
+          # Fail, not skip, if the engine from the step above is missing.
+          PU_REQUIRE_ENGINE: "1"
+
+  # The unsigned NSIS installer with the bundled CLI and sealed Point Guard runtime (WIN-10.2).
+  # Two release builds (the root workspace, then the LTO app) take long, so pull requests skip
+  # it: it runs on pushes to main and pu/windows and on workflow_dispatch.
+  installer:
+    name: NSIS installer
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/purepoint-windows
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.23.3"
+          cache: npm
+          cache-dependency-path: apps/purepoint-windows/package-lock.json
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.89"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            apps/purepoint-windows/src-tauri -> target
+            . -> target
+          key: windows-installer
+      - run: npm ci --ignore-scripts
+      - name: Build the installer
+        run: npm run bundle
+      - name: Upload the installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: purepoint-windows-installer
+          path: apps/purepoint-windows/src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14

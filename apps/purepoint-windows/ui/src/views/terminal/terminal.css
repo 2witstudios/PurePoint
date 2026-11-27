@@ -1,0 +1,53 @@
+/* Terminal panes (WIN-7.3): the pane fills its slot on the terminal background. */
+.terminal-pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--pp-terminal-background);
+}
+
+.terminal-pane-view {
+  position: absolute;
+  inset: 0;
+  /* SwiftTerm's inset from the pane edge. */
+  padding: 4px 0 0 6px;
+  box-sizing: border-box;
+}
+
+.terminal-surface {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.terminal-surface .xterm {
+  height: 100%;
+}
+
+.terminal-spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 2px solid var(--pp-terminal-ansi-8);
+  border-top-color: var(--pp-terminal-foreground);
+  border-radius: 50%;
+  animation: terminal-spin 0.8s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes terminal-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-spinner {
+    animation: none;
+  }
+}

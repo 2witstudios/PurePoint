@@ -45,7 +45,7 @@ fn given_root_subdirectory_and_linked_worktree_should_route_to_primary_project()
     );
     let linked_sub = linked.join("sub");
     std::fs::create_dir(&linked_sub).unwrap();
-    let expected = std::fs::canonicalize(&root)
+    let expected = pu_core::canon::canonicalize(&root)
         .unwrap()
         .to_string_lossy()
         .into_owned();
@@ -78,7 +78,7 @@ fn given_separate_git_dir_should_route_to_primary_worktree() {
         &root,
         &["init", "--separate-git-dir", metadata.to_str().unwrap()],
     );
-    let expected = std::fs::canonicalize(&root)
+    let expected = pu_core::canon::canonicalize(&root)
         .unwrap()
         .to_string_lossy()
         .into_owned();
@@ -332,6 +332,7 @@ async fn given_real_ipc_server_should_persist_cli_send_reply_edit_and_reaction()
     task.abort(); // only this test's temporary in-process server, never a daemon session
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn given_incompatible_daemon_should_not_post_channel_message() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};

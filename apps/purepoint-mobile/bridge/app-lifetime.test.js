@@ -9,6 +9,11 @@ import os from "node:os";
 import { watchAppLifetime } from "./app-lifetime.js";
 import { openRuntimeState } from "./runtime-state.js";
 import { openTrustStore } from "./trust.js";
+import { privateTemp } from "./private-temp.test-helper.js";
+// Skipped on Windows: POSIX signals and /usr/bin/true (Unix only); the rest run there with the lock helper.
+const posixOnly = {
+  skip: process.platform === "win32" && "POSIX signals and /usr/bin/true (Unix only)",
+};
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(action) {
@@ -71,8 +76,8 @@ test("app channel EOF or error signals loss once; disposing suppresses shutdown"
   assert.equal(losses, 1, "Owner loss before watcher attachment is observed");
 });
 
-test("app owner crash releases live runtime and trust locks while preserving identity", async () => {
-  const home = await mkdtemp(path.join(os.tmpdir(), "pointguard-app-crash-"));
+test("app owner crash releases live runtime and trust locks while preserving identity", posixOnly, async () => {
+  const home = await privateTemp("pointguard-app-crash-");
   const stateDir = path.join(home, "state");
   let owner, runtimePid, replacement, trust;
   let runtimeExited = false;
@@ -99,6 +104,7 @@ test("app owner crash releases live runtime and trust locks while preserving ide
         env: {
           ...process.env,
           HOME: home,
+          USERPROFILE: home, // Windows os.homedir()
           POINT_GUARD_STATE_DIR: stateDir,
           POINT_GUARD_PU_PATH: "/usr/bin/true",
           PI_SKIP_VERSION_CHECK: "1",
@@ -173,10 +179,8 @@ test("app owner crash releases live runtime and trust locks while preserving ide
   }
 });
 
-test("a surviving owner remains protected and app collision wait ends after five seconds", async () => {
-  const home = await mkdtemp(
-    path.join(os.tmpdir(), "pointguard-app-collision-"),
-  );
+test("a surviving owner remains protected and app collision wait ends after five seconds", posixOnly, async () => {
+  const home = await privateTemp("pointguard-app-collision-");
   const stateDir = path.join(home, "state");
   let original, child;
   try {
@@ -189,6 +193,7 @@ test("a surviving owner remains protected and app collision wait ends after five
         env: {
           ...process.env,
           HOME: home,
+          USERPROFILE: home, // Windows os.homedir()
           POINT_GUARD_STATE_DIR: stateDir,
           POINT_GUARD_PU_PATH: "/usr/bin/true",
           POINT_GUARD_APP_LIFETIME: "stdin",
@@ -221,7 +226,7 @@ test("a surviving owner remains protected and app collision wait ends after five
 });
 
 test("owner EOF during managed startup leaves locks available for a new launch", async () => {
-  const home = await mkdtemp(path.join(os.tmpdir(), "pointguard-app-startup-"));
+  const home = await privateTemp("pointguard-app-startup-");
   const stateDir = path.join(home, "state");
   let child, replacement;
   try {
@@ -232,6 +237,7 @@ test("owner EOF during managed startup leaves locks available for a new launch",
         env: {
           ...process.env,
           HOME: home,
+          USERPROFILE: home, // Windows os.homedir()
           POINT_GUARD_STATE_DIR: stateDir,
           POINT_GUARD_PU_PATH: "/usr/bin/true",
           POINT_GUARD_APP_LIFETIME: "stdin",

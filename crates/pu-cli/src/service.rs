@@ -1,7 +1,9 @@
 //! Optional OS supervision for the standalone daemon: a systemd user unit on
 //! Linux, a launchd agent on macOS. Supervised daemons restart after a crash
 //! and start at boot (Linux: with lingering enabled), so a server keeps its
-//! daemon without anyone logged in.
+//! daemon without anyone logged in. Windows has a per-user `HKCU` Run value
+//! that starts the daemon at logon (WINAPP-011): no restart on failure, and
+//! no elevation needed.
 //!
 //! Only the default socket is supervised; custom sockets always use a bare
 //! detached spawn.
@@ -18,6 +20,8 @@ pub const LAUNCHD_LABEL: &str = "dev.purepoint.engine";
 pub enum Manager {
     Systemd,
     Launchd,
+    #[cfg(windows)]
+    RunKey,
 }
 
 impl Manager {
@@ -27,18 +31,34 @@ impl Manager {
         } else if cfg!(target_os = "macos") {
             Some(Self::Launchd)
         } else {
-            None
+            Self::other_platform()
         }
+    }
+
+    #[cfg(windows)]
+    fn other_platform() -> Option<Self> {
+        Some(Self::RunKey)
+    }
+
+    #[cfg(not(windows))]
+    fn other_platform() -> Option<Self> {
+        None
     }
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Systemd => "systemd user unit",
             Self::Launchd => "launchd agent",
+            #[cfg(windows)]
+            Self::RunKey => "logon Run entry",
         }
     }
 
     pub fn file_path(self) -> Result<PathBuf, CliError> {
+        #[cfg(windows)]
+        if self == Self::RunKey {
+            return Ok(PathBuf::from(run_key::DISPLAY));
+        }
         let home = home()?;
         Ok(match self {
             Self::Systemd => std::env::var_os("XDG_CONFIG_HOME")
@@ -50,19 +70,23 @@ impl Manager {
             Self::Launchd => home
                 .join("Library/LaunchAgents")
                 .join(format!("{LAUNCHD_LABEL}.plist")),
+            #[cfg(windows)]
+            Self::RunKey => unreachable!("returned above"),
         })
     }
 }
 
 fn home() -> Result<PathBuf, CliError> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| CliError::Other("HOME is not set".into()))
+    pu_core::paths::home_dir().map_err(|_| CliError::Other("HOME is not set".into()))
 }
 
 /// The supervisor whose service file is installed, if any.
 pub fn installed() -> Option<Manager> {
     let manager = Manager::current()?;
+    #[cfg(windows)]
+    if manager == Manager::RunKey {
+        return run_key::read().ok().flatten().map(|_| manager);
+    }
     manager.file_path().ok()?.exists().then_some(manager)
 }
 
@@ -155,6 +179,7 @@ pub fn launchd_plist(engine: &Path, socket: &Path, path_env: &str, log: &Path) -
 /// directories PurePoint and agent CLIs are usually installed into, which a
 /// non-interactive SSH session's PATH lacks. The daemon still probes the login
 /// shell for agent environments; this only has to find `git`, `sh` and friends.
+#[cfg(unix)]
 pub fn service_path_env(current: Option<&str>, home: &Path) -> String {
     let mut dirs: Vec<String> = Vec::new();
     let mut push = |dir: String| {
@@ -181,6 +206,24 @@ pub fn service_path_env(current: Option<&str>, home: &Path) -> String {
     dirs.join(":")
 }
 
+/// Windows: the PurePoint and agent tool directories, then the current PATH,
+/// joined with `std::env::join_paths` (duplicates removed case-insensitively).
+#[cfg(windows)]
+pub fn service_path_env(current: Option<&str>, home: &Path) -> String {
+    let tools = pu_core::env_path::windows_tool_dirs(home, |key| std::env::var_os(key));
+    let current = current
+        .map(|path| std::env::split_paths(path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    pu_core::env_path::join_unique(tools.into_iter().chain(current))
+}
+
+/// Only the launchd and systemd managers key on a uid.
+#[cfg(windows)]
+fn uid() -> u32 {
+    0
+}
+
+#[cfg(unix)]
 fn uid() -> u32 {
     // SAFETY: getuid has no preconditions and cannot fail.
     unsafe { libc::getuid() }
@@ -225,6 +268,11 @@ pub fn start(manager: Manager) -> Result<(), CliError> {
             }
             Err(last.unwrap_or_else(|| CliError::Other("launchctl kickstart failed".into())))
         }
+        // The Run value only fires at logon; start what it would start.
+        #[cfg(windows)]
+        Manager::RunKey => {
+            crate::daemon_ctrl::spawn_detached_daemon(&pu_core::paths::daemon_socket_path()?)
+        }
     }
 }
 
@@ -235,6 +283,9 @@ pub fn stop(manager: Manager) -> Result<bool, CliError> {
     match manager {
         Manager::Systemd => run("systemctl", &["--user", "stop", SYSTEMD_UNIT]).map(|()| true),
         Manager::Launchd => Ok(false),
+        // Nothing supervises the daemon after logon; Shutdown stops it.
+        #[cfg(windows)]
+        Manager::RunKey => Ok(false),
     }
 }
 
@@ -245,6 +296,21 @@ pub fn install(
     socket: &Path,
     now: bool,
 ) -> Result<Vec<String>, CliError> {
+    // The Run value always serves the default socket (`socket` is it).
+    #[cfg(windows)]
+    if manager == Manager::RunKey {
+        run_key::write(&run_key::command_for(engine))?;
+        let mut notes = vec![format!("wrote {}", run_key::DISPLAY)];
+        if now {
+            start(manager)?;
+        }
+        if run_key::disabled_in_startup_apps() {
+            notes.push(
+                "the entry is disabled in Settings > Apps > Startup; enable it there for it to run at logon".into(),
+            );
+        }
+        return Ok(notes);
+    }
     let home = home()?;
     let path_env = service_path_env(std::env::var("PATH").ok().as_deref(), &home);
     let file = manager.file_path()?;
@@ -254,6 +320,8 @@ pub fn install(
             let log = pu_core::paths::daemon_log_path()?;
             launchd_plist(engine, socket, &path_env, &log)
         }
+        #[cfg(windows)]
+        Manager::RunKey => unreachable!("installed above"),
     };
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;
@@ -278,6 +346,8 @@ pub fn install(
                 ));
             }
         }
+        #[cfg(windows)]
+        Manager::RunKey => unreachable!("installed above"),
         Manager::Launchd => {
             let file_str = file.to_string_lossy().into_owned();
             let mut loaded = Err(CliError::Other("launchctl bootstrap failed".into()));
@@ -302,6 +372,10 @@ pub fn install(
 }
 
 pub fn uninstall(manager: Manager) -> Result<Option<PathBuf>, CliError> {
+    #[cfg(windows)]
+    if manager == Manager::RunKey {
+        return Ok(run_key::delete()?.then(|| PathBuf::from(run_key::DISPLAY)));
+    }
     let file = manager.file_path()?;
     if !file.exists() {
         return Ok(None);
@@ -309,7 +383,7 @@ pub fn uninstall(manager: Manager) -> Result<Option<PathBuf>, CliError> {
     match manager {
         Manager::Systemd => {
             let _ = run("systemctl", &["--user", "disable", "--now", SYSTEMD_UNIT]);
-            std::fs::remove_file(&file)?;
+            pu_core::fs_retry::remove_file(&file)?;
             let _ = run("systemctl", &["--user", "daemon-reload"]);
         }
         Manager::Launchd => {
@@ -319,8 +393,10 @@ pub fn uninstall(manager: Manager) -> Result<Option<PathBuf>, CliError> {
                     &["bootout", &format!("{domain}/{LAUNCHD_LABEL}")],
                 );
             }
-            std::fs::remove_file(&file)?;
+            pu_core::fs_retry::remove_file(&file)?;
         }
+        #[cfg(windows)]
+        Manager::RunKey => unreachable!("removed above"),
     }
     Ok(Some(file))
 }
@@ -343,6 +419,17 @@ pub fn state(manager: Manager) -> String {
                     .is_ok_and(|s| s.success())
             });
             return if loaded { "loaded" } else { "not loaded" }.to_string();
+        }
+        #[cfg(windows)]
+        Manager::RunKey => {
+            return match run_key::read() {
+                Ok(None) => "not registered".into(),
+                Err(e) => format!("unknown ({e})"),
+                Ok(Some(_)) if run_key::disabled_in_startup_apps() => {
+                    "registered, disabled in Startup apps".into()
+                }
+                Ok(Some(_)) => "registered (starts at logon)".into(),
+            };
         }
     };
     match output {
@@ -376,6 +463,218 @@ fn user_name() -> String {
         .ok()
         .filter(|u| !u.is_empty())
         .unwrap_or_else(|| "$USER".into())
+}
+
+/// The `HKCU\...\CurrentVersion\Run` value that starts the daemon at logon.
+#[cfg(windows)]
+pub(crate) mod run_key {
+    use std::ffi::OsStr;
+    use std::io;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+    use std::ptr::{null, null_mut};
+
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+        RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
+        RegSetValueExW,
+    };
+
+    const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const STARTUP_APPROVED: &str =
+        r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+    pub(crate) const VALUE: &str = "PurePoint Engine";
+    pub(crate) const DISPLAY: &str =
+        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run\PurePoint Engine";
+
+    fn wide(s: &str) -> Vec<u16> {
+        OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+
+    fn check(rc: u32) -> io::Result<()> {
+        if rc == ERROR_SUCCESS {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(rc as i32))
+        }
+    }
+
+    struct Key(HKEY);
+    impl Drop for Key {
+        fn drop(&mut self) {
+            // SAFETY: an open key we own.
+            unsafe { RegCloseKey(self.0) };
+        }
+    }
+
+    /// `None` when the key does not exist.
+    fn open(path: &str, access: u32) -> io::Result<Option<Key>> {
+        let mut key: HKEY = null_mut();
+        let path = wide(path);
+        // SAFETY: path is NUL-terminated; key receives a handle closed by Key.
+        let rc = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, access, &mut key) };
+        if rc == ERROR_FILE_NOT_FOUND {
+            return Ok(None);
+        }
+        check(rc)?;
+        Ok(Some(Key(key)))
+    }
+
+    /// Raw bytes of `value` under `path`; `None` when either is missing.
+    fn query(path: &str, value: &str) -> io::Result<Option<Vec<u8>>> {
+        let Some(key) = open(path, KEY_QUERY_VALUE)? else {
+            return Ok(None);
+        };
+        let name = wide(value);
+        let mut len = 0u32;
+        // SAFETY: a size query with no buffer.
+        let rc = unsafe {
+            RegQueryValueExW(
+                key.0,
+                name.as_ptr(),
+                null(),
+                null_mut(),
+                null_mut(),
+                &mut len,
+            )
+        };
+        if rc == ERROR_FILE_NOT_FOUND {
+            return Ok(None);
+        }
+        check(rc)?;
+        let mut buf = vec![0u8; len as usize];
+        // SAFETY: buf holds len bytes.
+        check(unsafe {
+            RegQueryValueExW(
+                key.0,
+                name.as_ptr(),
+                null(),
+                null_mut(),
+                buf.as_mut_ptr(),
+                &mut len,
+            )
+        })?;
+        buf.truncate(len as usize);
+        Ok(Some(buf))
+    }
+
+    /// The registered command line, if the value exists.
+    pub(crate) fn read() -> io::Result<Option<String>> {
+        read_value(VALUE)
+    }
+
+    pub(crate) fn write(command: &str) -> io::Result<()> {
+        write_value(VALUE, command)
+    }
+
+    /// Delete the value. False when it was not there.
+    pub(crate) fn delete() -> io::Result<bool> {
+        delete_value(VALUE)
+    }
+
+    pub(crate) fn disabled_in_startup_apps() -> bool {
+        value_disabled_in_startup_apps(VALUE)
+    }
+
+    /// The command line registered under the Run value `value`, if any.
+    pub(crate) fn read_value(value: &str) -> io::Result<Option<String>> {
+        Ok(query(RUN, value)?.map(|bytes| {
+            let units: Vec<u16> = bytes
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .take_while(|&u| u != 0)
+                .collect();
+            String::from_utf16_lossy(&units)
+        }))
+    }
+
+    pub(crate) fn write_value(value: &str, command: &str) -> io::Result<()> {
+        let mut key: HKEY = null_mut();
+        let path = wide(RUN);
+        // SAFETY: path is NUL-terminated; key receives a handle closed by Key.
+        check(unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                path.as_ptr(),
+                0,
+                null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_SET_VALUE,
+                null(),
+                &mut key,
+                null_mut(),
+            )
+        })?;
+        let key = Key(key);
+        let name = wide(value);
+        let data = wide(command);
+        // SAFETY: data is a NUL-terminated wide string of the given byte size.
+        check(unsafe {
+            RegSetValueExW(
+                key.0,
+                name.as_ptr(),
+                0,
+                REG_SZ,
+                data.as_ptr().cast(),
+                (data.len() * 2) as u32,
+            )
+        })
+    }
+
+    /// Delete the Run value `value`. False when it was not there.
+    pub(crate) fn delete_value(value: &str) -> io::Result<bool> {
+        let Some(key) = open(RUN, KEY_SET_VALUE)? else {
+            return Ok(false);
+        };
+        let name = wide(value);
+        // SAFETY: an open key and a NUL-terminated name.
+        let rc = unsafe { RegDeleteValueW(key.0, name.as_ptr()) };
+        if rc == ERROR_FILE_NOT_FOUND {
+            return Ok(false);
+        }
+        check(rc).map(|()| true)
+    }
+
+    /// Settings > Startup apps records its toggle as a REG_BINARY whose
+    /// first byte is even when enabled (2) and odd when disabled (3).
+    pub(crate) fn value_disabled_in_startup_apps(value: &str) -> bool {
+        matches!(
+            query(STARTUP_APPROVED, value),
+            Ok(Some(bytes)) if bytes.first().is_some_and(|b| b % 2 == 1)
+        )
+    }
+
+    /// The value's data: the engine path, quoted, without the `\\?\` prefix
+    /// `canonicalize` adds.
+    pub(crate) fn command_for(engine: &Path) -> String {
+        let path = engine.to_string_lossy();
+        let path = match path.strip_prefix(r"\\?\") {
+            Some(rest) if !rest.starts_with("UNC") => rest,
+            _ => &path,
+        };
+        format!("\"{path}\"")
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn given_canonical_engine_path_should_quote_it_without_verbatim_prefix() {
+            assert_eq!(
+                command_for(Path::new(r"\\?\C:\Users\a b\.pu\bin\pu-engine.exe")),
+                r#""C:\Users\a b\.pu\bin\pu-engine.exe""#
+            );
+            assert_eq!(
+                command_for(Path::new(r"C:\x\pu-engine.exe")),
+                r#""C:\x\pu-engine.exe""#
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -423,6 +722,7 @@ mod tests {
         assert!(plist.contains("<key>SuccessfulExit</key>\n    <false/>"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_minimal_path_should_add_install_dirs_without_duplicates() {
         let path = service_path_env(
@@ -445,10 +745,27 @@ mod tests {
         assert_eq!(unique.len(), dirs.len(), "{path}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_no_path_should_still_include_system_dirs() {
         let path = service_path_env(None, Path::new("/root"));
         assert!(path.split(':').any(|d| d == "/usr/bin"));
         assert!(!path.contains("::"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_windows_path_should_prepend_tool_dirs_without_duplicates() {
+        let path = service_path_env(
+            Some(r"C:\Program Files\Git\cmd;c:\users\me\.PU\bin\;C:\WINDOWS\system32"),
+            Path::new(r"C:\Users\me"),
+        );
+        let dirs: Vec<_> = std::env::split_paths(&path).collect();
+        assert_eq!(dirs[0], Path::new(r"C:\Users\me\.pu\bin"));
+        assert_eq!(dirs[1], Path::new(r"C:\Users\me\.cargo\bin"));
+        assert!(dirs.contains(&Path::new(r"C:\Users\me\.local\bin").to_path_buf()));
+        assert!(dirs.contains(&Path::new(r"C:\Program Files\Git\cmd").to_path_buf()));
+        assert!(!path.to_lowercase().contains(r"\.pu\bin\;"), "{path}");
+        assert!(!service_path_env(None, Path::new(r"C:\Users\me")).contains(":/"));
     }
 }

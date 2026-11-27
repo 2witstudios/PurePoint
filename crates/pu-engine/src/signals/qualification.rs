@@ -2,7 +2,6 @@
 //! contacts the proof URL. A proof record is an operator assertion, not verification.
 use serde::Deserialize;
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -46,7 +45,7 @@ impl Grant {
         !state.invalidated
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn current(&self, now: i64) -> bool {
         self.current_with_clock(|| now)
     }
@@ -114,17 +113,10 @@ fn load_sync(
     if !interactive {
         return None;
     }
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(project.join(".pu/agent-signals/qualifications.json"))
-        .ok()?;
+    let path = project.join(".pu/agent-signals/qualifications.json");
+    let file = pu_core::private_fs::open_no_follow(&path).ok()?;
     let meta = file.metadata().ok()?;
-    if !meta.is_file()
-        || meta.len() > 16 * 1024
-        || meta.mode() & 0o7777 != 0o600
-        || meta.uid() != unsafe { libc::geteuid() }
-    {
+    if !meta.is_file() || meta.len() > 16 * 1024 || !super::exact_private_file(&file, &path) {
         return None;
     }
     let mut data = Vec::new();
@@ -169,7 +161,8 @@ fn load_sync(
     })
 }
 
-#[cfg(test)]
+// These write owner-only (mode 0600) qualification files.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use serde_json::json;

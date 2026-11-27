@@ -1,0 +1,7 @@
+== typing into C:\Users\<user>\.local\bin\claude.exe (no Enter is ever sent)
+  ready=true
+  typed has_draft=true box="hello from conpty \"quoted\" ünïcødé ❯ end" matches=true
+  wrote C:\Users\<user>\Dev\pp-wt\win-1.1\spikes\conpty\fixtures\claude-typed.txt
+  after Ctrl-U input_ready=true
+  after 3x Backspace(0x7f) input_ready=true
+  exit after ^C^C: Some(0)

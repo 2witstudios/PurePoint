@@ -1,0 +1,35 @@
+# WIN-1.2 spike: private NDJSON daemon channel over Windows named pipes.
+# Standalone (own [workspace]); not a member of the root workspace.
+[workspace]
+
+[package]
+name = "pipes-spike"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+
+[[bin]]
+name = "pipes-spike"
+path = "src/main.rs"
+
+[dependencies]
+dunce = "1"
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_System_IO",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["process"] }

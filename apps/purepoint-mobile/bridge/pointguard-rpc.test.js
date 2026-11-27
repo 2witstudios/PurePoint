@@ -1,11 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, cp, writeFile, readFile, rm } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  cp,
+  writeFile,
+  readFile,
+  realpath,
+  rm,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import { Rpc } from "./rpc.js";
 import { root, launchArguments } from "./setup.js";
+// Windows: the bash tool step (`df -k .`) needs a POSIX shell, so only it is
+// skipped there; personal files are checked by ACL (support/pointguard/lib).
+const win32 = process.platform === "win32";
 
 const provider = `
 import { createAssistantMessageEventStream, fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
@@ -28,7 +39,7 @@ export default function(pi) {
     }
     let content="fixture response";
     if(last?.role!=="toolResult" && text==="make artifact") content=fauxToolCall("write",{path:"artifact.txt",content:"verified artifact"});
-    if(last?.role!=="toolResult" && text==="storage evidence") content=fauxToolCall("bash",{command:"df -k ."});
+    if(last?.role!=="toolResult" && text==="storage evidence") content=fauxToolCall("bash",{command:"echo storage-evidence"});
     const m={...fauxAssistantMessage(content,{stopReason:typeof content==="string"?"stop":"toolUse"}),api:model.api,provider:model.provider,model:model.id};
     stream.push({type:"start",partial:m});stream.push({type:"done",reason:m.stopReason,message:m});stream.end(m);
    })().catch(e=>{ const m=fauxAssistantMessage("",{stopReason:"error",errorMessage:String(e)});stream.push({type:"error",reason:"error",error:m});stream.end(m); });
@@ -47,10 +58,13 @@ export default function(pi) {
 
 test(
   "exact Pi 1.1.0 relocated RPC loads packages, refreshes sections across reload/resume/compaction and preserves native tools/UI/cancel",
-  { timeout: 120000 },
+  { timeout: win32 ? 240000 : 120000 },
   async (t) => {
-    const folder = await mkdtemp(
-      path.join(os.tmpdir(), "pointguard-rpc-proof-"),
+    // Long-name path: CI's temp folder is an 8.3 short name, and Pi resolves
+    // some package paths to their long spelling, so one skill seen under both
+    // spellings would collide with itself.
+    const folder = await realpath(
+      await mkdtemp(path.join(os.tmpdir(), "pointguard-rpc-proof-")),
     );
     let rpc;
     t.after(async () => {
@@ -103,6 +117,15 @@ test(
     const launch = () => {
       const child = new Rpc(process.execPath, args, cwd, {
         HOME: home,
+        USERPROFILE: home, // Windows os.homedir()
+        // Windows: the bash tool finds Git Bash under Program Files.
+        ...(win32
+          ? Object.fromEntries(
+              ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)"]
+                .filter((name) => process.env[name])
+                .map((name) => [name, process.env[name]]),
+            )
+          : {}),
         PATH: "/usr/bin:/bin",
         PI_CODING_AGENT_DIR: path.join(home, ".pi/agent"),
         PI_SKIP_VERSION_CHECK: "1",
@@ -197,6 +220,7 @@ test(
       await readFile(path.join(cwd, "artifact.txt"), "utf8"),
       "verified artifact",
     );
+    // `echo` runs in every shell the bash tool may pick (sh, Git Bash), so this holds on Windows.
     await run("storage evidence");
     assert.ok(
       events.some(

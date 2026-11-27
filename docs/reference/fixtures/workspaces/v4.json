@@ -1,0 +1,89 @@
+{
+  "activeWorkspaceId" : "ws-ag-a",
+  "version" : 4,
+  "workspaces" : [
+    {
+      "focusedLeafId" : 2,
+      "id" : "ws-ag-a",
+      "nextLeafId" : 3,
+      "nextSurfaceId" : 5,
+      "tree" : {
+        "axis" : "vertical",
+        "first" : {
+          "activeTabId" : 3,
+          "leafId" : 0,
+          "tabs" : [
+            {
+              "agentId" : "ag-a",
+              "id" : 0,
+              "kind" : "agent"
+            },
+            {
+              "id" : 3,
+              "kind" : "file",
+              "path" : "\/Users\/dev\/project\/notes – draft.md"
+            }
+          ],
+          "type" : "leaf"
+        },
+        "ratio" : 0.6,
+        "second" : {
+          "axis" : "horizontal",
+          "first" : {
+            "activeTabId" : 1,
+            "leafId" : 1,
+            "tabs" : [
+              {
+                "agentId" : "ag-b",
+                "id" : 1,
+                "kind" : "agent"
+              }
+            ],
+            "type" : "leaf"
+          },
+          "ratio" : 0.3333333333333333,
+          "second" : {
+            "activeTabId" : 2,
+            "leafId" : 2,
+            "tabs" : [
+              {
+                "id" : 2,
+                "kind" : "empty"
+              },
+              {
+                "id" : 4,
+                "kind" : "file"
+              }
+            ],
+            "type" : "leaf"
+          },
+          "type" : "split"
+        },
+        "type" : "split"
+      },
+      "worktreeId" : "wt-1"
+    },
+    {
+      "focusedLeafId" : 0,
+      "id" : "ws-point-guard:\/Users\/dev\/project",
+      "nextLeafId" : 1,
+      "nextSurfaceId" : 2,
+      "tree" : {
+        "activeTabId" : 0,
+        "leafId" : 0,
+        "tabs" : [
+          {
+            "id" : 0,
+            "kind" : "point_guard"
+          },
+          {
+            "agentId" : "ag-c",
+            "id" : 1,
+            "kind" : "agent"
+          }
+        ],
+        "type" : "leaf"
+      }
+    }
+  ]
+}

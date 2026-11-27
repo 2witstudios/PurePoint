@@ -1,0 +1,91 @@
+/*
+ * The editor (WIN-8.5): the CodeMirror host and the notice banners above it. Colours and the
+ * editor font come from theme/tokens.css (EditorTheme).
+ */
+:root {
+  --editor-ruler-divider: rgba(0, 0, 0, 0.06);
+}
+
+:root[data-theme='dark'] {
+  --editor-ruler-divider: rgba(255, 255, 255, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --editor-ruler-divider: rgba(255, 255, 255, 0.06);
+  }
+}
+
+.editor-view {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--pp-editor-background);
+}
+
+.editor-view .cm-editor {
+  height: 100%;
+}
+
+.editor-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font: 11px var(--pp-font-ui);
+  color: var(--pp-app-text);
+}
+
+.editor-notice[data-tone='warning'] {
+  background: rgba(255, 149, 0, 0.15);
+}
+
+.editor-notice[data-tone='caution'] {
+  background: rgba(255, 204, 0, 0.2);
+}
+
+.editor-notice[data-tone='neutral'] {
+  background: rgba(128, 128, 128, 0.15);
+}
+
+.editor-notice[data-tone='error'] {
+  background: rgba(255, 59, 48, 0.2);
+}
+
+.editor-notice[data-tone='warning'] .editor-notice-icon {
+  color: #ff9500;
+}
+
+.editor-notice[data-tone='caution'] .editor-notice-icon {
+  color: #c19c00;
+}
+
+.editor-notice-icon {
+  flex: none;
+  color: var(--secondary-text);
+}
+
+.editor-notice-text {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.editor-notice-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.editor-notice-actions button {
+  padding: 1px 8px;
+  border: 1px solid var(--menu-border);
+  border-radius: 4px;
+  background: var(--pp-system-control-background);
+  color: var(--pp-app-text);
+  font: 11px var(--pp-font-ui);
+}

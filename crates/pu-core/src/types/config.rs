@@ -2,6 +2,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
     pub name: String,
@@ -17,6 +18,7 @@ pub struct AgentConfig {
     /// Extra args appended after `command`. Written as one shell-style string;
     /// the older list form is still accepted.
     #[serde(default, with = "launch_args_serde")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
     pub launch_args: Option<Vec<String>>,
     /// Machine-level launch args from `~/.pu/agent-settings.yaml`, used only when
     /// the project leaves `launch_args` unset. Filled in at config resolution.
@@ -83,6 +85,8 @@ pub fn format_launch_args(args: &[String]) -> String {
 /// Launch args that deserialize from a shell-style string or a list of
 /// strings, and serialize as the string form.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "string"))]
 pub struct LaunchArgs(pub Vec<String>);
 
 impl Serialize for LaunchArgs {
@@ -137,6 +141,7 @@ pub mod launch_args_serde {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
     #[serde(default = "crate::serde_defaults::default_agent")]

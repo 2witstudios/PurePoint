@@ -25,6 +25,10 @@ import {
 } from "./tailnet.js";
 import { startRemote } from "./remote.js";
 import { serveAdmin } from "./admin.js";
+// Skipped on Windows (WIN-9.1): POSIX paths, modes and Unix sockets (Unix only).
+const unixOnly = {
+  skip: process.platform === "win32" && "POSIX paths, modes and Unix sockets (Unix only)",
+};
 
 const iface = (address) => ({ address, family: "IPv4", internal: false });
 
@@ -64,7 +68,7 @@ test("given validity past 2049, should encode GeneralizedTime that parses", () =
   );
 });
 
-test("platform defaults: XDG state on Linux, Application Support on the Mac", () => {
+test("platform defaults: XDG state on Linux, Application Support on the Mac", unixOnly, () => {
   const linux = platformDefaults({
     platform: "linux",
     env: {},
@@ -386,7 +390,7 @@ function request(
   });
 }
 
-test("owner admin over a Unix socket: private dir, 0600 socket under a permissive umask, token still required", async () => {
+test("owner admin over a Unix socket: private dir, 0600 socket under a permissive umask, token still required", unixOnly, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pg-admin-"));
   const socketPath = path.join(root, "admin", "admin.sock");
   const previous = process.umask(0o000);
@@ -430,7 +434,7 @@ test("owner admin over a Unix socket: private dir, 0600 socket under a permissiv
   }
 });
 
-test("owner admin refuses a symlinked admin directory target", async () => {
+test("owner admin refuses a symlinked admin directory target", unixOnly, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "pg-admin-"));
   const elsewhere = await mkdtemp(path.join(os.tmpdir(), "pg-elsewhere-"));
   try {

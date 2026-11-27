@@ -119,22 +119,65 @@ pub(crate) fn set_home_override(path: Option<PathBuf>) {
     HOME_OVERRIDE.with(|o| *o.borrow_mut() = path);
 }
 
-fn home_dir() -> Result<PathBuf, std::io::Error> {
+/// The user's home directory: `HOME` when set and non-empty (so tests and
+/// tools can redirect it), else `USERPROFILE` on Windows.
+pub fn home_dir() -> Result<PathBuf, std::io::Error> {
     #[cfg(test)]
     {
         if let Some(p) = HOME_OVERRIDE.with(|o| o.borrow().clone()) {
             return Ok(p);
         }
     }
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "$HOME not set"))
+    home_from(|key| std::env::var_os(key))
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "$HOME not set"))
+}
+
+/// [`home_dir`] resolution over an arbitrary environment lookup (an agent's
+/// environment map, for example).
+pub fn home_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let non_empty = |key: &str| get(key).filter(|v| !v.is_empty()).map(PathBuf::from);
+    non_empty("HOME").or_else(|| {
+        if cfg!(windows) {
+            non_empty("USERPROFILE")
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    fn env<'a>(
+        pairs: &'a [(&'a str, &'a str)],
+    ) -> impl Fn(&str) -> Option<std::ffi::OsString> + 'a {
+        move |key| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| std::ffi::OsString::from(*v))
+        }
+    }
+
+    #[test]
+    fn given_home_set_should_prefer_it_over_userprofile() {
+        let got = home_from(env(&[("HOME", "/h"), ("USERPROFILE", "/u")]));
+        assert_eq!(got, Some(PathBuf::from("/h")));
+    }
+
+    #[test]
+    fn given_empty_home_should_fall_back_to_userprofile_only_on_windows() {
+        let got = home_from(env(&[("HOME", ""), ("USERPROFILE", "/u")]));
+        let expected = cfg!(windows).then(|| PathBuf::from("/u"));
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn given_no_home_variables_should_resolve_nothing() {
+        assert_eq!(home_from(env(&[])), None);
+    }
 
     #[test]
     fn given_distinct_socket_extensions_should_keep_registries_separate() {
@@ -202,17 +245,14 @@ mod tests {
     #[test]
     fn given_global_templates_dir_should_live_under_home_pu() {
         let path = global_templates_dir().unwrap();
-        assert!(
-            path.to_string_lossy().contains(".pu/templates"),
-            "unexpected path: {path:?}"
-        );
+        assert!(path.ends_with(".pu/templates"), "unexpected path: {path:?}");
     }
 
     #[test]
     fn given_daemon_pid_path_should_live_under_home_pu() {
         let path = daemon_pid_path().unwrap();
         assert!(
-            path.to_string_lossy().contains(".pu/daemon.sock.pid"),
+            path.ends_with(".pu/daemon.sock.pid"),
             "unexpected path: {path:?}"
         );
     }
@@ -221,7 +261,7 @@ mod tests {
     fn given_daemon_socket_path_should_live_under_home_pu() {
         let path = daemon_socket_path().unwrap();
         assert!(
-            path.to_string_lossy().contains(".pu/daemon.sock"),
+            path.ends_with(".pu/daemon.sock"),
             "unexpected path: {path:?}"
         );
     }
@@ -248,7 +288,7 @@ mod tests {
     fn given_daemon_log_path_should_live_under_home_pu() {
         let path = daemon_log_path().unwrap();
         assert!(
-            path.to_string_lossy().contains(".pu/daemon.log"),
+            path.ends_with(".pu/daemon.log"),
             "unexpected path: {path:?}"
         );
     }
@@ -265,10 +305,7 @@ mod tests {
     #[test]
     fn given_global_agents_dir_should_live_under_home_pu() {
         let path = global_agents_dir().unwrap();
-        assert!(
-            path.to_string_lossy().contains(".pu/agents"),
-            "unexpected path: {path:?}"
-        );
+        assert!(path.ends_with(".pu/agents"), "unexpected path: {path:?}");
     }
 
     #[test]
@@ -283,10 +320,7 @@ mod tests {
     #[test]
     fn given_global_swarms_dir_should_live_under_home_pu() {
         let path = global_swarms_dir().unwrap();
-        assert!(
-            path.to_string_lossy().contains(".pu/swarms"),
-            "unexpected path: {path:?}"
-        );
+        assert!(path.ends_with(".pu/swarms"), "unexpected path: {path:?}");
     }
 
     #[test]
@@ -301,10 +335,7 @@ mod tests {
     #[test]
     fn given_global_schedules_dir_should_live_under_home_pu() {
         let path = global_schedules_dir().unwrap();
-        assert!(
-            path.to_string_lossy().contains(".pu/schedules"),
-            "unexpected path: {path:?}"
-        );
+        assert!(path.ends_with(".pu/schedules"), "unexpected path: {path:?}");
     }
 
     #[test]
@@ -319,9 +350,6 @@ mod tests {
     #[test]
     fn given_global_triggers_dir_should_live_under_home_pu() {
         let path = global_triggers_dir().unwrap();
-        assert!(
-            path.to_string_lossy().contains(".pu/triggers"),
-            "unexpected path: {path:?}"
-        );
+        assert!(path.ends_with(".pu/triggers"), "unexpected path: {path:?}");
     }
 }

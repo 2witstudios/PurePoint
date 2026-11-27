@@ -21,23 +21,13 @@ fn plugin_hash() -> String {
 }
 
 fn plugin_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(
-        PathBuf::from(home)
-            .join(".claude")
-            .join("plugins")
-            .join("purepoint"),
-    )
+    let home = pu_core::paths::home_dir().ok()?;
+    Some(home.join(".claude").join("plugins").join("purepoint"))
 }
 
 fn old_skill_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(
-        PathBuf::from(home)
-            .join(".claude")
-            .join("skills")
-            .join("pu"),
-    )
+    let home = pu_core::paths::home_dir().ok()?;
+    Some(home.join(".claude").join("skills").join("pu"))
 }
 
 /// Write the Claude plugin files if they don't exist or are stale.
@@ -75,9 +65,9 @@ pub fn ensure_plugin_current() {
         let tmp_path = path.with_extension("tmp");
         match std::fs::write(&tmp_path, content) {
             Ok(()) => {
-                if let Err(e) = std::fs::rename(&tmp_path, &path) {
+                if let Err(e) = pu_core::fs_retry::rename(&tmp_path, &path) {
                     eprintln!("pu: failed to install plugin file {rel_path}: {e}");
-                    let _ = std::fs::remove_file(&tmp_path);
+                    let _ = pu_core::fs_retry::remove_file(&tmp_path);
                     return;
                 }
             }
@@ -96,6 +86,6 @@ pub fn ensure_plugin_current() {
     if let Some(old_dir) = old_skill_dir()
         && old_dir.exists()
     {
-        let _ = std::fs::remove_dir_all(&old_dir);
+        let _ = pu_core::fs_retry::remove_dir_all(&old_dir);
     }
 }

@@ -2,9 +2,9 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
+#[cfg(unix)]
 use nix::sys::signal;
+#[cfg(unix)]
 use nix::unistd::Pid;
 
 /// The exclusive lock that makes a pu-engine the one daemon for its socket.
@@ -12,7 +12,9 @@ use nix::unistd::Pid;
 /// Held for the life of the process. The kernel drops it however the process
 /// dies, so a crashed daemon never leaves a stale lock behind.
 pub struct DaemonLock {
-    _lock: Flock<File>,
+    /// Locked with `flock` (Unix) or `LockFileEx` (Windows) through fs4;
+    /// closing the handle releases it.
+    _lock: File,
 }
 
 /// Lock file guarding `socket_path` (`daemon.sock` -> `daemon.sock.lock`).
@@ -42,6 +44,39 @@ fn sibling_path(socket_path: &Path, ext: &str) -> PathBuf {
 /// other-accessible one), and a `~/.pu` owned by another user is refused.
 /// Other existing directories are left as they are; the socket itself is
 /// owner-only either way.
+///
+/// Windows: "mode 0700" is the owner-only protected DACL of
+/// `pu_core::private_fs`, and "owned by another user" is an owner SID that
+/// is neither this user nor SYSTEM/Administrators.
+#[cfg(windows)]
+pub fn prepare_socket_dir(socket_path: &Path, global_dir: Option<&Path>) -> std::io::Result<()> {
+    use pu_core::private_fs;
+    let Some(dir) = socket_path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    if global_dir != Some(dir) {
+        if !dir.exists() {
+            private_fs::create_private_dir(dir)?;
+        }
+        return Ok(());
+    }
+    // Rewriting the DACL needs WRITE_DAC, which only the owner holds by
+    // default; the check then refuses a directory owned by someone else.
+    private_fs::create_private_dir(dir)?;
+    private_fs::check_private(dir)
+}
+
+/// Create the directory that holds `socket_path`, missing parents at mode 0700.
+///
+/// When that directory is the global `~/.pu`, it also holds the registry,
+/// config and logs, so it is forced to 0700 (repairing a group- or
+/// other-accessible one), and a `~/.pu` owned by another user is refused.
+/// Other existing directories are left as they are; the socket itself is
+/// owner-only either way.
+#[cfg(unix)]
 pub fn prepare_socket_dir(socket_path: &Path, global_dir: Option<&Path>) -> std::io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     let Some(dir) = socket_path
@@ -87,10 +122,10 @@ pub fn try_acquire_daemon_lock(socket_path: &Path) -> Result<Option<DaemonLock>,
         .read(true)
         .write(true)
         .open(lock_path_for(socket_path))?;
-    match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-        Ok(lock) => Ok(Some(DaemonLock { _lock: lock })),
-        Err((_, Errno::EWOULDBLOCK)) => Ok(None),
-        Err((_, e)) => Err(e.into()),
+    match fs4::FileExt::try_lock(&file) {
+        Ok(()) => Ok(Some(DaemonLock { _lock: file })),
+        Err(fs4::TryLockError::WouldBlock) => Ok(None),
+        Err(fs4::TryLockError::Error(e)) => Err(e),
     }
 }
 
@@ -103,7 +138,7 @@ pub fn claim_pid_file(path: &Path) -> Result<(), std::io::Error> {
         writeln!(file, "{}", std::process::id())?;
         file.sync_all()?;
     }
-    std::fs::rename(&tmp, path)
+    pu_core::fs_retry::rename(&tmp, path)
 }
 
 pub fn read_pid_file(path: &Path) -> Result<Option<u32>, std::io::Error> {
@@ -120,12 +155,21 @@ pub fn cleanup_files(pid_path: &Path, socket_path: &Path) {
     if !matches!(read_pid_file(pid_path), Ok(Some(pid)) if pid == std::process::id()) {
         return;
     }
-    let _ = std::fs::remove_file(pid_path);
-    let _ = std::fs::remove_file(socket_path);
+    let _ = pu_core::fs_retry::remove_file(pid_path);
+    let _ = pu_core::fs_retry::remove_file(socket_path);
 }
 
 /// Raise the open-file soft limit as far as the hard limit allows (capped, since
 /// macOS reports RLIM_INFINITY but rejects soft limits above OPEN_MAX).
+///
+/// Windows has no descriptor limit for handles (the CRT's `_setmaxstdio`
+/// only bounds C `FILE*` streams, which the daemon does not use): a no-op.
+#[cfg(windows)]
+pub fn raise_fd_limit() {}
+
+/// Raise the open-file soft limit as far as the hard limit allows (capped, since
+/// macOS reports RLIM_INFINITY but rejects soft limits above OPEN_MAX).
+#[cfg(unix)]
 pub fn raise_fd_limit() {
     use nix::sys::resource::{Resource, getrlimit, setrlimit};
     const TARGET: u64 = 10_240;
@@ -140,6 +184,77 @@ pub fn raise_fd_limit() {
     }
 }
 
+/// A process we may query that has not exited. Like `kill(pid, 0)` failing
+/// with EPERM on Unix, a process this user cannot open counts as not alive.
+#[cfg(windows)]
+pub fn is_process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: OpenProcess has no preconditions; a null handle means failure.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return false;
+    }
+    let mut code = 0u32;
+    // SAFETY: handle is a live process handle we own and close once.
+    let queried = unsafe { GetExitCodeProcess(handle, &mut code) } != 0;
+    unsafe { CloseHandle(handle) };
+    queried && code == STILL_ACTIVE as u32
+}
+
+/// Point stderr at `~/.pu/daemon.log` when the launcher passed no stderr
+/// handle (a Run-value autostart). The daemon is GUI-subsystem, so it has no
+/// console to fall back on; std and tracing look the handle up on every
+/// write, so both follow the replacement.
+#[cfg(windows)]
+pub fn ensure_stderr_log() {
+    use std::os::windows::io::IntoRawHandle;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, SetStdHandle};
+    // SAFETY: GetStdHandle has no preconditions.
+    let current = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+    if !current.is_null() && current != INVALID_HANDLE_VALUE {
+        return;
+    }
+    let Ok(log_path) = pu_core::paths::daemon_log_path() else {
+        return;
+    };
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(file) = OpenOptions::new().create(true).append(true).open(&log_path) else {
+        return;
+    };
+    // Leaked on purpose: stderr stays open for the life of the process.
+    let handle = file.into_raw_handle();
+    // SAFETY: handle is a valid file handle that is never closed.
+    unsafe { SetStdHandle(STD_ERROR_HANDLE, handle) };
+}
+
+/// Block until process `pid` exits (returns at once if it already has or
+/// cannot be opened): `--parent-pid` waits on the parent's handle.
+#[cfg(windows)]
+pub fn wait_for_process_exit(pid: u32) {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_FAILED};
+    use windows_sys::Win32::System::Threading::{
+        INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+    // SAFETY: OpenProcess has no preconditions; a null handle means failure.
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return;
+    }
+    // SAFETY: handle is a live process handle we own and close once.
+    let waited = unsafe { WaitForSingleObject(handle, INFINITE) };
+    unsafe { CloseHandle(handle) };
+    if waited == WAIT_FAILED {
+        tracing::warn!(pid, "waiting on the parent process failed");
+    }
+}
+
+#[cfg(unix)]
 pub fn is_process_alive(pid: u32) -> bool {
     let Ok(raw) = i32::try_from(pid) else {
         return false;
@@ -152,11 +267,13 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_missing_global_dir_should_create_it_owner_only() {
         let tmp = TempDir::new().unwrap();
@@ -165,6 +282,7 @@ mod tests {
         assert_eq!(mode(&global), 0o700);
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_shared_global_dir_should_repair_it_to_owner_only() {
         use std::os::unix::fs::PermissionsExt;
@@ -178,6 +296,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_global_dir_owned_by_another_user_should_refuse() {
         // Any directory we do not own will do: `/` is root's (skip as root).
@@ -189,6 +308,7 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_custom_socket_dir_should_create_missing_but_keep_existing_modes() {
         use std::os::unix::fs::PermissionsExt;
@@ -203,6 +323,36 @@ mod tests {
         std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755)).unwrap();
         prepare_socket_dir(&existing.join("pu.sock"), Some(&global)).unwrap();
         assert_eq!(mode(&existing), 0o755);
+        assert!(!global.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_missing_or_shared_global_dir_should_make_it_private() {
+        let tmp = TempDir::new().unwrap();
+        let global = tmp.path().join(".pu");
+        prepare_socket_dir(&global.join("daemon.sock"), Some(&global)).unwrap();
+        pu_core::private_fs::check_private(&global).unwrap();
+        pu_core::win_security::grant_for_test(&global, "WD").unwrap(); // Everyone
+        assert!(pu_core::private_fs::check_private(&global).is_err());
+        prepare_socket_dir(&global.join("daemon.sock"), Some(&global)).unwrap();
+        pu_core::private_fs::check_private(&global).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_custom_socket_dir_should_create_missing_private_but_keep_existing() {
+        let tmp = TempDir::new().unwrap();
+        let global = tmp.path().join(".pu");
+        let fresh = tmp.path().join("fresh");
+        prepare_socket_dir(&fresh.join("pu.sock"), Some(&global)).unwrap();
+        pu_core::private_fs::check_private(&fresh).unwrap();
+
+        let existing = tmp.path().join("existing");
+        std::fs::create_dir(&existing).unwrap();
+        pu_core::win_security::grant_for_test(&existing, "WD").unwrap();
+        prepare_socket_dir(&existing.join("pu.sock"), Some(&global)).unwrap();
+        assert!(pu_core::private_fs::check_private(&existing).is_err());
         assert!(!global.exists());
     }
 

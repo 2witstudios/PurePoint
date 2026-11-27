@@ -13,6 +13,7 @@ RELEASE = ROOT / ".github/workflows/release.yml"
 RELEASE_PROOF = ROOT / ".github/workflows/release-proof.yml"
 MACOS = ROOT / ".github/workflows/macos.yml"
 INSTALL = ROOT / "scripts/install.sh"
+INSTALL_PS1 = ROOT / "scripts/install.ps1"
 INFO_PLIST = ROOT / "apps/purepoint-macos/Info.plist"
 PBXPROJ = ROOT / "apps/purepoint-macos/purepoint-macos.xcodeproj/project.pbxproj"
 PACKAGE_RESOLVED = ROOT / "apps/purepoint-macos/purepoint-macos.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
@@ -105,8 +106,24 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_runs_only_for_version_tag_pushes(self):
         # PyYAML reads the bare `on` key as boolean True.
         triggers = self.workflow[True]
-        self.assertEqual(list(triggers), ["push"])
+        self.assertEqual(list(triggers), ["push", "workflow_dispatch"])
         self.assertEqual(triggers["push"], {"tags": ["v*"]})
+        self.assertIsNone(triggers["workflow_dispatch"])
+
+    def test_a_manual_run_is_a_windows_dry_run_that_publishes_nothing(self):
+        tag_only = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
+        for name in ("build-macos", "sign-macos", "linux", "sbom", "sign-linux", "attest", "publish"):
+            with self.subTest(job=name):
+                self.assertEqual(self.jobs[name]["if"], tag_only)
+        # linux-phone needs linux, so it is skipped with it.
+        self.assertIn("linux", self.jobs["linux-phone"]["needs"])
+        self.assertNotIn("if", self.jobs["windows"])
+        self.assertIn("workflow_dispatch", self.jobs["sign-windows"]["if"])
+        version = steps(self.jobs["version"])[0]
+        self.assertIn('if [ "$EVENT_NAME" = workflow_dispatch ]', version["run"])
+        self.assertIn('echo "raw=0.0.0"', version["run"])
+        # A dry run never queues behind, or cancels, a real release.
+        self.assertIn("github.event_name == 'push' && 'release'", self.workflow["concurrency"]["group"])
 
     def test_token_permissions_are_granted_per_job(self):
         self.assertEqual(self.workflow["permissions"], {})
@@ -185,10 +202,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     self.assertNotIn("run", step if name == "attest" else {})
 
     def test_secrets_reach_only_the_protected_signing_jobs(self):
-        signers = {"sign-macos", "sign-linux"}
+        signers = {"sign-macos", "sign-linux", "sign-windows"}
         for name in signers:
             with self.subTest(job=name):
-                self.assertEqual(self.jobs[name]["environment"], "release")
+                if name == "sign-windows":
+                    # Its dry run (workflow_dispatch) gets no environment and no secrets.
+                    job = self.jobs[name]
+                    self.assertEqual(job["environment"], "${{ github.event_name == 'push' && 'release' || '' }}")
+                    expressions = re.findall(r"\$\{\{[^}]*\}\}", json.dumps(job))
+                    gated = [e for e in expressions if "secrets." in e]
+                    self.assertTrue(gated)
+                    for expression in gated:
+                        self.assertRegex(expression, r"^\$\{\{ github\.event_name == 'push' && secrets\.[A-Z_]+ \|\| '' \}\}$")
+                else:
+                    self.assertEqual(self.jobs[name]["environment"], "release")
                 self.assertIn("refs/tags/v", self.jobs[name]["if"])
         for name, job in self.jobs.items():
             if name not in signers:
@@ -196,8 +223,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     self.assertNotIn("secrets.", json.dumps(job))
 
     def test_nothing_is_published_before_it_is_signed_and_attested(self):
-        self.assertTrue({"sign-macos", "sign-linux", "attest", "sbom"} <= set(self.jobs["publish"]["needs"]))
-        self.assertTrue({"sign-macos", "linux", "sbom"} <= set(self.jobs["attest"]["needs"]))
+        self.assertTrue({"sign-macos", "sign-linux", "sign-windows", "attest", "sbom"} <= set(self.jobs["publish"]["needs"]))
+        self.assertTrue({"sign-macos", "linux", "sign-windows", "sbom"} <= set(self.jobs["attest"]["needs"]))
 
     def test_every_release_binary_has_provenance_and_sbom_attestations(self):
         attests = [step for step in steps(self.jobs["attest"]) if step.get("uses", "").startswith("actions/attest@")]
@@ -314,7 +341,110 @@ class ReleaseWorkflowTests(unittest.TestCase):
         for line in self.text.splitlines():
             if "--clobber" in line:
                 with self.subTest(line=line.strip()):
-                    self.assertEqual(line.strip(), "gh release upload appcast build/appcast.xml --clobber")
+                    self.assertIn(line.strip(), {
+                        "gh release upload appcast build/appcast.xml --clobber",
+                        "gh release upload appcast build/latest-windows.json --clobber",
+                    })
+
+    # --- Windows (DIST-009, WIN-10.4) ---
+
+    def test_windows_builds_both_architectures_without_secrets(self):
+        build = self.jobs["windows"]
+        self.assertEqual(build["permissions"], {"contents": "read"})
+        self.assertEqual(build["needs"], "version")
+        self.assertEqual(build["runs-on"], "windows-latest")
+        self.assertEqual(
+            {(leg["arch"], leg["target"]) for leg in build["strategy"]["matrix"]["include"]},
+            {("x64", "x86_64-pc-windows-msvc"), ("arm64", "aarch64-pc-windows-msvc")},
+        )
+        bundle = next(step for step in steps(build) if step.get("name") == "Build CLI and installer")
+        self.assertEqual(bundle["run"], 'node scripts/build-release.mjs --arch "$ARCH" --version "$VERSION"')
+        # The public key is a repository variable; signing keys never reach the build.
+        self.assertEqual(bundle["env"], {"TAURI_UPDATER_PUBKEY": "${{ vars.TAURI_UPDATER_PUBKEY }}"})
+        self.assertIn("rustup target add", run_text(build))
+        package = run_text(build)
+        self.assertIn('NAME="purepoint-${VERSION}-${TARGET}"', package)
+        self.assertIn('SETUP="PurePoint_${VERSION}_${ARCH}-setup.exe"', package)
+        self.assertIn("ZipFile]::CreateFromDirectory", package)
+        smoke = next(step for step in steps(build) if "install.ps1" in step.get("run", ""))
+        self.assertEqual(smoke["if"], "matrix.arch == 'x64'")
+        self.assertIn("-InstallDir $dir", smoke["run"])
+        # Windows artifacts never match the Linux jobs' `purepoint-*` download pattern.
+        uploads = [step["with"]["name"] for step in steps(build) if step.get("uses", "").startswith("actions/upload-artifact@")]
+        self.assertEqual(uploads, ["windows-build-${{ matrix.arch }}"])
+        for step in steps(build):
+            self.assertNotIn("${{", step.get("run", ""))
+
+    def test_windows_archives_are_signed_with_the_key_both_install_scripts_embed(self):
+        job = self.jobs["sign-windows"]
+        self.assertEqual(set(job["needs"]), {"version", "windows"})
+        sign = next(step for step in steps(job) if step.get("name") == "Sign archives")
+        self.assertEqual(sign["env"], {"RELEASE_MINISIGN_KEY": "${{ github.event_name == 'push' && secrets.RELEASE_MINISIGN_KEY || '' }}"})
+        script = sign["run"]
+        self.assertIn('if [ -z "$RELEASE_MINISIGN_KEY" ]', script)
+        self.assertIn("::warning", script)
+        self.assertIn("scripts/install.sh", script)
+        self.assertIn("scripts/install.ps1", script)
+        self.assertIn(".github/scripts/minisign.sh sign \"$KEY\" dist/*.zip dist/*-setup.exe", script)
+        self.assertGreaterEqual(script.count('rm -f "$KEY"'), 2)
+        self.assertIn("umask 077", script)
+        self.assertIn('"OpenSSL 3."*', script)
+        self.assertRegex(INSTALL_PS1.read_text(), r"(?m)^\$ReleasePublicKey = 'RWS[A-Za-z0-9+/]{53}'$")
+        ps1_key = re.search(r"(?m)^\$ReleasePublicKey = '(.*)'$", INSTALL_PS1.read_text()).group(1)
+        sh_key = re.search(r'(?m)^RELEASE_PUBLIC_KEY="(.*)"$', INSTALL.read_text()).group(1)
+        self.assertEqual(ps1_key, sh_key)
+        # Checksums are rewritten after Authenticode changes the bytes, before minisign signs them.
+        names = [step.get("name") for step in steps(job)]
+        self.assertLess(names.index("Authenticode-sign archives and installers"), names.index("Write checksums"))
+        self.assertLess(names.index("Write checksums"), names.index("Sign archives"))
+        self.assertLess(names.index("Sign archives"), names.index("Sign installers for the updater and write latest-windows.json"))
+
+    def test_authenticode_runs_only_with_a_certificate_and_leaves_none_behind(self):
+        job = self.jobs["sign-windows"]
+        check = next(step for step in steps(job) if step.get("id") == "authenticode")
+        self.assertEqual(check["env"], {"WINDOWS_CERTIFICATE_PFX": "${{ github.event_name == 'push' && secrets.WINDOWS_CERTIFICATE_PFX || '' }}"})
+        self.assertIn("::warning", check["run"])
+        sign = next(step for step in steps(job) if step.get("name") == "Authenticode-sign archives and installers")
+        self.assertEqual(sign["if"], "steps.authenticode.outputs.enabled == 'true'")
+        self.assertIn("signtool", sign["run"])
+        self.assertIn("/tr $env:TIMESTAMP_URL", sign["run"])
+        self.assertIn("verify /pa", sign["run"])
+        self.assertIn("finally", sign["run"])
+        self.assertIn("Remove-Item $pfx", sign["run"])
+        cleanup = steps(job)[-1]
+        self.assertEqual(cleanup["if"], "always()")
+        self.assertIn("authenticode.pfx", cleanup["run"])
+        self.assertIn("release-minisign.pem", cleanup["run"])
+
+    def test_windows_update_feed_is_signed_checked_and_replaces_only_its_own_asset(self):
+        job = self.jobs["sign-windows"]
+        feed = next(step for step in steps(job) if step.get("name") == "Sign installers for the updater and write latest-windows.json")
+        self.assertEqual(feed["env"]["TAURI_SIGNING_PRIVATE_KEY"], "${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}")
+        self.assertEqual(feed["env"]["TAURI_UPDATER_PUBKEY"], "${{ vars.TAURI_UPDATER_PUBKEY }}")
+        self.assertIn("node scripts/sign-release-feed.mjs", feed["run"])
+        self.assertIn("_x64-setup.exe", feed["run"])
+        self.assertIn("_arm64-setup.exe", feed["run"])
+        upload = next(step for step in steps(job) if step.get("name") == "Upload Windows update feed")
+        self.assertEqual(upload["with"]["name"], "windows-appcast")
+        self.assertIn("hashFiles('build/appcast/latest-windows.json')", upload["if"])
+        publish = run_text(self.jobs["publish"])
+        self.assertIn("if [ -f build/latest-windows.json ]", publish)
+
+    def test_windows_release_is_attested_and_published(self):
+        for name in ("attest", "publish"):
+            with self.subTest(job=name):
+                downloads = [step["with"] for step in steps(self.jobs[name]) if step.get("uses", "").startswith("actions/download-artifact@")]
+                self.assertIn({"name": "windows-release", "path": "dist"}, downloads)
+        attests = [step["with"] for step in steps(self.jobs["attest"]) if step.get("uses", "").startswith("actions/attest@")]
+        for attest in attests:
+            with self.subTest(sbom=attest.get("sbom-path")):
+                self.assertIn("dist/*-setup.exe", attest["subject-path"])
+        provenance = next(attest for attest in attests if "sbom-path" not in attest)
+        self.assertIn("dist/*.zip", provenance["subject-path"])
+        release = next(step for step in steps(self.jobs["sign-windows"]) if step.get("name") == "Upload Windows release")
+        self.assertEqual(release["with"]["name"], "windows-release")
+        for pattern in ("dist/*.zip", "dist/*.zip.sha256", "dist/*-setup.exe", "dist/*.minisig"):
+            self.assertIn(pattern, release["with"]["path"].split())
 
 
 if __name__ == "__main__":

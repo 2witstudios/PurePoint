@@ -9,7 +9,7 @@
     "start": "node bridge/main.js",
     "fixture": "node bridge/main.js --fixture",
     "pair": "node bridge/pair.js",
-    "test": "node --test bridge/*.test.js",
+    "test": "node --test --test-timeout=180000 bridge/*.test.js",
     "check": "tsc --noEmit",
     "package:runtime": "python3 runtime/package-runtime.py",
     "proof:runtime": "node runtime/prove-runtime.mjs"
@@ -24,5 +24,8 @@
     "@types/ws": "8.18.2",
     "prettier": "3.9.10",
     "typescript": "7.0.2"
+  },
+  "overrides": {
+    "undici": "^8.13.1"
   }
 }

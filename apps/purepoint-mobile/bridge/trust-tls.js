@@ -10,24 +10,49 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { mintHostIdentity } from "./identity.js";
+import { assertPrivate, makePrivate } from "./acl.js";
 import {
   X509Certificate,
   createPrivateKey,
   createPublicKey,
   createHash,
 } from "node:crypto";
+const win32 = process.platform === "win32";
+const notPrivate = () =>
+  new Error(
+    "Point Guard trust state must be owner-only regular files and a private directory.",
+  );
 export async function privateEntry(file, directory = false) {
   const info = await lstat(file);
   if (
     info.isSymbolicLink() ||
-    (directory ? !info.isDirectory() : !info.isFile()) ||
+    (directory ? !info.isDirectory() : !info.isFile())
+  )
+    throw notPrivate();
+  if (win32) {
+    // Windows has no mode bits or uids: an owner-only ACL (WINAPP-008).
+    try {
+      await assertPrivate(file, { directory });
+    } catch {
+      throw notPrivate();
+    }
+    return info;
+  }
+  if (
     info.mode & 0o077 ||
     (typeof process.getuid === "function" && info.uid !== process.getuid())
   )
-    throw new Error(
-      "Point Guard trust state must be owner-only regular files and a private directory.",
-    );
+    throw notPrivate();
   return info;
+}
+/**
+ * mkdir -m 0700, then require it private. Windows: a directory this call
+ * created gets the protected owner-only ACL; an existing one is only checked.
+ */
+export async function privateDirectory(directory) {
+  const created = await mkdir(directory, { recursive: true, mode: 0o700 });
+  if (win32 && created !== undefined) await makePrivate(directory);
+  return privateEntry(directory, true);
 }
 async function exists(file) {
   try {
@@ -41,8 +66,7 @@ async function exists(file) {
 /** Provision once under the trust writer lock; partial/expired identity requires deliberate recovery. */
 export async function ensureHostTLS(directory, assertHeld = () => {}) {
   assertHeld();
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await privateEntry(directory, true);
+  await privateDirectory(directory);
   const certFile = path.join(directory, "identity-cert.pem");
   const keyFile = path.join(directory, "identity-key.pem");
   const present = await Promise.all([

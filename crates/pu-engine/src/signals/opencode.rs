@@ -5,7 +5,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -191,7 +190,7 @@ pub(super) fn prepare(
         get("XDG_STATE_HOME").or_else(|| get("HOME").map(|p| p.join(".local/state")))?;
     let launch = pu_core::id::session_id();
     let artifacts = install::Artifacts::new(Path::new(project), &launch).ok()?;
-    let socket = tokio::net::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
+    let socket = artifacts.bind_signal().ok()?;
     let identity = SignalIdentity {
         agent_id: agent.into(),
         worktree_id: worktree,
@@ -228,17 +227,9 @@ struct Registration {
 }
 
 fn registration(path: &Path) -> Option<Registration> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
+    let file = pu_core::private_fs::open_no_follow(path).ok()?;
     let meta = file.metadata().ok()?;
-    if !meta.is_file()
-        || meta.len() > 16 * 1024
-        || meta.mode() & 0o7777 != 0o600
-        || meta.uid() != unsafe { libc::geteuid() }
-    {
+    if !meta.is_file() || meta.len() > 16 * 1024 || !super::exact_private_file(&file, path) {
         return None;
     }
     let mut bytes = Vec::new();
@@ -912,6 +903,7 @@ mod tests {
         assert!(ended.pending_attention.is_empty());
         assert!(ended.outcome.is_none());
     }
+    #[cfg(unix)]
     fn write_registration(path: &Path, url: &str, version: &str) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::write(
@@ -924,6 +916,7 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
+    #[cfg(unix)]
     #[test]
     fn given_registration_should_accept_only_private_owner_file_and_local_pinned_service() {
         use std::os::unix::fs::PermissionsExt;
@@ -950,6 +943,7 @@ mod tests {
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert!(registration(&link).is_none());
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_multiple_roots_should_share_service_reads_and_preserve_each_root() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1142,6 +1136,7 @@ mod tests {
         task.abort();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn given_existing_service_should_read_native_snapshots_without_starting_server_or_mutating_requests()
      {

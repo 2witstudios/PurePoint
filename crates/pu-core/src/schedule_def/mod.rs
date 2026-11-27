@@ -159,7 +159,7 @@ pub fn delete_schedule_def(dir: &Path, name: &str) -> Result<bool, std::io::Erro
     crate::validation::validate_name(name)?;
     let path = dir.join(format!("{name}.yaml"));
     if path.is_file() {
-        std::fs::remove_file(path)?;
+        crate::fs_retry::remove_file(path)?;
         Ok(true)
     } else {
         Ok(false)

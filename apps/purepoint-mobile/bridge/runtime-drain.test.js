@@ -8,12 +8,15 @@ import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { openRuntimeState } from "./runtime-state.js";
+import { privateTemp } from "./private-temp.test-helper.js";
+// Skipped on Windows: POSIX /bin/ps, /usr/bin/true and signals (Unix only).
+const posixOnly = {
+  skip: process.platform === "win32" && "POSIX /bin/ps, /usr/bin/true and signals (Unix only)",
+};
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function checkDrain(loss) {
-  const home = await mkdtemp(
-    path.join(os.tmpdir(), "pointguard-controller-drain-"),
-  );
+  const home = await privateTemp("pointguard-controller-drain-");
   const stateDir = path.join(home, "state");
   let child, socket, successor;
   const messages = [];
@@ -69,6 +72,7 @@ async function checkDrain(loss) {
         env: {
           ...process.env,
           HOME: home,
+          USERPROFILE: home, // Windows os.homedir()
           POINT_GUARD_STATE_DIR: stateDir,
           POINT_GUARD_PU_PATH: "/usr/bin/true",
           POINT_GUARD_INSTANCE_ID: randomUUID(),
@@ -157,6 +161,7 @@ async function checkDrain(loss) {
           env: {
             ...process.env,
             HOME: home,
+            USERPROFILE: home, // Windows os.homedir()
             POINT_GUARD_STATE_DIR: stateDir,
             POINT_GUARD_PU_PATH: "/usr/bin/true",
             POINT_GUARD_APP_LIFETIME: "stdin",
@@ -244,6 +249,6 @@ async function checkDrain(loss) {
 }
 
 for (const loss of ["helper", "app"]) {
-  test(`${loss} loss retains runtime ownership until a dispatched controller action drains`, () =>
+  test(`${loss} loss retains runtime ownership until a dispatched controller action drains`, posixOnly, () =>
     checkDrain(loss));
 }

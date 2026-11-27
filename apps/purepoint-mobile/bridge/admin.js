@@ -56,9 +56,16 @@ export async function prepareAdminSocket(socketPath) {
 }
 /**
  * Owner-only HTTP authority: a loopback ephemeral TCP listener (Mac, where the
- * app holds the token) or a Unix socket in a private directory (Linux).
+ * app holds the token), a Unix socket in a private directory (Linux), or a
+ * named pipe (Windows). Pipe names are global and Node gives the pipe its
+ * default DACL, so on Windows the bearer token is the owner check.
  */
-export async function serveAdmin({ token, dispatch, socketPath = undefined }) {
+export async function serveAdmin({
+  token,
+  dispatch,
+  socketPath = undefined,
+  pipeName = undefined,
+}) {
   const server = createServer(async (req, res) => {
     const send = (status, value) => {
       res.writeHead(status, {
@@ -117,6 +124,11 @@ export async function serveAdmin({ token, dispatch, socketPath = undefined }) {
   server.requestTimeout = 10000;
   server.headersTimeout = 10000;
   server.maxConnections = 16;
+  if (
+    pipeName !== undefined &&
+    !/^\\\\\.\\pipe\\purepoint-[0-9a-f]{16}-pointguard-owner$/.test(pipeName)
+  )
+    throw new AdminError("admin_socket", "Owner admin pipe name is invalid.");
   if (socketPath) await prepareAdminSocket(socketPath);
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -125,8 +137,20 @@ export async function serveAdmin({ token, dispatch, socketPath = undefined }) {
       resolve(null);
     };
     if (socketPath) server.listen(socketPath, ready);
+    // libuv creates the first instance with FILE_FLAG_FIRST_PIPE_INSTANCE, so
+    // a pre-existing (squatted) pipe fails with EADDRINUSE instead of sharing.
+    else if (pipeName) server.listen(pipeName, ready);
     else server.listen(0, "127.0.0.1", ready);
   });
+  if (pipeName)
+    return {
+      socket: pipeName,
+      shutdown: () =>
+        new Promise((resolve) => {
+          server.close(() => resolve(null));
+          server.closeAllConnections();
+        }),
+    };
   if (socketPath) {
     // Socket mode is explicit, independent of umask; the 0700 parent covers
     // the window between bind and chmod.

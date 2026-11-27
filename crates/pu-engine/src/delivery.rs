@@ -5,14 +5,13 @@
 //! characters were dropped), press Enter only then, and confirm the box
 //! cleared and the turn was echoed. Anything else is a loud error.
 
-use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::Instant;
 
 use crate::output_buffer::OutputBuffer;
-use crate::pty_manager::NativePtyHost;
+use crate::pty_manager::{NativePtyHost, Pty};
 use crate::screen::{ScreenTracker, squash};
 
 #[derive(Debug, Clone)]
@@ -71,14 +70,12 @@ const POLL: Duration = Duration::from_millis(25);
 const CTRL_U: &[u8] = b"\x15";
 const BACKSPACE: u8 = 0x7f;
 
-/// Window size of the PTY, so the emulated screen wraps like the real one.
-fn winsize(fd: &OwnedFd) -> (u16, u16) {
-    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
-    let ok = unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) } == 0;
-    if ok && ws.ws_row > 0 && ws.ws_col > 0 {
-        (ws.ws_row, ws.ws_col)
-    } else {
-        (40, 120)
+/// Window size of the PTY as `(rows, cols)`, so the emulated screen wraps
+/// like the real one.
+fn winsize(pty: &Pty) -> (u16, u16) {
+    match pty.size() {
+        Some((cols, rows)) if rows > 0 && cols > 0 => (rows, cols),
+        _ => (40, 120),
     }
 }
 
@@ -131,11 +128,11 @@ async fn wait_ready(
 /// Empties the input box after a bad attempt.
 async fn clear_box(
     host: &NativePtyHost,
-    fd: &Arc<OwnedFd>,
+    fd: &Pty,
     tracker: &mut ScreenTracker,
     output: &OutputBuffer,
 ) -> Result<(), DeliveryError> {
-    host.write_to_fd(fd, CTRL_U).await?;
+    host.write_to_pty(fd, CTRL_U).await?;
     let deadline = Instant::now() + Duration::from_secs(1);
     if wait_until(tracker, output, deadline, |t| {
         box_text(t).is_some_and(|s| s.is_empty())
@@ -145,7 +142,7 @@ async fn clear_box(
         return Ok(());
     }
     let n = box_text(tracker).map_or(0, |s| s.chars().count());
-    host.write_to_fd(fd, &vec![BACKSPACE; n]).await?;
+    host.write_to_pty(fd, &vec![BACKSPACE; n]).await?;
     let deadline = Instant::now() + Duration::from_secs(1);
     wait_until(tracker, output, deadline, |t| {
         box_text(t).is_some_and(|s| s.is_empty())
@@ -157,7 +154,7 @@ async fn clear_box(
 /// Types `text` and waits until the box shows all of it.
 async fn type_text(
     host: &NativePtyHost,
-    fd: &Arc<OwnedFd>,
+    fd: &Pty,
     tracker: &mut ScreenTracker,
     output: &OutputBuffer,
     text: &str,
@@ -203,7 +200,7 @@ async fn type_text(
 /// Delivers `text` to the agent as one submitted turn, or says why not.
 pub async fn deliver_prompt(
     host: &NativePtyHost,
-    fd: &Arc<OwnedFd>,
+    fd: &Pty,
     output: &Arc<OutputBuffer>,
     text: &str,
     opts: &DeliveryOptions,
@@ -222,7 +219,7 @@ pub async fn deliver_prompt(
         t.input_box().is_some_and(|b| b.is_empty()) && (t.exceeds_screen(text) || t.echoes(text))
     };
 
-    host.write_to_fd(fd, b"\r").await?;
+    host.write_to_pty(fd, b"\r").await?;
     let first = Instant::now() + opts.submit_retry_after;
     if wait_until(&mut tracker, output, first, submitted).await {
         return Ok(());
@@ -230,7 +227,7 @@ pub async fn deliver_prompt(
     // Enter may have been swallowed. Press it again only while the box still
     // holds the whole text, so a delivered prompt is never submitted twice.
     if box_text(&tracker).as_deref() == Some(want.as_str()) {
-        host.write_to_fd(fd, b"\r").await?;
+        host.write_to_pty(fd, b"\r").await?;
     }
     let last = Instant::now() + opts.submit_timeout;
     if wait_until(&mut tracker, output, last, submitted).await {

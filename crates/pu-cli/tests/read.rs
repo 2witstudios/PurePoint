@@ -1,7 +1,18 @@
+// Read-source bindings cannot be saved on Windows until WIN-3.8.
+#![cfg(unix)]
+
+use pu_core::canon::CanonicalPath;
 use pu_core::read::Runtime;
 use pu_engine::read_source::{Binding, save_binding};
 use pu_engine::{engine::Engine, ipc_server::IpcServer};
 use std::path::Path;
+
+/// A terminal command that echoes what it is sent: `cat`, or on Windows
+/// `findstr` (the console echoes the typed line; ConPTY has no `cat`).
+#[cfg(unix)]
+const ECHO_COMMAND: &str = "/bin/cat";
+#[cfg(windows)]
+const ECHO_COMMAND: &str = "findstr.exe x*";
 
 async fn cli(socket: &Path, args: &[&str]) -> std::process::Output {
     tokio::process::Command::new(env!("CARGO_BIN_EXE_pu"))
@@ -23,11 +34,34 @@ async fn json(socket: &Path, args: &[&str]) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+/// A fresh daemon on `socket`, keeping only the persisted registry. On
+/// Windows the aborted server's connection tasks still hold their pipe
+/// instances until they see their clients' EOF, and the pipe name stays owned
+/// until the last one closes (a real daemon restart is a new process, which
+/// starts after the old one's handles are gone): wait for that, bounded.
+async fn rebind(socket: &Path, registry: &Path) -> IpcServer {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let engine = Engine::with_project_registry(registry.to_path_buf()).unwrap();
+        match IpcServer::bind(socket, engine) {
+            Ok(server) => return server,
+            Err(e)
+                if cfg!(windows)
+                    && e.kind() == std::io::ErrorKind::AddrInUse
+                    && std::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(e) => panic!("{e}"),
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn given_native_sources_should_read_all_runtimes_through_real_cli_and_ipc_after_restart() {
     // given
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
+    let root = temp.path().canonical().unwrap();
     let root_s = root.to_str().unwrap();
     let socket = root.join("test.sock");
     let registry = pu_core::paths::project_registry_path(&socket);
@@ -76,9 +110,11 @@ async fn given_native_sources_should_read_all_runtimes_through_real_cli_and_ipc_
     // when: replace the daemon, retaining only persisted state
     task.abort();
     let _ = task.await;
+    // A Unix socket leaves its file behind; a Windows named pipe has no file
+    // at the socket path and is gone once its server is dropped.
+    #[cfg(unix)]
     std::fs::remove_file(&socket).unwrap();
-    let server =
-        IpcServer::bind(&socket, Engine::with_project_registry(registry).unwrap()).unwrap();
+    let server = rebind(&socket, &registry).await;
     let task = tokio::spawn(async move {
         server.run().await.unwrap();
     });
@@ -138,7 +174,7 @@ async fn given_native_sources_should_read_all_runtimes_through_real_cli_and_ipc_
             "--agent",
             "terminal",
             "--command",
-            "/bin/cat",
+            ECHO_COMMAND,
             "--json",
         ],
     )

@@ -1,6 +1,6 @@
 # Machines over SSH
 
-**Maturity: SPECIFIED** | ID Prefix: MACH | Dependencies: `architecture/ipc-api.md`, `architecture/daemon-engine.md`, `architecture/desktop-app-integration.md`, `product/desktop-app.md`, `product/cli.md`, `product/ipad-app.md`
+**Maturity: SPECIFIED** | ID Prefix: MACH | Dependencies: `architecture/ipc-api.md`, `architecture/daemon-engine.md`, `architecture/desktop-app-integration.md`, `product/desktop-app.md`, `product/cli.md`, `product/ipad-app.md`, `product/windows-app.md`
 
 ## Purpose
 
@@ -9,7 +9,7 @@ Let one PurePoint app (and the `pu` CLI) work with PurePoint daemons running on 
 ## Conceptual Model
 
 - **Machine** = a user-chosen name plus an SSH destination (`~/.ssh/config` alias or `user@host[:port]`). Machine id is a UUID. `machineId == nil` means local.
-- **Daemon endpoint** = a Unix socket path the app/CLI talks to. Local is `~/.pu/daemon.sock`. A machine's endpoint is a local socket that the system `ssh` forwards to `<remote $HOME>/.pu/daemon.sock`.
+- **Daemon endpoint** = a Unix socket path the app/CLI talks to. Local is `~/.pu/daemon.sock`. On macOS and Linux, a machine's endpoint is a local socket that the system `ssh` forwards to `<remote $HOME>/.pu/daemon.sock`. On Windows, the local endpoint is a private named pipe and a machine has no local endpoint: each daemon connection is an `ssh.exe` exec relay (MACH-012).
 - **Project identity** = `(machineId, projectRoot)`. The same path on two machines is two projects.
 - Everything a remote project does goes through its daemon endpoint: status, spawn, attach, worktrees, files, git.
 
@@ -22,7 +22,7 @@ PurePoint iPad app (no local daemon, no system ssh)
   └── SSH exec channel per daemon connection: `pu daemon proxy` ⇄ remote ~/.pu/daemon.sock
 ```
 
-On iPad a machine's daemon endpoint is not a local socket. Each daemon connection is an SSH exec channel running `pu daemon proxy` on the machine (MACH-009, `ipad-app.md`).
+On iPad a machine's daemon endpoint is not a local socket. Each daemon connection is an SSH exec channel running `pu daemon proxy` on the machine (MACH-009, `ipad-app.md`). On Windows each daemon connection is one `ssh.exe` process running the same relay (MACH-012).
 
 ## Research Notes
 
@@ -47,6 +47,7 @@ Alternative considered: a dedicated mTLS worker protocol with enrollment, ledger
 ! [MACH-009] On iPad, each daemon connection is an SSH exec channel running `pu daemon proxy`, a stdio-to-socket relay to the machine's `~/.pu/daemon.sock`. All channels share the machine's one primary SSH connection, and an overflow connection is added only when the server refuses a session channel (`MaxSessions`) — iOS has no system ssh, and SwiftNIO SSH cannot open `direct-streamlocal` forwards (`docs/research/ipad-ssh-transport.md`); the daemon protocol is unchanged (MACH-002) and the relay never starts a daemon (MACH-003).
 ! [MACH-010] On iPad, PurePoint stores one device SSH identity: an Ed25519 private key in the Keychain, device-only and never synchronized, generated on first launch or imported from an OpenSSH key. It also pins each machine's host key on first use, after explicit confirmation, and refuses a changed key until the pin is deliberately reset — iOS has no ssh agent, `~/.ssh` or `known_hosts`, so the app must hold the key and the trust MACH-001 leaves to the system.
 ! [MACH-011] On iPad, machines are registered in the app container's own `Application Support/PurePoint/machines.json` with the same schema, not synced with any Mac and without flock or `~/.ssh/config` — there is no shared home or CLI on iOS, and a Mac entry's ssh alias and key would not work from the iPad.
+! [MACH-012] On Windows, a machine's daemon connection is one system `ssh.exe` (Win32-OpenSSH, or `PU_SSH`) per connection, running `pu daemon proxy` on the machine — Win32-OpenSSH has no `ControlMaster`, and a Unix-socket `-L` forward has no Windows endpoint to bind. The relay is the iPad's (MACH-009), and it still uses the user's own ssh config, agent and keys (MACH-001). The registry is `%USERPROFILE%\.pu\machines.json`, with the same schema, shared by the app and the CLI (MACH-008). See [windows-app.md](windows-app.md) WINAPP-013.
 
 ## Requirements
 
@@ -82,7 +83,7 @@ Alternative considered: a dedicated mTLS worker protocol with enrollment, ledger
 
 ## Sum Sheet
 
-Machine = SSH destination. Endpoint = forwarded socket (Mac) or exec relay per connection (iPad). Identity = (machine, root). Daemon owns work. Files and git over IPC. CLI targets explicitly. iPad keys and host pins live in the Keychain, and its registry lives in the container.
+Machine = SSH destination. Endpoint = forwarded socket (Mac, Linux) or exec relay per connection (iPad, Windows). Identity = (machine, root). Daemon owns work. Files and git over IPC. CLI targets explicitly. iPad keys and host pins live in the Keychain, and its registry lives in the container.
 
 ## Interfaces
 
@@ -92,9 +93,9 @@ Machine = SSH destination. Endpoint = forwarded socket (Mac) or exec relay per c
 { "version": 1, "machines": [ { "id": "UUID", "name": "studio", "ssh_host": "studio-mac" } ] }
 ```
 
-`name` is unique (case-insensitive) and is what `--machine` matches. The local forwarded socket for a machine is `~/.pu/machines/<id>/daemon.sock`; `~/.pu/machines` and each `<id>` directory are mode 0700.
+`name` is unique (case-insensitive) and is what `--machine` matches. The local forwarded socket for a machine is `~/.pu/machines/<id>/daemon.sock`; `~/.pu/machines` and each `<id>` directory are mode 0700 (Unix). Windows creates no forward sockets, and `machines.json` is a private file (owner-only DACL) written by atomic replace under an `fs4` lock on `machines.json.lock` (REQ-WINAPP-056).
 
-### SSH forward
+### SSH forward (macOS and Linux)
 
 ```
 /usr/bin/ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes \
@@ -116,6 +117,10 @@ The iPad runs it as one SSH exec string, wrapped like the start command:
 ```
 
 Keychain items, registry location and the overflow-connection rule are specified in `ipad-app.md` (Interfaces).
+
+### Windows relay (MACH-012)
+
+The Windows app and `pu --machine` run `ssh.exe -T -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 <ssh_host> <relay>` per daemon connection (`pu --machine` also passes `-o ControlMaster=no -o ControlPath=none`, which matter only when `PU_SSH` or `PATH` names a non-Win32 ssh that multiplexes), where `<relay>` is the iPad relay command above for a Unix machine, or `pu daemon proxy` for a Windows machine. No `-L` forward, `forward.lock`, `cli-<pid>.sock` or stale-forward sweep exists on Windows. Exit codes are the relay's (0, 69, 1), plus 127 or 9009 when `pu` is missing. Full contract: [windows-app.md](windows-app.md) (Interfaces, Remote relay).
 
 ### Daemon file and git requests (protocol version 9)
 
@@ -157,12 +162,12 @@ The app then types the returned path, shell-escaped, into the agent's terminal w
 
 ### CLI
 
-- `pu --machine <name> <command…>` — conflicts with `--socket`. Uses the app's live forward when its socket answers; otherwise opens a private `ssh -N -L` forward on `cli-<pid>.sock` for the invocation, records the ssh pid in `cli-<pid>.sock.pid`, and closes both on exit. SIGTERM, SIGHUP and SIGINT also close it before the CLI exits. Before opening one it sweeps files whose CLI pid is dead, sending SIGTERM to a recorded pid only if it is still an `ssh` process whose arguments contain `-L <machine dir>/cli-<pid>.sock:`. Never starts a daemon. Project-scoped commands require `--project <remote root>`; agent-targeted commands resolve by id on that machine.
+- `pu --machine <name> <command…>` — conflicts with `--socket`. On macOS and Linux it uses the app's live forward when its socket answers; otherwise opens a private `ssh -N -L` forward on `cli-<pid>.sock` for the invocation, records the ssh pid in `cli-<pid>.sock.pid`, and closes both on exit. SIGTERM, SIGHUP and SIGINT also close it before the CLI exits. Before opening one it sweeps files whose CLI pid is dead, sending SIGTERM to a recorded pid only if it is still an `ssh` process whose arguments contain `-L <machine dir>/cli-<pid>.sock:`. Never starts a daemon. Project-scoped commands require `--project <remote root>`; agent-targeted commands resolve by id on that machine. On Windows it runs the Windows relay per connection instead, with no forward or sweep (MACH-012).
 - `pu machine list|add <name> <ssh_host>|remove <name>|status [<name>]|start <name>`.
 
 ## Edge Cases
 
-- **Two forwards for one machine** (app and CLI): the CLI reuses a live app socket and otherwise uses a per-invocation socket, so they never unlink each other's socket.
+- **Two forwards for one machine** (app and CLI, macOS and Linux): the CLI reuses a live app socket and otherwise uses a per-invocation socket, so they never unlink each other's socket.
 - **Remote home with spaces**: the remote socket path is passed as a single argv element.
 - **Daemon restarted remotely**: the forward stays up; requests reconnect per call and streams resubscribe like local ones.
 - **Dropped folder or unreadable file on a remote agent**: the drop is refused with a beep; nothing is uploaded or typed.
@@ -170,7 +175,7 @@ The app then types the returned path, shell-escaped, into the agent's terminal w
 - **Old remote daemon (protocol 8)**: shown as incompatible; the user upgrades PurePoint on that machine.
 - **Agent/worktree id collision across machines**: ids are 8 random base36 characters (~2.8×10¹² space), so the app's terminal cache and pane surfaces key agents by id alone. A collision would only arise from copying a daemon's `.pu` state between machines; the CLI is unaffected because `--machine` scopes every request to one daemon.
 - **iPad and Mac on one machine**: each is an independent client of the machine's daemon (an exec relay and an `ssh -L` forward respectively), with its own registry entry. Neither sees the other's registry.
-- **Two app instances, one machine**: the instance holding `~/.pu/machines/<id>/forward.lock` (flock) owns the forward; another instance follows that forward and never launches or ends one of its own.
+- **Two app instances, one machine** (macOS): the instance holding `~/.pu/machines/<id>/forward.lock` (flock) owns the forward; another instance follows that forward and never launches or ends one of its own.
 - **Remote layout changed elsewhere** (another Mac, or `pu grid` on the machine): layout saves are conditional on the document's modification time; on a conflict the app adopts the machine's document instead of overwriting it, and quitting only writes layouts with unsaved changes.
 - **Remote files the editor cannot save** (over the ~750 KB request limit) open read-only; files over the 1 MB read limit show why they cannot open. Local copies for other apps are limited to 8 MB, quarantined (Gatekeeper checks them before anything runs), and removed when the app quits.
 - **Slow or stalled links**: every remote file and git call runs off Swift's shared concurrency pool (a dedicated queue per git service and for host I/O), so a degraded machine cannot stall local projects.

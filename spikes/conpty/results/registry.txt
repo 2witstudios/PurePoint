@@ -1,0 +1,5 @@
+registry file: ~/.claude/sessions/14520.json
+row: {"pid":14520,"sessionId":"70b25fdb-8714-41eb-bfd9-9253530d28c4","cwd":"C:\\Users\\<user>\\dev","startedAt":1795653828085,"procStart":"134401274260337323","version":"2.1.332","peerProtocol":1,"peerFeatures":["notify_idle","artifact_yield"],"kind":"interactive","entrypoint":"cli","pidDomain":"win32:<host>","asksForConvertedSkills":false,"messagingSocketPath":"\\\\.\\pipe\\LOCAL\\cc-msg-45f2d151c76ccad403402c570786aa6e","name":"dev-fc","nameSource":"derived","nameSince":1795653828085,"status":"idle","updatedAt":1795653827529,"statusUpdatedAt":1795653827529}
+GetProcessTimes creation FILETIME (100ns since 1601): 134401274260337323
+COMPUTERNAME lowercased equals pidDomain host part: true
+row file exists after exit: false

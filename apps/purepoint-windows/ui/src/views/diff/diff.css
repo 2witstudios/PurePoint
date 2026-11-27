@@ -1,0 +1,765 @@
+/*
+ * The review: tabs, diff cards, the virtualized diff body, the changed-file navigator, PR rows
+ * and the inline code body (WIN-8.3). Diff colours are Theme.swift's tokens; the metrics are
+ * DiffTextRendering's (line numbers right-aligned at 36 and 72, code from 82) and must match
+ * diffLayout.ts, which estimates the row heights.
+ */
+@import './highlight.css';
+
+:root {
+  --diff-divider: rgba(0, 0, 0, 0.1);
+  --diff-card-border: rgba(0, 0, 0, 0.12);
+  --diff-tertiary: rgba(0, 0, 0, 0.3);
+  --diff-warning: #c05a00;
+  --diff-warning-background: rgba(255, 149, 0, 0.08);
+  --diff-selected: rgba(0, 95, 184, 0.12);
+  --diff-status-added: #34c759;
+  --diff-status-deleted: #ff3b30;
+  --diff-status-modified: #d4a300;
+  --diff-status-other: #8e8e93;
+}
+
+:root[data-theme='dark'] {
+  --diff-divider: rgba(255, 255, 255, 0.1);
+  --diff-card-border: rgba(255, 255, 255, 0.14);
+  --diff-tertiary: rgba(255, 255, 255, 0.3);
+  --diff-warning: #ffaa44;
+  --diff-warning-background: rgba(255, 159, 10, 0.1);
+  --diff-selected: rgba(96, 205, 255, 0.16);
+  --diff-status-added: #30d158;
+  --diff-status-deleted: #ff453a;
+  --diff-status-modified: #ffd60a;
+  --diff-status-other: #98989d;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --diff-divider: rgba(255, 255, 255, 0.1);
+    --diff-card-border: rgba(255, 255, 255, 0.14);
+    --diff-tertiary: rgba(255, 255, 255, 0.3);
+    --diff-warning: #ffaa44;
+    --diff-warning-background: rgba(255, 159, 10, 0.1);
+    --diff-selected: rgba(96, 205, 255, 0.16);
+    --diff-status-added: #30d158;
+    --diff-status-deleted: #ff453a;
+    --diff-status-modified: #ffd60a;
+    --diff-status-other: #98989d;
+  }
+}
+
+/* ReviewChangesView */
+.review-changes,
+.review-content,
+.review-stack {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.review-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--diff-divider);
+}
+
+.review-tabs {
+  max-width: 520px;
+}
+
+.diff-base-menu {
+  position: relative;
+}
+
+.diff-base-button {
+  font: 11px var(--pp-font-mono);
+}
+
+.diff-base-list {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 5;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--menu-background);
+  border: 1px solid var(--menu-border);
+  border-radius: 6px;
+  box-shadow: var(--menu-shadow);
+}
+
+.diff-base-list button {
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  font: 12px var(--pp-font-mono);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.diff-base-list button:hover {
+  background: var(--control-hover);
+}
+
+.review-subheader {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px;
+  border-bottom: 1px solid var(--diff-divider);
+}
+
+.review-subheader-title {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-sha {
+  font: 11px var(--pp-font-mono);
+  color: var(--secondary-text);
+}
+
+.review-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.review-commit-row,
+.review-pr-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--diff-divider);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 16px;
+}
+
+.review-pr-row {
+  padding: 0;
+}
+
+.review-commit-row:hover,
+.review-pr-row:hover {
+  background: var(--control-hover);
+}
+
+.review-row-icon {
+  color: var(--secondary-text);
+  flex: none;
+}
+
+.review-commit-text {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.review-commit-subject {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.review-commit-meta {
+  font-size: 11px;
+  color: var(--secondary-text);
+}
+
+.review-empty {
+  color: var(--secondary-text);
+  padding: 30px;
+  text-align: center;
+}
+
+.review-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  font-size: 12px;
+  color: var(--secondary-text);
+  border-bottom: 1px solid var(--diff-divider);
+}
+
+.review-banner.warning {
+  background: var(--diff-warning-background);
+}
+
+.review-banner-text {
+  user-select: text;
+}
+
+/* DiffListView */
+.diff-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.diff-list-bar,
+.diff-navigator-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--diff-divider);
+}
+
+.diff-navigator-bar {
+  padding: 0 10px;
+}
+
+.diff-list-count {
+  font-size: 11px;
+  color: var(--secondary-text);
+}
+
+.diff-list-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.diff-list-middle {
+  flex: 1;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+}
+
+.diff-list-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  color: var(--secondary-text);
+}
+
+.diff-list-message {
+  font-size: 12px;
+  user-select: text;
+  text-align: center;
+}
+
+.diff-list-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-anchor: none;
+  contain: strict;
+}
+
+.diff-list-inner {
+  position: relative;
+  width: 100%;
+}
+
+.diff-list-row {
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 16px;
+}
+
+.diff-list-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--diff-warning);
+  padding-bottom: 12px;
+  user-select: text;
+}
+
+.diff-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--secondary-text);
+  padding: 6px 0 6px;
+}
+
+/* A card is the run of rows between its top and bottom; each row draws its share of the border. */
+.diff-card-row > * {
+  background: var(--pp-card-background);
+  border-left: 1px solid var(--diff-card-border);
+  border-right: 1px solid var(--diff-card-border);
+}
+
+.diff-card-row.gap-above {
+  padding-top: 12px;
+}
+
+.diff-card-top > * {
+  border-top: 1px solid var(--diff-card-border);
+  border-radius: 8px 8px 0 0;
+}
+
+.diff-card-bottom > * {
+  border-bottom: 1px solid var(--diff-card-border);
+  border-radius: 0 0 8px 8px;
+}
+
+.diff-card-top.diff-card-bottom > * {
+  border-radius: 8px;
+}
+
+.diff-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: var(--pp-card-header-background) !important;
+  border-top: 1px solid var(--diff-card-border);
+  overflow: hidden;
+}
+
+.diff-card-chevron {
+  color: var(--secondary-text);
+  flex: none;
+}
+
+.diff-status-icon {
+  flex: none;
+}
+
+.diff-status-icon.added {
+  color: var(--diff-status-added);
+}
+
+.diff-status-icon.deleted {
+  color: var(--diff-status-deleted);
+}
+
+.diff-status-icon.modified {
+  color: var(--diff-status-modified);
+}
+
+.diff-status-icon.other {
+  color: var(--diff-status-other);
+}
+
+.diff-card-path,
+.diff-card-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 12px var(--pp-font-mono);
+}
+
+.diff-card-dir {
+  color: var(--secondary-text);
+}
+
+.diff-card-file {
+  font-weight: 600;
+}
+
+.diff-status-badge {
+  flex: none;
+  font-size: 10px;
+  font-weight: 500;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.diff-status-badge.added {
+  background: color-mix(in srgb, var(--diff-status-added) 60%, transparent);
+}
+
+.diff-status-badge.deleted {
+  background: color-mix(in srgb, var(--diff-status-deleted) 60%, transparent);
+}
+
+.diff-status-badge.modified {
+  background: color-mix(in srgb, var(--diff-status-modified) 60%, transparent);
+}
+
+.diff-status-badge.other {
+  background: color-mix(in srgb, var(--diff-status-other) 60%, transparent);
+}
+
+.diff-card-added,
+.diff-card-removed {
+  font: 11px var(--pp-font-mono);
+  flex: none;
+}
+
+.diff-card-added {
+  color: var(--pp-addition-text);
+}
+
+.diff-card-removed {
+  color: var(--pp-deletion-text);
+}
+
+.diff-card-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  font-size: 11px;
+  min-height: 36px;
+}
+
+.diff-card-notice.warning {
+  color: var(--diff-warning);
+}
+
+.diff-card-notice.secondary {
+  color: var(--secondary-text);
+}
+
+.diff-card-notice.mono {
+  font-family: var(--pp-font-mono);
+}
+
+.diff-card-notice-text {
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.diff-card-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  min-height: 44px;
+}
+
+.diff-card-page {
+  font-size: 11px;
+  color: var(--secondary-text);
+}
+
+.diff-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--diff-divider);
+  border-top-color: var(--secondary-text);
+  border-radius: 50%;
+  animation: diff-spin 0.8s linear infinite;
+}
+
+@keyframes diff-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* DiffContentView: one line. Keep in step with DIFF_METRICS (diffLayout.ts). */
+.diff-line {
+  display: grid;
+  grid-template-columns: 36px 36px 1fr;
+  line-height: 16px;
+  padding-right: 8px;
+  user-select: text;
+}
+
+.diff-line.addition {
+  background: var(--pp-addition-background);
+}
+
+.diff-line.deletion {
+  background: var(--pp-deletion-background);
+}
+
+.diff-line-no {
+  font: 10px / 16px var(--pp-font-mono);
+  color: var(--pp-system-tertiary-label);
+  text-align: right;
+  user-select: none;
+}
+
+.diff-code {
+  padding-left: 10px;
+  font: 12px / 16px var(--pp-font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  tab-size: 4;
+  color: var(--pp-primary-text);
+}
+
+.diff-line.addition .diff-code {
+  color: var(--pp-addition-text);
+}
+
+.diff-line.deletion .diff-code {
+  color: var(--pp-deletion-text);
+}
+
+.diff-separator {
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--pp-system-tertiary-label);
+  background: var(--pp-hunk-separator) !important;
+}
+
+/* The navigator */
+.diff-navigator {
+  flex: none;
+  width: 300px;
+  min-width: 240px;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--diff-divider);
+  background: var(--pp-card-background);
+}
+
+.diff-navigator-title {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.diff-navigator-count {
+  font-size: 11px;
+  color: var(--diff-tertiary);
+}
+
+.diff-navigator-search {
+  margin: 10px;
+  padding: 4px 8px;
+  font: 12px var(--pp-font-ui);
+  color: inherit;
+  background: var(--pp-card-background);
+  border: 1px solid var(--diff-card-border);
+  border-radius: 5px;
+}
+
+.diff-navigator-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.diff-navigator-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-bottom: 1px solid var(--diff-divider);
+  background: none;
+  color: inherit;
+  font: 10px var(--pp-font-mono);
+  text-align: left;
+}
+
+.diff-navigator-row[aria-current='true'] {
+  background: var(--diff-selected);
+}
+
+.diff-navigator-icon {
+  color: var(--secondary-text);
+  flex: none;
+}
+
+.diff-navigator-names {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.diff-navigator-name {
+  font: 11px var(--pp-font-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-navigator-folder {
+  font: 9px var(--pp-font-ui);
+  color: var(--secondary-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/* PRRowView */
+.pr-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 6px 10px;
+}
+
+.pr-row.selected {
+  background: var(--diff-selected);
+}
+
+.pr-row-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pr-meta {
+  gap: 8px;
+}
+
+.pr-number {
+  font: 600 12px var(--pp-font-mono);
+  color: var(--secondary-text);
+}
+
+.pr-title {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-draft {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--secondary-text);
+  padding: 1px 5px;
+  background: var(--control-hover);
+  border-radius: 3px;
+}
+
+.pr-review.approved {
+  color: var(--diff-status-added);
+}
+
+.pr-review.changes {
+  color: #ff9500;
+}
+
+.pr-review.required {
+  color: var(--secondary-text);
+}
+
+.pr-author,
+.pr-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--secondary-text);
+}
+
+.pr-branch {
+  font-family: var(--pp-font-mono);
+  color: var(--diff-tertiary);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.pr-files {
+  font-size: 11px;
+  color: var(--diff-tertiary);
+}
+
+.pr-labels {
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.pr-label {
+  font-size: 10px;
+  color: #fff;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* InlineCodeView: 42px gutter (number right-aligned at 27, marker at 32), code at 11px. */
+.inline-code {
+  padding: 4px 0;
+  background: var(--pp-card-background);
+  user-select: text;
+}
+
+.inline-code-row {
+  display: grid;
+  grid-template-columns: 27px 15px 1fr;
+  line-height: 15px;
+}
+
+.inline-code-row.addition {
+  background: var(--pp-addition-background);
+}
+
+.inline-code-row.deletion {
+  background: var(--pp-deletion-background);
+}
+
+.inline-code-row.gap {
+  background: var(--pp-card-header-background);
+}
+
+.inline-code-number {
+  font: 9px / 15px var(--pp-font-mono);
+  color: var(--secondary-text);
+  text-align: right;
+  user-select: none;
+}
+
+.inline-code-marker {
+  padding-left: 5px;
+  font: 10px / 15px var(--pp-font-mono);
+  user-select: none;
+}
+
+.inline-code-marker.addition {
+  color: var(--pp-addition-text);
+}
+
+.inline-code-marker.deletion {
+  color: var(--pp-deletion-text);
+}
+
+.inline-code-text {
+  padding: 0 8px 0 4px;
+  font: 11px / 15px var(--pp-font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+  color: var(--pp-primary-text);
+}
+
+.inline-code-row.gap .inline-code-text {
+  color: var(--pp-system-tertiary-label);
+}

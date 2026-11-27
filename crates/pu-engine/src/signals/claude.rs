@@ -5,7 +5,8 @@ use serde_json::Value;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+#[cfg(all(test, unix))]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -14,6 +15,22 @@ pub(super) struct Observer {
     not_before_ms: i64,
     env: Vec<(String, String)>,
     initial_transcript: Box<Transcript>,
+}
+
+/// The registry row must not be writable by another user. Unix: no group or
+/// other write bit. Windows: owned by the user with a private DACL, which the
+/// profile's default ACL (user, SYSTEM, Administrators) satisfies.
+fn not_writable_by_others(file: &std::fs::File, label: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = label;
+        file.metadata().is_ok_and(|meta| meta.mode() & 0o022 == 0)
+    }
+    #[cfg(windows)]
+    {
+        pu_core::private_fs::check_private_file(file, label).is_ok()
+    }
 }
 
 pub(super) async fn prepare_launch(
@@ -70,7 +87,7 @@ pub(super) fn prepare(
     }
     let launch = pu_core::id::session_id();
     let artifacts = install::Artifacts::new(Path::new(project), &launch).ok()?;
-    let socket = tokio::net::UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
+    let socket = artifacts.bind_signal().ok()?;
     Some(Prepared {
         socket,
         token: String::new(),
@@ -101,6 +118,7 @@ pub(super) fn prepare(
 // Match the native registry namespace, not merely the operating-system name.
 // The direct PTY child inherits this daemon's PID namespace. In particular the
 // Linux native format includes both the machine ID and PID-namespace link.
+#[cfg_attr(windows, allow(dead_code))]
 async fn native_pid_domain() -> Option<&'static str> {
     static DOMAIN: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
     DOMAIN
@@ -123,7 +141,12 @@ async fn native_pid_domain() -> Option<&'static str> {
                 }
                 Ok::<String, ()>(format!("linux:{machine}:{}", namespace.to_str().ok_or(())?))
             }
-            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            #[cfg(windows)]
+            {
+                let computer = std::env::var("COMPUTERNAME").map_err(|_| ())?;
+                windows_pid_domain(&computer).ok_or(())
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
             {
                 Err::<String, ()>(())
             }
@@ -131,6 +154,14 @@ async fn native_pid_domain() -> Option<&'static str> {
         .await
         .ok()
         .map(String::as_str)
+}
+
+/// Claude Code's Windows registry namespace, as recorded in WIN-1.1:
+/// `win32:` + lowercase `COMPUTERNAME`.
+#[cfg(windows)]
+fn windows_pid_domain(computer: &str) -> Option<String> {
+    let computer = computer.trim();
+    (!computer.is_empty()).then(|| format!("win32:{}", computer.to_lowercase()))
 }
 
 impl Observer {
@@ -141,20 +172,19 @@ impl Observer {
         // observer, and no cross-profile shared cache that can mix identities.
         let root =
             crate::read_source::native_root(pu_core::read::Runtime::Claude, &self.env).ok()?;
-        let file = tokio::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(root.join("sessions").join(format!("{pid}.json")))
-            .await
-            .ok()?;
-        let meta = file.metadata().await.ok()?;
-        if !meta.is_file()
-            || meta.uid() != unsafe { libc::geteuid() }
-            || meta.mode() & 0o022 != 0
-            || meta.len() > 16 * 1024
-        {
-            return None;
-        }
+        let path = root.join("sessions").join(format!("{pid}.json"));
+        let file = tokio::task::spawn_blocking(move || {
+            let file = pu_core::private_fs::open_no_follow(&path).ok()?;
+            let meta = file.metadata().ok()?;
+            (meta.is_file()
+                && pu_core::private_fs::owned_by_current_user(&file).ok()?
+                && not_writable_by_others(&file, &path)
+                && meta.len() <= 16 * 1024)
+                .then_some(file)
+        })
+        .await
+        .ok()??;
+        let file = tokio::fs::File::from_std(file);
         let mut data = Vec::new();
         file.take(16 * 1024 + 1).read_to_end(&mut data).await.ok()?;
         if data.len() > 16 * 1024 {
@@ -395,20 +425,17 @@ impl RecordFacts {
 
 impl Transcript {
     fn read(&mut self, path: &Path, identity: &SignalIdentity, cwd: &str) -> Option<()> {
+        use pu_core::private_fs as pfs;
         self.materialized |= std::fs::symlink_metadata(path).is_ok();
         if self.poisoned {
             return None;
         }
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .ok()?;
+        let mut file = pfs::open_no_follow(path).ok()?;
         self.poisoned = true;
         let meta = file.metadata().ok()?;
-        let inode = (meta.dev(), meta.ino());
+        let inode = pfs::file_identity(&file).ok()?;
         if !meta.is_file()
-            || meta.uid() != unsafe { libc::geteuid() }
+            || !pfs::owned_by_current_user(&file).ok()?
             || meta.len() < self.offset
             || meta.len() < self.observed_length
             || self.inode.is_some_and(|old| old != inode)
@@ -465,7 +492,7 @@ impl Transcript {
         true
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn unchanged(&self, path: &Path) -> bool {
         self.partial.is_empty()
             && std::fs::symlink_metadata(path).is_ok_and(|m| {
@@ -724,6 +751,7 @@ impl Transcript {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[cfg(unix)]
     #[test]
     fn initial_registry_idle_does_not_require_a_transcript_or_hide_a_lost_one() {
         let temp = tempfile::tempdir().unwrap();
@@ -772,6 +800,7 @@ mod tests {
             1
         );
     }
+    #[cfg(unix)]
     #[test]
     fn backlog_beyond_read_budget_is_not_an_observation() {
         let temp = tempfile::tempdir().unwrap();
@@ -812,6 +841,7 @@ mod tests {
         };
         json!({"type":kind,"uuid":id,"parentUuid":parent,"sessionId":"native","cwd":"/owned","version":"2.1.300","isSidechain":false,"message":message})
     }
+    #[cfg(unix)]
     #[test]
     fn given_large_native_image_result_should_resolve_the_request_and_preserve_completion() {
         let root = tempfile::tempdir().unwrap();
@@ -843,6 +873,7 @@ mod tests {
         assert!(transcript.tools.is_empty());
         assert_eq!(transcript.outcome.unwrap().kind, OutcomeKind::Completed);
     }
+    #[cfg(unix)]
     #[test]
     fn existing_large_history_is_consumed_in_bounded_batches() {
         let root = tempfile::tempdir().unwrap();
@@ -1236,6 +1267,7 @@ mod tests {
             SignalActivity::Working
         );
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn native_registry_reads_only_owned_pid_without_launching_list_processes() {
         let root = tempfile::tempdir().unwrap();
@@ -1618,5 +1650,34 @@ mod tests {
                     && s.pending_attention.is_empty()
             }));
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// The registry row Claude Code 2.1.332 wrote on Windows in the WIN-1.1
+    /// spike (`docs/research/windows-conpty.md` section 8), with the host
+    /// redacted as recorded there: COMPUTERNAME=DESKTOP-XXXXXXX.
+    const RECORDED_ROW: &str = r#"{"pid":14520,"sessionId":"00000000-0000-4000-8000-000000000000","cwd":"C:\\Users\\user\\dev","startedAt":1795653828085,"procStart":"134401274260337323","version":"2.1.332","peerProtocol":1,"peerFeatures":["notify_idle","artifact_yield"],"kind":"interactive","entrypoint":"cli","pidDomain":"win32:desktop-xxxxxxx","messagingSocketPath":"\\\\.\\pipe\\LOCAL\\cc-msg-0","status":"idle"}"#;
+
+    #[test]
+    fn given_recorded_registry_row_should_match_its_computer_name() {
+        let row: Value = serde_json::from_str(RECORDED_ROW).unwrap();
+        assert_eq!(
+            row["pidDomain"].as_str(),
+            windows_pid_domain("DESKTOP-XXXXXXX").as_deref()
+        );
+        assert_eq!(windows_pid_domain(" "), None);
+    }
+
+    #[tokio::test]
+    async fn given_this_machine_should_use_lowercase_computer_name() {
+        let computer = std::env::var("COMPUTERNAME").unwrap();
+        assert_eq!(
+            native_pid_domain().await,
+            Some(format!("win32:{}", computer.to_lowercase()).as_str())
+        );
     }
 }

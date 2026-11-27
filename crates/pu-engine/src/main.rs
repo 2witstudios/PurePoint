@@ -1,3 +1,8 @@
+// No console (WINAPP-010): a console-subsystem daemon started from the Run
+// value or by the app would open a window. Stderr is the handle the launcher
+// passes, or `~/.pu/daemon.log` when there is none.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::path::PathBuf;
 
 use pu_core::paths;
@@ -14,6 +19,13 @@ async fn main() {
         .windows(2)
         .find(|w| w[0] == "--socket")
         .map(|w| PathBuf::from(&w[1]));
+    // Exit when this process ends (the app passes its own pid).
+    let parent_pid = args.windows(2).find(|w| w[0] == "--parent-pid").map(|w| {
+        w[1].parse::<u32>().unwrap_or_else(|_| {
+            eprintln!("invalid --parent-pid {}", w[1]);
+            std::process::exit(1);
+        })
+    });
 
     let socket = socket_path.unwrap_or_else(|| {
         paths::daemon_socket_path().unwrap_or_else(|e| {
@@ -26,9 +38,15 @@ async fn main() {
     // Survive the hangup of whatever session started us (an SSH login, a closed
     // terminal) from the very start; IpcServer::run keeps handling it. Tokio
     // never unregisters a handler, so dropping the stream here is fine.
+    // Windows has no SIGHUP: a detached GUI-subsystem daemon has no console
+    // whose closing could reach it.
+    #[cfg(unix)]
     if let Err(e) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
         eprintln!("failed to install SIGHUP handler: {e}");
     }
+
+    #[cfg(windows)]
+    daemon_lifecycle::ensure_stderr_log();
 
     // Setup tracing
     tracing_subscriber::fmt()
@@ -99,8 +117,33 @@ async fn main() {
     // Without this, the daemon outlives app restarts and stale binaries persist.
     // process::exit(0) skips Drop, so explicitly kill agent process groups first
     // — otherwise vitest/node workers and other grandchildren orphan to launchd.
-    if managed {
-        let parent_pid = std::os::unix::process::parent_id();
+    // Windows waits on the parent's process handle, so the daemon exits
+    // within 2 s of the parent's death.
+    #[cfg(windows)]
+    if let Some(parent_pid) = parent_pid {
+        let engine_for_cleanup = server.engine().clone();
+        let pid_path_for_exit = pid_path.clone();
+        let socket_for_exit = socket.clone();
+        tokio::spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || {
+                daemon_lifecycle::wait_for_process_exit(parent_pid)
+            })
+            .await;
+            tracing::info!(parent_pid, "parent process died, shutting down daemon");
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_millis(1500),
+                engine_for_cleanup.kill_all_sessions(std::time::Duration::from_millis(500)),
+            )
+            .await;
+            daemon_lifecycle::cleanup_files(&pid_path_for_exit, &socket_for_exit);
+            std::process::exit(0);
+        });
+    } else if managed {
+        tracing::warn!("--managed without --parent-pid: the parent is not watched on Windows");
+    }
+    #[cfg(unix)]
+    if managed || parent_pid.is_some() {
+        let parent_pid_at_start = std::os::unix::process::parent_id();
         let engine_for_cleanup = server.engine().clone();
         let pid_path_for_exit = pid_path.clone();
         let socket_for_exit = socket.clone();
@@ -108,7 +151,11 @@ async fn main() {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 // On macOS, orphaned processes get reparented to PID 1 (launchd)
-                if std::os::unix::process::parent_id() != parent_pid {
+                let parent_gone = match parent_pid {
+                    Some(pid) => !daemon_lifecycle::is_process_alive(pid),
+                    None => std::os::unix::process::parent_id() != parent_pid_at_start,
+                };
+                if parent_gone {
                     tracing::info!("parent process died, shutting down managed daemon");
                     let _ = tokio::time::timeout(
                         std::time::Duration::from_secs(4),

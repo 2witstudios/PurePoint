@@ -3,6 +3,10 @@ import { constants } from "node:fs";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { assertPrivate } from "./acl.js";
+const win32 = process.platform === "win32";
+/** libuv on Windows: open with no sharing, so no other open succeeds while held. */
+const UV_FS_O_EXLOCK = 0x10000000;
 export class LockError extends Error {
   constructor(code) {
     super(
@@ -25,7 +29,31 @@ function privateMetadata(s, directory = false) {
     s.uid === process.getuid()
   );
 }
-/** Retain the parent OFD even on helper loss, until caller IO drain and explicit release. */
+/**
+ * Windows has no mode bits or uids: a plain, singly linked entry (never a
+ * symlink or junction) with an owner-only ACL (acl.js) instead.
+ */
+async function privateEntry(target, s, directory = false) {
+  if (!win32) return privateMetadata(s, directory);
+  if (
+    s.isSymbolicLink() ||
+    !(directory ? s.isDirectory() : s.isFile() && s.nlink === 1)
+  )
+    return false;
+  try {
+    await assertPrivate(target, { directory });
+    return true;
+  } catch {
+    return false;
+  }
+}
+/**
+ * Retain the parent OFD even on helper loss, until caller IO drain and explicit release.
+ *
+ * Windows: the file is opened without sharing (the exclusion a second owner
+ * meets, held by this handle until release) and passed as descriptor 3; the
+ * helper takes `LockFileEx` on it and runs the same private-state checks.
+ */
 export async function acquirePrivateLock({
   file,
   helperPath = process.env.POINT_GUARD_LOCK_HELPER_PATH,
@@ -41,18 +69,36 @@ export async function acquirePrivateLock({
   if (!path.isAbsolute(file)) throw new LockError("lock_private");
   let handle;
   try {
-    if (!privateMetadata(await lstat(path.dirname(file)), true))
+    const directory = path.dirname(file);
+    if (!(await privateEntry(directory, await lstat(directory), true)))
       throw new LockError("lock_private");
     // O_NONBLOCK avoids opening an attacker-replaced FIFO indefinitely. libuv sets CLOEXEC.
-    handle = await open(
-      file,
-      constants.O_RDWR |
-        constants.O_CREAT |
-        constants.O_NOFOLLOW |
-        constants.O_NONBLOCK,
-      0o600,
-    );
-    if (
+    try {
+      handle = await open(
+        file,
+        win32
+          ? constants.O_RDWR | constants.O_CREAT | UV_FS_O_EXLOCK
+          : constants.O_RDWR |
+              constants.O_CREAT |
+              constants.O_NOFOLLOW |
+              constants.O_NONBLOCK,
+        0o600,
+      );
+    } catch (error) {
+      // Windows: a sharing violation is another owner's no-sharing handle.
+      throw win32 && error.code === "EBUSY"
+        ? new LockError("lock_busy")
+        : error;
+    }
+    if (win32) {
+      const opened = await handle.stat();
+      if (
+        !opened.isFile() ||
+        opened.nlink !== 1 ||
+        !(await privateEntry(file, await lstat(file), false))
+      )
+        throw new LockError("lock_private");
+    } else if (
       !privateMetadata(await handle.stat()) ||
       !privateMetadata(await lstat(file))
     )
@@ -61,14 +107,18 @@ export async function acquirePrivateLock({
     await handle?.close();
     throw error instanceof LockError ? error : new LockError("lock_private");
   }
-  const metadata = await handle.stat();
+  // Windows file indexes can exceed 2^53: compare them exactly.
+  const metadata = await handle.stat(win32 ? { bigint: true } : undefined);
   const nonce = randomUUID();
   const child = spawn(
     helperPath,
     ["--file", file, "--nonce", nonce, "--owner-pid", String(process.pid)],
     {
       stdio: ["pipe", "pipe", "pipe", handle.fd],
-      env: { PATH: "/usr/bin:/bin" },
+      env: win32
+        ? { SystemRoot: process.env.SystemRoot ?? "C:\\Windows" }
+        : { PATH: "/usr/bin:/bin" },
+      windowsHide: true,
     },
   );
   let held = false,

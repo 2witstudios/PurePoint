@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 /// The user's login shell: `$SHELL`, then the passwd entry, then `/bin/sh`.
 /// Never a shell that might not be installed (e.g. zsh on a Linux server).
+#[cfg(unix)]
 pub fn login_shell() -> String {
     std::env::var("SHELL")
         .ok()
@@ -17,16 +18,130 @@ pub fn login_shell() -> String {
         .unwrap_or_else(|| "/bin/sh".into())
 }
 
+#[cfg(unix)]
 fn passwd_shell() -> Option<String> {
     let user = nix::unistd::User::from_uid(nix::unistd::getuid()).ok()??;
     let shell = user.shell.to_string_lossy().into_owned();
     (!shell.is_empty() && user.shell.exists()).then_some(shell)
 }
 
+/// The user's shell on Windows: `pwsh.exe`, then `powershell.exe`, then
+/// `%COMSPEC%`. `SHELL` is ignored: Git Bash exports a POSIX path there.
+#[cfg(windows)]
+pub fn login_shell() -> String {
+    windows_shell(|name| which::which(name).ok(), std::env::var_os("COMSPEC"))
+}
+
+#[cfg(windows)]
+fn windows_shell(
+    find: impl Fn(&str) -> Option<PathBuf>,
+    comspec: Option<std::ffi::OsString>,
+) -> String {
+    ["pwsh.exe", "powershell.exe"]
+        .into_iter()
+        .find_map(&find)
+        .map(PathBuf::into_os_string)
+        .or_else(|| comspec.filter(|c| !c.is_empty()))
+        .map(|shell| shell.to_string_lossy().into_owned())
+        .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
+}
+
+/// Arguments that make `shell` run `script` and exit: `-c` for a POSIX shell.
+#[cfg(unix)]
+pub fn shell_command_args(_shell: &str, script: &str) -> Vec<String> {
+    vec!["-c".into(), script.into()]
+}
+
+/// Arguments for an interactive session of `shell`: a login shell (`-l`).
+#[cfg(unix)]
+pub fn interactive_shell_args(_shell: &str) -> Vec<String> {
+    vec!["-l".into()]
+}
+
+/// The command-line dialect of a Windows shell, from its file name.
+#[cfg(windows)]
+#[derive(Debug, PartialEq, Eq)]
+enum ShellKind {
+    PowerShell,
+    Cmd,
+    /// Anything else (Git Bash's `bash.exe`, `sh.exe`, ...): POSIX flags.
+    Posix,
+}
+
+#[cfg(windows)]
+fn shell_kind(shell: &str) -> ShellKind {
+    let stem = std::path::Path::new(shell)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    match stem.as_str() {
+        "pwsh" | "powershell" => ShellKind::PowerShell,
+        "cmd" => ShellKind::Cmd,
+        _ => ShellKind::Posix,
+    }
+}
+
+/// Arguments that make `shell` run `script` and exit: `-NoLogo -Command` for
+/// pwsh and Windows PowerShell, `/d /s /c` for cmd.exe (which takes no `-c`),
+/// `-c` for a POSIX shell.
+#[cfg(windows)]
+pub fn shell_command_args(shell: &str, script: &str) -> Vec<String> {
+    let flags: &[&str] = match shell_kind(shell) {
+        ShellKind::PowerShell => &["-NoLogo", "-Command"],
+        ShellKind::Cmd => &["/d", "/s", "/c"],
+        ShellKind::Posix => &["-c"],
+    };
+    flags
+        .iter()
+        .map(|f| f.to_string())
+        .chain([script.to_owned()])
+        .collect()
+}
+
+/// Arguments for an interactive session of `shell`. Windows has no login
+/// shell (WINAPP-007): pwsh and PowerShell get `-NoLogo`, cmd.exe nothing, and
+/// a POSIX shell `-l`.
+#[cfg(windows)]
+pub fn interactive_shell_args(shell: &str) -> Vec<String> {
+    match shell_kind(shell) {
+        ShellKind::PowerShell => vec!["-NoLogo".into()],
+        ShellKind::Cmd => vec![],
+        ShellKind::Posix => vec!["-l".into()],
+    }
+}
+
 /// Account name for `uid` from the passwd database.
+#[cfg(unix)]
 pub fn user_name(uid: u32) -> Option<String> {
     let user = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid)).ok()??;
     (!user.name.is_empty()).then_some(user.name)
+}
+
+/// The current account name on Windows (there are no numeric uids):
+/// `USERNAME`, else `GetUserNameW`.
+#[cfg(windows)]
+pub fn user_name(_uid: u32) -> Option<String> {
+    std::env::var("USERNAME")
+        .ok()
+        .filter(|n| !n.is_empty())
+        .or_else(get_user_name)
+}
+
+#[cfg(windows)]
+fn get_user_name() -> Option<String> {
+    use std::os::windows::ffi::OsStringExt;
+    // UNLEN + 1.
+    let mut buf = [0u16; 257];
+    let mut len = buf.len() as u32;
+    // SAFETY: `buf` holds `len` u16s; on success `len` counts the written NUL.
+    let ok = unsafe {
+        windows_sys::Win32::System::WindowsProgramming::GetUserNameW(buf.as_mut_ptr(), &mut len)
+    };
+    if ok == 0 || len == 0 {
+        return None;
+    }
+    let name = std::ffi::OsString::from_wide(&buf[..len as usize - 1]);
+    name.into_string().ok().filter(|n| !n.is_empty())
 }
 
 /// Parse `/proc/<pid>/stat` into `(pid, ppid)`. The command name (field 2) is
@@ -68,7 +183,13 @@ pub fn proc_process_tree() -> Option<HashMap<i32, Vec<i32>>> {
     Some(children)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Parent→children map of every process, from one Toolhelp32 snapshot.
+#[cfg(windows)]
+pub fn proc_process_tree() -> Option<HashMap<i32, Vec<i32>>> {
+    crate::win_proc::process_tree()
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn proc_process_tree() -> Option<HashMap<i32, Vec<i32>>> {
     None
 }
@@ -81,6 +202,13 @@ pub fn cmdline_to_command(cmdline: &[u8]) -> String {
 }
 
 /// Full command line of `pid`, or None if it is gone or unreadable.
+#[cfg(windows)]
+pub fn process_command(pid: u32) -> Option<String> {
+    crate::win_proc::process_command(pid)
+}
+
+/// Full command line of `pid`, or None if it is gone or unreadable.
+#[cfg(unix)]
 pub fn process_command(pid: u32) -> Option<String> {
     // Containers may not mount /proc; `ps` (if any) still works there.
     if cfg!(target_os = "linux")
@@ -126,6 +254,8 @@ pub fn proc_open_files(pids: &[i32], limit: usize) -> Option<Vec<PathBuf>> {
     Some(paths)
 }
 
+/// None outside Linux. On Windows there is no cheap open-file query, so Codex
+/// discovery uses rollout creation times instead (`read_source`).
 #[cfg(not(target_os = "linux"))]
 pub fn proc_open_files(_pids: &[i32], _limit: usize) -> Option<Vec<PathBuf>> {
     None
@@ -155,12 +285,83 @@ mod tests {
         assert_eq!(cmdline_to_command(b""), "");
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_login_shell_should_be_nonempty_absolute_path() {
         let shell = login_shell();
         assert!(shell.starts_with('/'), "{shell}");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn given_windows_shells_should_prefer_pwsh_then_powershell_then_comspec() {
+        let found = |names: &'static [&'static str]| {
+            move |name: &str| {
+                names
+                    .contains(&name)
+                    .then(|| PathBuf::from(format!(r"C:\bin\{name}")))
+            }
+        };
+        let comspec = || Some(std::ffi::OsString::from(r"C:\WINDOWS\system32\cmd.exe"));
+        assert_eq!(
+            windows_shell(found(&["powershell.exe", "pwsh.exe"]), comspec()),
+            r"C:\bin\pwsh.exe"
+        );
+        assert_eq!(
+            windows_shell(found(&["powershell.exe"]), comspec()),
+            r"C:\bin\powershell.exe"
+        );
+        assert_eq!(
+            windows_shell(found(&[]), comspec()),
+            r"C:\WINDOWS\system32\cmd.exe"
+        );
+        assert_eq!(
+            windows_shell(found(&[]), None),
+            r"C:\Windows\System32\cmd.exe"
+        );
+        assert!(std::path::Path::new(&login_shell()).is_absolute());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn given_posix_shell_should_run_scripts_with_c_and_sessions_as_login() {
+        assert_eq!(shell_command_args("/bin/zsh", "a | b"), ["-c", "a | b"]);
+        assert_eq!(interactive_shell_args("/bin/zsh"), ["-l"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_windows_shells_should_get_their_own_script_and_session_flags() {
+        for shell in [
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\PowerShell.EXE",
+        ] {
+            assert_eq!(
+                shell_command_args(shell, "a | b"),
+                ["-NoLogo", "-Command", "a | b"]
+            );
+            assert_eq!(interactive_shell_args(shell), ["-NoLogo"]);
+        }
+        let cmd = r"C:\WINDOWS\system32\cmd.exe";
+        assert_eq!(
+            shell_command_args(cmd, "a | b"),
+            ["/d", "/s", "/c", "a | b"]
+        );
+        assert!(interactive_shell_args(cmd).is_empty());
+        let bash = r"C:\Program Files\Git\bin\bash.exe";
+        assert_eq!(shell_command_args(bash, "a | b"), ["-c", "a | b"]);
+        assert_eq!(interactive_shell_args(bash), ["-l"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_current_user_should_resolve_windows_account_name() {
+        let name = get_user_name().expect("GetUserNameW");
+        assert!(!name.is_empty());
+        assert!(user_name(0).is_some_and(|n| !n.is_empty()));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn given_current_uid_should_resolve_user_name() {
         // SAFETY: geteuid has no preconditions.
@@ -191,7 +392,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("rollout-1.jsonl");
         let _file = std::fs::File::create(&path).unwrap();
-        let canonical = std::fs::canonicalize(&path).unwrap();
+        let canonical = pu_core::canon::canonicalize(&path).unwrap();
         let open = proc_open_files(&[std::process::id() as i32], 100_000).unwrap();
         assert!(open.contains(&canonical), "{open:?}");
     }

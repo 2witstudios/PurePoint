@@ -2,8 +2,10 @@
 //! confined to a registered project root, one of its worktrees, or an agent
 //! transcript directory under the daemon user's home.
 
+use pu_core::canon::CanonicalPath;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
@@ -131,14 +133,12 @@ pub(crate) async fn is_trusted_worktree(project_root: &str, path: &Path) -> bool
 fn is_trusted_worktree_path(project_root: &str, path: &Path) -> bool {
     let root = Path::new(project_root);
     let (Ok(project), Ok(dir)) = (
-        root.canonicalize(),
-        pu_core::paths::pu_dir(root)
-            .join("worktrees")
-            .canonicalize(),
+        root.canonical(),
+        pu_core::paths::pu_dir(root).join("worktrees").canonical(),
     ) else {
         return false;
     };
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = pu_core::paths::home_dir().ok();
     trusted_worktree(path, &dir, &project, home.as_deref()).is_some()
 }
 
@@ -151,7 +151,7 @@ fn trusted_worktree(
     project: &Path,
     home: Option<&Path>,
 ) -> Option<PathBuf> {
-    let canonical = worktree.canonicalize().ok()?;
+    let canonical = worktree.canonical().ok()?;
     let inside = canonical.starts_with(worktrees_dir) && canonical != worktrees_dir;
     let too_broad = canonical.parent().is_none()
         || project.starts_with(&canonical)
@@ -173,7 +173,7 @@ fn allowed_roots(projects: &[String], home: Option<&Path>) -> FsRoots {
     let mut roots = Vec::new();
     for project in projects {
         let root = Path::new(project);
-        let Ok(canonical) = root.canonicalize() else {
+        let Ok(canonical) = root.canonical() else {
             continue;
         };
         // However it got registered (legacy registry entry, auto-registration of a
@@ -184,7 +184,7 @@ fn allowed_roots(projects: &[String], home: Option<&Path>) -> FsRoots {
         }
         let worktrees_dir = pu_core::paths::pu_dir(root)
             .join("worktrees")
-            .canonicalize()
+            .canonical()
             .ok();
         if let (Some(worktrees_dir), Ok(m)) = (worktrees_dir, manifest::read_manifest(root)) {
             roots.extend(m.worktrees.values().filter_map(|wt| {
@@ -198,7 +198,7 @@ fn allowed_roots(projects: &[String], home: Option<&Path>) -> FsRoots {
         all.extend(
             TRANSCRIPT_DIRS
                 .iter()
-                .filter_map(|dir| home.join(dir).canonicalize().ok()),
+                .filter_map(|dir| home.join(dir).canonical().ok()),
         );
     }
     FsRoots {
@@ -212,13 +212,13 @@ fn allowed_roots(projects: &[String], home: Option<&Path>) -> FsRoots {
 /// to fs requests).
 pub(crate) fn is_too_broad_project_root(project_root: &Path, home: Option<&Path>) -> bool {
     let root = project_root
-        .canonicalize()
+        .canonical()
         .unwrap_or_else(|_| project_root.to_path_buf());
     if root.parent().is_none() {
         return true;
     }
     home.is_some_and(|home| {
-        let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+        let home = home.canonical().unwrap_or_else(|_| home.to_path_buf());
         home.starts_with(&root)
     })
 }
@@ -257,7 +257,7 @@ fn resolve_confined(path: &str, roots: &[PathBuf], follow_leaf: bool) -> Result<
 #[allow(clippy::result_large_err)]
 fn resolve_existing_prefix(input: &Path) -> Result<PathBuf, Response> {
     for ancestor in input.ancestors() {
-        let Ok(canonical) = ancestor.canonicalize() else {
+        let Ok(canonical) = ancestor.canonical() else {
             continue;
         };
         let tail = input
@@ -292,6 +292,7 @@ fn git_ignored(
     if candidates.is_empty() {
         return ignored;
     }
+    #[cfg(unix)]
     use std::os::unix::process::CommandExt as _;
     // The same hardening as `git_exec`: a listing must not run what a planted
     // or cloned bare repository configures (fsmonitor, hooks, ...).
@@ -306,15 +307,23 @@ fn git_ignored(
     if let Some(ceiling) = git_ceiling(dir, roots) {
         command.env("GIT_CEILING_DIRECTORIES", ceiling);
     }
-    let child = command
+    command
         .current_dir(dir)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        // Own process group, so a timeout also stops anything git spawned.
-        .process_group(0)
-        .spawn();
+        .stderr(Stdio::null());
+    // Own process group, so a timeout also stops anything git spawned. On
+    // Windows: no console window, and a timeout kills the whole tree
+    // (`kill_process_group`).
+    #[cfg(unix)]
+    command.process_group(0);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        command.creation_flags(crate::git::HELPER_CREATION_FLAGS);
+    }
+    let child = command.spawn();
     let Ok(mut child) = child else {
         return ignored;
     };
@@ -478,7 +487,7 @@ fn fs_browse(
             format!("{path} is not an absolute path"),
         );
     }
-    let dir = match expanded.canonicalize() {
+    let dir = match expanded.canonical() {
         Ok(dir) => dir,
         Err(e) => return io_error(&expanded, &e),
     };
@@ -568,12 +577,18 @@ fn fs_read(path: &str, roots: &[PathBuf], max_bytes: u64) -> Response {
         }
         Err(e) => return io_error(&resolved, &e),
     }
-    // O_NONBLOCK too, in case the path was swapped for a FIFO since.
-    let file = match std::fs::OpenOptions::new()
+    // O_NONBLOCK too, in case the path was swapped for a FIFO since. Windows
+    // has no FIFOs in the file system (pipes live under `\\.\pipe\`, which
+    // confinement never resolves to), and `resolved` is already canonical, so
+    // a plain open is enough; the regular-file check below still applies.
+    #[cfg(unix)]
+    let opened = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
-        .open(&resolved)
-    {
+        .open(&resolved);
+    #[cfg(windows)]
+    let opened = std::fs::OpenOptions::new().read(true).open(&resolved);
+    let file = match opened {
         Ok(f) => f,
         Err(e) => return io_error(&resolved, &e),
     };
@@ -753,22 +768,36 @@ fn write_atomically(
         // Created with the existing file's mode (narrowed by the umask), so the
         // temp file is never more readable than the file it replaces; a new
         // file gets the usual 0666 & !umask.
+        #[cfg(unix)]
         let mode = existing.map_or(0o666, |meta| meta.permissions().mode() & 0o7777);
+        #[cfg(unix)]
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(mode)
             .open(&tmp)?;
+        // Windows: the temp file inherits the directory's ACL while it is
+        // written; `replace_file` (ReplaceFileW) then keeps the replaced
+        // file's ACL and attributes, so nothing is widened or lost.
+        #[cfg(windows)]
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        #[cfg(unix)]
         if let Some(meta) = existing {
             // Restore bits the umask dropped, before any data is written.
             file.set_permissions(meta.permissions())?;
         }
+        #[cfg(windows)]
+        let _ = existing;
         file.write_all(data)?;
         file.sync_all()?;
-        std::fs::rename(&tmp, target)
+        drop(file);
+        pu_core::private_fs::replace_file(&tmp, target)
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        let _ = pu_core::fs_retry::remove_file(&tmp);
     }
     result
 }
@@ -791,9 +820,9 @@ fn fs_delete(path: &str, roots: &FsRoots) -> Response {
         Err(e) => return io_error(&resolved, &e),
     };
     let result = if meta.is_dir() {
-        std::fs::remove_dir_all(&resolved)
+        pu_core::fs_retry::remove_dir_all(&resolved)
     } else {
-        std::fs::remove_file(&resolved)
+        pu_core::fs_retry::remove_file(&resolved)
     };
     match result {
         Ok(()) => Response::Ok,
@@ -1009,9 +1038,9 @@ fn check_operand_targets(cwd: &Path, args: &[String], roots: &[PathBuf]) -> Resu
         let links_to_dir = meta.file_type().is_symlink()
             && std::fs::metadata(&candidate).is_ok_and(|target| target.is_dir());
         let resolved = if meta.file_type().is_symlink() && !links_to_dir {
-            candidate.parent().unwrap_or(cwd).canonicalize()
+            candidate.parent().unwrap_or(cwd).canonical()
         } else {
-            candidate.canonicalize()
+            candidate.canonical()
         };
         let inside = resolved.is_ok_and(|real| roots.iter().any(|root| real.starts_with(root)));
         if !inside {
@@ -1125,13 +1154,18 @@ fn global_excludes_args() -> Vec<String> {
     static EXCLUDES: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     EXCLUDES
         .get_or_init(|| {
-            let output = std::process::Command::new("git")
+            let mut command = std::process::Command::new("git");
+            command
                 .args(["config", "--global", "--path", "--get", "core.excludesFile"])
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .output()
-                .ok()?;
+                .stderr(Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt as _;
+                command.creation_flags(crate::git::HELPER_CREATION_FLAGS);
+            }
+            let output = command.output().ok()?;
             let path = String::from_utf8(output.stdout).ok()?.trim().to_string();
             (output.status.success() && !path.is_empty()).then_some(path)
         })
@@ -1142,6 +1176,8 @@ fn global_excludes_args() -> Vec<String> {
 
 /// Extra environment for `git_exec`: git ignores the user's global and the
 /// system config, so neither can configure helpers (fsmonitor, pager, ...).
+/// `/dev/null` is right on Windows too: Git for Windows maps it to `nul`
+/// (tested in `given_windows_git_should_honor_dev_null_guards_and_no_index_diff`).
 fn exec_env(program: &str) -> Vec<(&'static str, &'static str)> {
     if program == "git" {
         vec![
@@ -1158,7 +1194,34 @@ fn exec_env(program: &str) -> Vec<(&'static str, &'static str)> {
     }
 }
 
+/// Kill the process tree rooted at `pid` (`taskkill /T /F`), so helpers git
+/// or gh spawned (credential helpers, hooks, pagers) stop with it. Runs before
+/// the root itself is killed, while its children still name it as parent.
+#[cfg(windows)]
+fn kill_process_group(pid: u32) {
+    use std::os::windows::process::CommandExt as _;
+    let system = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    let _ = std::process::Command::new(Path::new(&system).join(r"System32\taskkill.exe"))
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(crate::git::HELPER_CREATION_FLAGS)
+        .status();
+}
+
+/// [`kill_process_group`] from async code. On Windows it runs and waits for
+/// `taskkill`, so it goes to the blocking pool; it still finishes before the
+/// caller kills the root.
+async fn kill_process_group_async(pid: u32) {
+    #[cfg(windows)]
+    let _ = tokio::task::spawn_blocking(move || kill_process_group(pid)).await;
+    #[cfg(unix)]
+    kill_process_group(pid);
+}
+
 /// SIGKILL the process group led by `pid` (git_exec children lead their own).
+#[cfg(unix)]
 fn kill_process_group(pid: u32) {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return;
@@ -1196,7 +1259,7 @@ impl Engine {
     async fn fs_roots(&self) -> FsRoots {
         let projects = self.registered_projects();
         tokio::task::spawn_blocking(move || {
-            let home = std::env::var_os("HOME").map(PathBuf::from);
+            let home = pu_core::paths::home_dir().ok();
             allowed_roots(&projects, home.as_deref())
         })
         .await
@@ -1266,7 +1329,7 @@ impl Engine {
                 &path,
                 include_hidden,
                 max_entries.min(FS_LIST_MAX_ENTRIES),
-                std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+                pu_core::paths::home_dir().ok().as_deref(),
             ),
             Request::FsList {
                 path,
@@ -1383,10 +1446,14 @@ impl Engine {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // Own process group, so a timeout also stops helpers git or gh
-            // spawned (pagers, credential helpers, hooks).
-            .process_group(0)
             .kill_on_drop(true);
+        // Own process group, so a timeout also stops helpers git or gh
+        // spawned (pagers, credential helpers, hooks). Windows: no console
+        // window; a timeout kills the tree (`kill_process_group`).
+        #[cfg(unix)]
+        command.process_group(0);
+        #[cfg(windows)]
+        command.creation_flags(crate::git::HELPER_CREATION_FLAGS);
         if let Some(path) = login_path {
             command.env("PATH", path);
         }
@@ -1424,7 +1491,7 @@ impl Engine {
             Ok((_, _, _, Err(e))) => fs_error("io_error", format!("{program} failed: {e}")),
             Err(_) => {
                 if let Some(pgid) = pgid {
-                    kill_process_group(pgid);
+                    kill_process_group_async(pgid).await;
                 }
                 let _ = child.start_kill();
                 fs_error(

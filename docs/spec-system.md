@@ -74,6 +74,7 @@ What PurePoint does. Each domain captures behavior, requirements, and interfaces
 | Machines | MACH | SPECIFIED |
 | Linux Phone Host | LPH | SPECIFIED |
 | iPad App | IPAD | SPECIFIED |
+| Windows App | WINAPP | SPECIFIED |
 
 ### Reference (Inventory)
 Reference material for existing codebases and PurePoint CLI commands.
@@ -119,7 +120,7 @@ When a question is answered, replace the `?` with `!` and append the rationale.
 
 ### Numbering
 - Architecture: `[DAEMON-NNN]`, `[IPC-NNN]`, `[STORE-NNN]`, `[AGENT-NNN]`, `[DESK-NNN]`, `[DIST-NNN]`, `[MOD-NNN]`
-- Product: `[DM-NNN]`, `[CLI-NNN]`, `[DMN-NNN]`, `[AL-NNN]`, `[WT-NNN]`, `[ORCH-NNN]`, `[SCHED-NNN]`, `[OUT-NNN]`, `[MEM-NNN]`, `[REC-NNN]`, `[APP-NNN]`, `[CFG-NNN]`
+- Product: `[DM-NNN]`, `[CLI-NNN]`, `[DMN-NNN]`, `[AL-NNN]`, `[WT-NNN]`, `[ORCH-NNN]`, `[SCHED-NNN]`, `[OUT-NNN]`, `[MEM-NNN]`, `[REC-NNN]`, `[APP-NNN]`, `[CFG-NNN]`, `[MACH-NNN]`, `[IPAD-NNN]`, `[WINAPP-NNN]`
 
 ### Requirements Format
 Functional requirements use: `Given {situation}, should {job to do}`

@@ -4,13 +4,19 @@ import { mkdtemp, rm, readFile, writeFile, stat, open, chmod, symlink } from "no
 import path from "node:path";
 import os from "node:os";
 import { openTrustStore } from "./trust.js";
+import { assertPrivate } from "./acl.js";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
+import { privateTemp } from "./private-temp.test-helper.js";
+// Skipped on Windows: POSIX modes and symlinks (Unix only); the rest run there with the lock helper.
+const posixOnly = {
+  skip: process.platform === "win32" && "POSIX modes and symlinks (Unix only)",
+};
 const endpoint = "wss://100.100.1.2:8787/v1";
 async function fixture(fn) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-"));
+  const directory = await privateTemp("pg-trust-");
   let now = Date.now();
   let store;
   try {
@@ -45,10 +51,13 @@ test("short-lived enrollment is single use under concurrent attempts; credential
     assert.ok(
       !disk.includes(device.credential) && !disk.includes(code.enrollmentToken),
     );
-    assert.equal(
-      (await stat(path.join(directory, "trust.json"))).mode & 0o777,
-      0o600,
-    );
+    if (process.platform === "win32")
+      await assertPrivate(path.join(directory, "trust.json"));
+    else
+      assert.equal(
+        (await stat(path.join(directory, "trust.json"))).mode & 0o777,
+        0o600,
+      );
   }));
 test("expiry and explicit enrollment revocation reject without creating devices", async () =>
   fixture(async (store, _directory, advance) => {
@@ -151,7 +160,7 @@ test("lost durable host ID never regenerates from surviving certificate files", 
       cert,
     );
   }));
-test("insecure existing files and public/legacy endpoints never downgrade trust", async () =>
+test("insecure existing files and public/legacy endpoints never downgrade trust", posixOnly, async () =>
   fixture(async (store, directory) => {
     assert.throws(() =>
       store.createEnrollment({ endpoint: "wss://example.com/v1" }),
@@ -166,7 +175,7 @@ test("insecure existing files and public/legacy endpoints never downgrade trust"
   }));
 
 test("helper crash fences trust while retained kernel ownership excludes writers until submitted IO drains", async (t) => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-holder-crash-"));
+  const directory = await privateTemp("pg-trust-holder-crash-");
   let store;
   let resume;
   let heldChild;
@@ -230,7 +239,7 @@ test("helper crash fences trust while retained kernel ownership excludes writers
 });
 
 test("isolated bridge crash releases inherited helper ownership and preserves same inode and durable phone trust", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-bridge-crash-"));
+  const directory = await privateTemp("pg-trust-bridge-crash-");
   const source = `import { openTrustStore } from ${JSON.stringify(new URL("./trust.js", import.meta.url).href)};
     const store = await openTrustStore({directory:process.env.TRUST_FIXTURE_DIRECTORY});
     const phone = await store.enroll({enrollmentToken:JSON.parse(store.createEnrollment({endpoint:${JSON.stringify(endpoint)}}).payload).enrollmentToken,name:"Phone"});
@@ -266,8 +275,8 @@ test("isolated bridge crash releases inherited helper ownership and preserves sa
   }
 });
 
-test("permanent private old PID marker is inert; public or symlink lock refuses without repair", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-lock-migration-"));
+test("permanent private old PID marker is inert; public or symlink lock refuses without repair", posixOnly, async () => {
+  const directory = await privateTemp("pg-trust-lock-migration-");
   const file = path.join(directory, "writer.lock");
   let store;
   try {

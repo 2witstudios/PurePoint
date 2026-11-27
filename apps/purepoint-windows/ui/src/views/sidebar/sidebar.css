@@ -1,0 +1,560 @@
+/*
+ * The sidebar (WIN-7.2): the nav header, the project outline and the footer. Metrics are the Mac
+ * outline's (24px rows, 12px indentation per level, 6px status dots); colors are the theme tokens
+ * plus the AppKit system colors the cells tint with, in their light and dark variants.
+ */
+:root {
+  --sidebar-green: #28cd41; /* NSColor.systemGreen */
+  --sidebar-red: #ff3b30; /* NSColor.systemRed */
+  --sidebar-orange: #ff9500; /* NSColor.systemOrange */
+  --sidebar-yellow: #ffcc00; /* NSColor.systemYellow */
+  --sidebar-accent: #0067c0; /* NSColor.controlAccentColor (Windows accent) */
+  --sidebar-quaternary: rgba(0, 0, 0, 0.1); /* NSColor.quaternaryLabelColor */
+  --sidebar-selection: rgba(0, 0, 0, 0.08);
+  --sidebar-selection-focused: rgba(0, 103, 192, 0.16);
+  --sidebar-dialog-background: #f9f9f9;
+}
+
+:root[data-theme='dark'] {
+  --sidebar-green: #32d74b;
+  --sidebar-red: #ff453a;
+  --sidebar-orange: #ff9f0a;
+  --sidebar-yellow: #ffd60a;
+  --sidebar-accent: #4cc2ff;
+  --sidebar-quaternary: rgba(255, 255, 255, 0.1);
+  --sidebar-selection: rgba(255, 255, 255, 0.08);
+  --sidebar-selection-focused: rgba(76, 194, 255, 0.2);
+  --sidebar-dialog-background: #2c2c2c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --sidebar-green: #32d74b;
+    --sidebar-red: #ff453a;
+    --sidebar-orange: #ff9f0a;
+    --sidebar-yellow: #ffd60a;
+    --sidebar-accent: #4cc2ff;
+    --sidebar-quaternary: rgba(255, 255, 255, 0.1);
+    --sidebar-selection: rgba(255, 255, 255, 0.08);
+    --sidebar-selection-focused: rgba(76, 194, 255, 0.2);
+    --sidebar-dialog-background: #2c2c2c;
+  }
+}
+
+/* SidebarView: header, nav, divider, outline, footer. */
+.sidebar-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.sidebar-brand,
+.sidebar-nav-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.sidebar-brand {
+  margin-top: 8px;
+  font: 600 13px var(--pp-font-ui);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+}
+
+.sidebar-nav-button {
+  font: var(--pp-nav-font);
+}
+
+.sidebar-brand:hover,
+.sidebar-nav-button:hover {
+  background: var(--control-hover);
+}
+
+.sidebar-brand[aria-current='page'],
+.sidebar-nav-button[aria-current='page'] {
+  background: var(--sidebar-selection);
+}
+
+.sidebar-divider {
+  height: 1px;
+  margin: 0 8px;
+  background: var(--column-divider);
+  flex: none;
+}
+
+.sidebar-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  font: var(--pp-small-font);
+  color: var(--pp-system-tertiary-label);
+}
+
+/* The outline: a virtualized tree of 24px rows. */
+.sidebar-outline {
+  flex: 1;
+  min-height: 0;
+  margin-top: 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  outline: none;
+  font: var(--pp-tree-font-weight) var(--pp-tree-font-size) var(--pp-tree-font-family);
+}
+
+.sidebar-outline-canvas {
+  position: relative;
+  width: 100%;
+}
+
+.sidebar-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 12px;
+  border-radius: 5px;
+  margin: 0 8px;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+
+.sidebar-row[aria-selected='true'] {
+  background: var(--sidebar-selection);
+}
+
+.sidebar-outline:focus-visible .sidebar-row[aria-selected='true'],
+.sidebar-outline:focus .sidebar-row[aria-selected='true'] {
+  background: var(--sidebar-selection-focused);
+}
+
+.sidebar-row[data-kind='workspace'] {
+  gap: 5px;
+}
+
+.sidebar-disclosure {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--secondary-text);
+}
+
+.sidebar-disclosure-spacer {
+  flex: none;
+  width: 14px;
+}
+
+.sidebar-row-icon {
+  flex: none;
+  color: var(--secondary-text);
+}
+
+.sidebar-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-row[data-kind='project'] .sidebar-row-name,
+.sidebar-row[data-kind='machine'] .sidebar-row-name {
+  font-weight: 600;
+}
+
+.sidebar-row[data-kind='workspace'] .sidebar-row-name {
+  font-size: 11px;
+}
+
+.sidebar-row[data-unavailable='true'] .sidebar-row-name {
+  color: var(--secondary-text);
+}
+
+.sidebar-row-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-section-title {
+  font: 600 10px var(--pp-font-ui);
+  color: var(--secondary-text);
+}
+
+.sidebar-status-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  color: var(--secondary-text);
+}
+
+.sidebar-status-dot {
+  flex: none;
+  width: var(--pp-status-dot-size);
+  height: var(--pp-status-dot-size);
+  border-radius: 50%;
+  background: var(--pp-system-tertiary-label);
+}
+
+.sidebar-status-dot[data-color='green'] {
+  background: var(--sidebar-green);
+}
+
+.sidebar-status-dot[data-color='red'] {
+  background: var(--sidebar-red);
+}
+
+.sidebar-status-dot[data-color='orange'] {
+  background: var(--sidebar-orange);
+}
+
+.sidebar-status-dot[data-color='yellow'] {
+  background: var(--sidebar-yellow);
+}
+
+.sidebar-warning {
+  flex: none;
+  color: var(--sidebar-orange);
+}
+
+.sidebar-pill {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--sidebar-quaternary);
+  font: 500 9px var(--pp-font-ui);
+  color: var(--secondary-text);
+}
+
+.sidebar-pill[data-attention='true'] {
+  color: var(--pp-app-text);
+}
+
+.sidebar-badge {
+  flex: none;
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--sidebar-quaternary);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  color: var(--secondary-text);
+}
+
+.sidebar-badge[data-accent='true'] {
+  color: var(--sidebar-accent);
+}
+
+.sidebar-count {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--pp-system-tertiary-label);
+}
+
+.sidebar-add-button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--secondary-text);
+}
+
+.sidebar-add-button:hover {
+  background: var(--control-hover);
+}
+
+/* A machine row's inline action (Start Daemon) until the row menus land (WIN-7.8). */
+.sidebar-row-action {
+  flex: none;
+  height: 16px;
+  padding: 0 6px;
+  border: 1px solid var(--menu-border);
+  border-radius: 4px;
+  background: var(--pp-system-control-background);
+  color: inherit;
+  font: 10px var(--pp-font-ui);
+}
+
+.sidebar-row-action:disabled {
+  color: var(--secondary-text);
+}
+
+.sidebar-rename {
+  flex: 1;
+  min-width: 0;
+  height: 18px;
+  padding: 0 2px;
+  border: 1px solid var(--sidebar-accent);
+  border-radius: 3px;
+  background: var(--pp-system-control-background);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  outline: none;
+}
+
+/* SidebarFooter */
+.sidebar-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: var(--pp-footer-height);
+  padding: 0 12px;
+  border-top: 1px solid var(--column-divider);
+}
+
+.sidebar-footer-button {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--secondary-text);
+  font: var(--pp-small-font);
+}
+
+.sidebar-footer-button:hover {
+  background: var(--control-hover);
+}
+
+.sidebar-footer-shortcut {
+  color: var(--pp-system-tertiary-label);
+}
+
+.sidebar-footer-spacer {
+  flex: 1;
+}
+
+/* Confirmation (Swift NSAlert sheet). */
+.sidebar-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.sidebar-confirm {
+  width: min(380px, calc(100vw - 32px));
+  padding: 20px;
+  border: 1px solid var(--menu-border);
+  border-radius: 8px;
+  background: var(--sidebar-dialog-background);
+  box-shadow: var(--menu-shadow);
+  color: var(--pp-app-text);
+}
+
+.sidebar-confirm-title {
+  margin: 0 0 8px;
+  font: 600 14px var(--pp-font-ui);
+}
+
+.sidebar-confirm-message {
+  margin: 0 0 16px;
+  font: 12px var(--pp-font-ui);
+  line-height: 1.4;
+}
+
+.sidebar-confirm-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.sidebar-confirm-buttons button {
+  min-width: 80px;
+  padding: 5px 12px;
+  border: 1px solid var(--menu-border);
+  border-radius: 4px;
+  background: var(--pp-system-control-background);
+  color: inherit;
+  font: 12px var(--pp-font-ui);
+}
+
+.sidebar-confirm-buttons button[data-default='true'] {
+  border-color: transparent;
+  background: var(--sidebar-accent);
+  color: #fff;
+}
+
+/* Machine sheets (WIN-8.14): Add Machine and the remote folder picker. */
+.sidebar-sheet {
+  width: min(440px, calc(100vw - 32px));
+}
+
+.sidebar-sheet-field {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font: 12px var(--pp-font-ui);
+}
+
+.sidebar-sheet-field input {
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--menu-border);
+  border-radius: 4px;
+  background: var(--pp-system-control-background);
+  color: inherit;
+  font: inherit;
+}
+
+.sidebar-sheet-note {
+  margin: 4px 0 12px;
+  font: 11px var(--pp-font-ui);
+  color: var(--secondary-text);
+  overflow-wrap: anywhere;
+}
+
+.sidebar-sheet-note[data-ok='false'] {
+  color: var(--pp-status-error, #d70015);
+}
+
+.sidebar-confirm-buttons .sidebar-sheet-leading {
+  margin-right: auto;
+}
+
+.sidebar-confirm-buttons button:disabled {
+  opacity: 0.5;
+}
+
+.remote-folder-picker {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.remote-folder-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+
+.remote-folder-bar button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--menu-border);
+  border-radius: 4px;
+  background: var(--pp-system-control-background);
+  color: inherit;
+}
+
+.remote-folder-bar button:disabled {
+  opacity: 0.4;
+}
+
+.remote-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 12px var(--pp-font-ui);
+}
+
+.remote-folder-list {
+  height: 260px;
+  overflow: auto;
+  border: 1px solid var(--menu-border);
+  border-radius: 4px;
+  background: var(--pp-system-control-background);
+}
+
+.remote-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  font: 12px var(--pp-font-ui);
+  cursor: default;
+  user-select: none;
+}
+
+.remote-folder-row[aria-selected='true'] {
+  background: var(--sidebar-accent);
+  color: #fff;
+}
+
+.remote-folder-link,
+.remote-folder-empty {
+  color: var(--secondary-text);
+  font-size: 11px;
+}
+
+.remote-folder-empty {
+  padding: 8px;
+}
+
+.remote-folder-hidden {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  font: 12px var(--pp-font-ui);
+}
+
+/* Context menus and the worktree add menu (WIN-7.8): the menu bar's dropdown, at the pointer. */
+.sidebar-context-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+}
+
+/* Project drag (WIN-7.8): a line where the dragged project lands. */
+.sidebar-row[data-drop-position]::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--sidebar-accent);
+  pointer-events: none;
+}
+
+.sidebar-row[data-drop-position='before']::after {
+  top: -1px;
+}
+
+.sidebar-row[data-drop-position='after']::after {
+  bottom: -1px;
+}

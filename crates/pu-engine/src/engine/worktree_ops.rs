@@ -91,23 +91,30 @@ impl Engine {
         // Write manifest entry (worktree only, no agents)
         let cwd = wt_path.to_string_lossy().to_string();
         let wt_id_clone = wt_id.clone();
-        let manifest_result = manifest::update_manifest(root_path, move |mut m| {
-            m.worktrees
-                .entry(wt_id_clone.clone())
-                .or_insert_with(|| WorktreeEntry {
-                    id: wt_id_clone,
-                    name: worktree_name.clone(),
-                    path: cwd,
-                    branch,
-                    base_branch: Some(base_branch.clone()),
-                    status: WorktreeStatus::Active,
-                    agents: IndexMap::new(),
-                    created_at: chrono::Utc::now(),
-                    merged_at: None,
-                    error: None,
-                });
-            m
-        });
+        // Off the runtime: on Windows the rename retries while the manifest
+        // is locked (`pu_core::fs_retry`).
+        let manifest_root = root_path.to_path_buf();
+        let manifest_result = tokio::task::spawn_blocking(move || {
+            manifest::update_manifest(&manifest_root, move |mut m| {
+                m.worktrees
+                    .entry(wt_id_clone.clone())
+                    .or_insert_with(|| WorktreeEntry {
+                        id: wt_id_clone,
+                        name: worktree_name.clone(),
+                        path: cwd,
+                        branch,
+                        base_branch: Some(base_branch.clone()),
+                        status: WorktreeStatus::Active,
+                        agents: IndexMap::new(),
+                        created_at: chrono::Utc::now(),
+                        merged_at: None,
+                        error: None,
+                    });
+                m
+            })
+        })
+        .await
+        .unwrap_or_else(|e| Err(std::io::Error::other(e).into()));
 
         if let Err(e) = manifest_result {
             // Rollback: remove worktree + branch
@@ -144,9 +151,11 @@ impl Engine {
             }
         };
 
-        // 1. Kill all agents in the worktree
+        // 1. Kill all agents in the worktree, and wait for them to be gone: on
+        // Windows an exiting agent's open handles block deleting its files.
         let agent_ids: Vec<String> = wt.agents.keys().cloned().collect();
-        self.kill_agents(&agent_ids).await;
+        let killed = self.kill_agents(&agent_ids).await;
+        wait_for_agents_to_exit(&killed, AGENT_EXIT_WAIT).await;
 
         // 2. Remove git worktree directory
         let root_path = Path::new(project_root);
@@ -156,9 +165,15 @@ impl Engine {
         if let Err(e) = git::remove_worktree(root_path, &wt_path).await {
             tracing::warn!(worktree_id, "git worktree remove failed: {e}");
             if wt_path.exists() {
-                // Fallback: force-remove the directory directly, then prune git's
-                // stale admin metadata so the worktree slot can be reused.
-                if let Err(fs_err) = tokio::fs::remove_dir_all(&wt_path).await {
+                // Fallback: force-remove the directory directly (waiting out
+                // sharing locks; the error names a file still held open), then
+                // prune git's stale admin metadata so the slot can be reused.
+                let target = wt_path.clone();
+                let removed =
+                    tokio::task::spawn_blocking(move || pu_core::fs_retry::remove_dir_all(&target))
+                        .await
+                        .unwrap_or_else(|e| Err(std::io::Error::other(e)));
+                if let Err(fs_err) = removed {
                     tracing::error!(
                         worktree_id,
                         "worktree directory still present after fallback removal: {fs_err}"
@@ -253,5 +268,171 @@ impl Engine {
         if let Some(b) = branch {
             git::delete_local_branch(root_path, b).await.ok();
         }
+    }
+}
+
+/// How long worktree removal waits for each killed agent's process tree to
+/// exit (REQ-WINAPP-044).
+const AGENT_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Wait until every killed agent's exit has been observed (its exit watch
+/// holds a status), up to `limit` each. Returns at once for agents that
+/// already exited, so a completed kill adds no delay.
+async fn wait_for_agents_to_exit(
+    killed: &[(String, crate::pty_manager::AgentHandle)],
+    limit: std::time::Duration,
+) {
+    for (id, handle) in killed {
+        let mut exit = handle.exit_rx.clone();
+        let exited = async {
+            while exit.borrow_and_update().is_none() {
+                if exit.changed().await.is_err() {
+                    break;
+                }
+            }
+        };
+        if tokio::time::timeout(limit, exited).await.is_err() {
+            tracing::warn!(
+                agent_id = id,
+                "agent still exiting; removing its worktree anyway"
+            );
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod lock_tests {
+    use super::*;
+    use pu_core::protocol::{Request, Response};
+    use std::io::{BufRead, Write};
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=T", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// PowerShell opens `path` with no sharing until a line arrives on stdin.
+    fn hold_open(path: &Path) -> std::process::Child {
+        let script = format!(
+            "$f = [System.IO.File]::Open('{}', 'Open', 'Read', 'None'); \
+             [Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); \
+             [void][Console]::In.ReadLine(); $f.Close()",
+            path.display().to_string().replace('\'', "''")
+        );
+        let mut child = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(child.stdout.as_mut().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line.trim(), "ready");
+        child
+    }
+
+    /// WIN-3.13: a file in the worktree held open by another process makes
+    /// deletion fail with an error naming that file, and keeps the worktree
+    /// retryable; once the file is closed, the retried delete succeeds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn given_file_held_open_in_worktree_should_name_it_then_delete_after_close() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        git(&project, &["init", "-q"]);
+        git(&project, &["commit", "--allow-empty", "-qm", "fixture"]);
+        let engine = Engine::with_project_registry(temp.path().join("registry.json")).unwrap();
+        let root = project.to_string_lossy().into_owned();
+        assert!(matches!(
+            engine
+                .handle_request(Request::Init {
+                    project_root: root.clone()
+                })
+                .await,
+            Response::InitResult { .. }
+        ));
+        // Created directly (not through CreateWorktree, whose path handling
+        // is WIN-3.11's), exactly as the engine records it.
+        let worktree_id = pu_core::id::worktree_id();
+        let wt_path = paths::worktree_path(&project, &worktree_id);
+        git(
+            &project,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "pu/locked",
+                wt_path.to_str().unwrap(),
+            ],
+        );
+        let (id, cwd) = (worktree_id.clone(), wt_path.to_string_lossy().into_owned());
+        manifest::update_manifest(&project, move |mut m| {
+            m.worktrees.insert(
+                id.clone(),
+                WorktreeEntry {
+                    id,
+                    name: "locked".into(),
+                    path: cwd,
+                    branch: "pu/locked".into(),
+                    base_branch: None,
+                    status: WorktreeStatus::Active,
+                    agents: IndexMap::new(),
+                    created_at: chrono::Utc::now(),
+                    merged_at: None,
+                    error: None,
+                },
+            );
+            m
+        })
+        .unwrap();
+        let held = wt_path.join("held.log");
+        std::fs::write(&held, b"busy").unwrap();
+        let mut holder = hold_open(&held);
+
+        let delete = Request::DeleteWorktree {
+            project_root: root.clone(),
+            worktree_id: worktree_id.clone(),
+        };
+        let Response::DeleteWorktreeResult {
+            directory_removed,
+            error,
+            ..
+        } = engine.handle_request(delete.clone()).await
+        else {
+            panic!("expected a delete result");
+        };
+        assert!(!directory_removed);
+        let error = error.unwrap();
+        // Name the file the way the engine does (canonical), so an 8.3 TEMP
+        // spelling such as RUNNER~1 on CI still matches.
+        let held_name = pu_core::canon::canonicalize(&held).unwrap_or_else(|_| held.clone());
+        assert!(error.contains(&held_name.display().to_string()), "{error}");
+        assert!(error.contains("locked"), "{error}");
+        assert!(held.exists());
+
+        writeln!(holder.stdin.take().unwrap()).unwrap();
+        assert!(holder.wait().unwrap().success());
+        let Response::DeleteWorktreeResult {
+            directory_removed,
+            error,
+            ..
+        } = engine.handle_request(delete).await
+        else {
+            panic!("expected a delete result");
+        };
+        assert!(directory_removed, "{error:?}");
+        assert!(!wt_path.exists());
     }
 }

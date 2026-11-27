@@ -1,27 +1,53 @@
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+
+/// Creation flags for helper processes the daemon spawns (git, gh, gates):
+/// no console window flashes, and a console Ctrl-C aimed at the daemon's
+/// group does not reach them.
+#[cfg(windows)]
+pub(crate) const HELPER_CREATION_FLAGS: u32 = 0x0800_0000 /* CREATE_NO_WINDOW */
+    | 0x0000_0200 /* CREATE_NEW_PROCESS_GROUP */;
 
 /// Longest any single git command may run. Worktree checkouts of large repos
 /// are the slow case; a held index.lock or a credential prompt is the hang case.
 const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// Worktrees under `.pu/worktrees/<name>` can exceed Windows' 260-character
+/// MAX_PATH, which Git for Windows only crosses with `core.longpaths`.
+const LONGPATHS: &[&str] = if cfg!(windows) {
+    &["-c", "core.longpaths=true"]
+} else {
+    &[]
+};
+
 /// Run git with no stdin (it can never stop to prompt) and a timeout, killing
 /// it if the timeout fires so it cannot pin a request forever.
 async fn git_output(args: &[&str], cwd: &Path) -> Result<std::process::Output, std::io::Error> {
-    let command = tokio::process::Command::new("git")
+    let mut command = tokio::process::Command::new("git");
+    command
+        .args(LONGPATHS)
         .args(args)
         .current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
         // An empty GIT_ASKPASS makes git skip core.askPass and SSH_ASKPASS,
         // so an inherited credential helper cannot prompt either.
-        .env("GIT_ASKPASS", "")
-        .env(
-            "PATH",
-            git_path(
-                std::env::var("PATH").ok().as_deref(),
-                std::env::var("HOME").ok().as_deref(),
-            ),
-        )
+        .env("GIT_ASKPASS", "");
+    // Hooks git runs need the agent tool directories; git_path joins them in
+    // the platform's own PATH syntax (`:` on Unix, `;` on Windows).
+    command.env(
+        "PATH",
+        git_path(
+            std::env::var("PATH").ok().as_deref(),
+            pu_core::paths::home_dir()
+                .ok()
+                .map(|p| p.display().to_string())
+                .as_deref(),
+        ),
+    );
+    #[cfg(windows)]
+    command.creation_flags(HELPER_CREATION_FLAGS);
+    let command = command
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();
@@ -38,6 +64,7 @@ async fn git_output(args: &[&str], cwd: &Path) -> Result<std::process::Output, s
 /// The daemon may run under launchd with a minimal PATH, so hooks git runs
 /// (e.g. Git LFS's post-checkout calling `git-lfs`) cannot find Homebrew
 /// tools. Append the same fallback dirs agents get.
+#[cfg(unix)]
 fn git_path(current: Option<&str>, home: Option<&str>) -> String {
     let mut dirs: Vec<String> = current
         .unwrap_or_default()
@@ -58,6 +85,20 @@ fn git_path(current: Option<&str>, home: Option<&str>) -> String {
         }
     }
     dirs.join(":")
+}
+
+/// Windows: the current PATH, then the Windows tool directories agents get
+/// (git hooks such as Git LFS's call tools installed there).
+#[cfg(windows)]
+fn git_path(current: Option<&str>, home: Option<&str>) -> String {
+    let current = current
+        .map(|path| std::env::split_paths(path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let tools = home
+        .filter(|h| !h.is_empty())
+        .map(|h| pu_core::env_path::windows_tool_dirs(Path::new(h), |k| std::env::var_os(k)))
+        .unwrap_or_default();
+    pu_core::env_path::join_unique(current.into_iter().chain(tools))
 }
 
 async fn run_git(args: &[&str], cwd: &Path) -> Result<String, std::io::Error> {
@@ -103,30 +144,43 @@ pub async fn install_hooks(
     let hooks_dir = Path::new(&git_dir).join("hooks");
     tokio::fs::create_dir_all(&hooks_dir).await?;
 
-    // Escape single quotes in the path for shell safety
-    let escaped_root = project_root.display().to_string().replace('\'', "'\\''");
-
     // Resolve absolute path to `pu` binary so hooks work even when ~/.pu/bin is not in PATH.
     // Falls back to bare `pu` if resolution fails (e.g., running outside the daemon).
     let pu_bin = std::env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "pu".to_string());
-    let escaped_pu = pu_bin.replace('\'', "'\\''");
+    write_hooks(&hooks_dir, &pu_bin, project_root).await
+}
 
+/// The `#!/bin/sh` hook body. Git for Windows runs hooks with its bundled
+/// `sh`, so the same script works there: both paths are single-quoted (a
+/// Windows path's backslashes, spaces and drive colon are literal inside
+/// single quotes), and the program path uses `/` separators, which `sh`
+/// execs reliably. The project root is passed exactly as given.
+fn hook_script(pu_bin: &str, project_root: &Path, event: &str) -> String {
+    // Escape single quotes in the path for shell safety
+    let escaped_root = project_root.display().to_string().replace('\'', "'\\''");
+    #[cfg(windows)]
+    let pu_bin = pu_bin.replace('\\', "/");
+    let escaped_pu = pu_bin.replace('\'', "'\\''");
+    format!("#!/bin/sh\nexec '{escaped_pu}' gate {event} --project-root '{escaped_root}'\n")
+}
+
+async fn write_hooks(
+    hooks_dir: &Path,
+    pu_bin: &str,
+    project_root: &Path,
+) -> Result<(), std::io::Error> {
     for (hook_name, event) in [("pre-commit", "pre-commit"), ("pre-push", "pre-push")] {
         let hook_path = hooks_dir.join(hook_name);
         if hook_path.exists() {
             // Don't overwrite hooks managed by the user or other tools (husky, lefthook, etc.)
             continue;
         }
-        tokio::fs::write(
-            &hook_path,
-            format!(
-                "#!/bin/sh\nexec '{escaped_pu}' gate {event} --project-root '{escaped_root}'\n"
-            ),
-        )
-        .await?;
+        tokio::fs::write(&hook_path, hook_script(pu_bin, project_root, event)).await?;
+        // Git for Windows runs hooks through its bundled sh; no mode bit to set.
+        #[cfg(unix)]
         tokio::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).await?;
     }
 
@@ -294,6 +348,27 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[cfg(windows)]
+    #[test]
+    fn given_windows_path_with_spaces_should_append_tool_dirs_once() {
+        let path = git_path(
+            Some(r"C:\Program Files\Git\cmd;C:\Users\me\.cargo\bin;C:\WINDOWS\system32"),
+            Some(r"C:\Users\me"),
+        );
+        let dirs: Vec<_> = std::env::split_paths(&path).collect();
+        assert_eq!(dirs[0], Path::new(r"C:\Program Files\Git\cmd"));
+        assert_eq!(dirs[1], Path::new(r"C:\Users\me\.cargo\bin"));
+        assert_eq!(dirs[3], Path::new(r"C:\Users\me\.pu\bin"));
+        assert!(dirs.contains(&Path::new(r"C:\Users\me\.local\bin").to_path_buf()));
+        assert_eq!(
+            dirs.iter().filter(|d| d.ends_with(r".cargo\bin")).count(),
+            1,
+            "{path}"
+        );
+        assert!(!git_path(None, None).contains(":/"));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn given_launchd_path_should_append_homebrew_and_user_bins() {
         let path = git_path(Some("/usr/bin:/bin:/usr/sbin:/sbin"), Some("/Users/me"));
@@ -303,12 +378,14 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_path_with_homebrew_should_keep_order_without_duplicates() {
         let path = git_path(Some("/opt/homebrew/bin:/usr/bin:/bin"), None);
         assert_eq!(path, "/opt/homebrew/bin:/usr/bin:/bin:/usr/local/bin");
     }
 
+    #[cfg(unix)]
     #[test]
     fn given_no_path_should_use_fallbacks() {
         assert_eq!(
@@ -353,6 +430,57 @@ mod tests {
         let result = create_worktree(tmp.path(), &wt_path, "pu/test-branch", "HEAD").await;
         assert!(result.is_ok(), "create_worktree failed: {result:?}");
         assert!(wt_path.exists());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_worktree_path_over_max_path_should_create_use_and_remove_it() {
+        let tmp = TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+        // Git keeps $GIT_DIR under MAX_PATH, so the long part is the checked-out
+        // files, as in a deep repository under a deep worktree path.
+        let nested = ["d".repeat(50), "e".repeat(50), "f".repeat(50)].join("/");
+        let file = tmp
+            .path()
+            .join(&nested)
+            .join(format!("{}.txt", "f".repeat(60)));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "long\n").unwrap();
+        run_git(&["add", "."], tmp.path()).await.unwrap();
+        run_git(
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-m",
+                "long",
+            ],
+            tmp.path(),
+        )
+        .await
+        .unwrap();
+
+        let wt_path = pu_core::paths::worktree_path(tmp.path(), &"w".repeat(40));
+        let checked_out = wt_path.join(&nested).join(file.file_name().unwrap());
+        assert!(
+            checked_out.as_os_str().len() > 260,
+            "{}",
+            checked_out.display()
+        );
+        create_worktree(tmp.path(), &wt_path, "pu/long-path", "HEAD")
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&checked_out).unwrap().trim_end(),
+            "long"
+        );
+        let status = run_git(&["status", "--porcelain"], &wt_path).await.unwrap();
+        assert!(status.is_empty(), "{status}");
+
+        remove_worktree(tmp.path(), &wt_path).await.unwrap();
+        assert!(!wt_path.exists());
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -589,9 +717,96 @@ mod tests {
         assert!(content.contains("gate pre-push"));
 
         // Check executable permission
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::metadata(&pre_commit).unwrap().permissions();
-        assert!(perms.mode() & 0o111 != 0, "pre-commit should be executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(&pre_commit).unwrap().permissions();
+            assert!(perms.mode() & 0o111 != 0, "pre-commit should be executable");
+        }
+    }
+
+    /// A real `git commit` on Windows runs the installed `#!/bin/sh` hook
+    /// through Git's sh, with both paths (spaces included) arriving intact,
+    /// and the gate's exit status decides the commit.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_windows_paths_with_spaces_should_run_pre_commit_gate_in_real_commit() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo with space");
+        std::fs::create_dir(&repo).unwrap();
+        init_git_repo(&repo);
+        // A stand-in `pu` (an sh script) that records its argv and exits
+        // with the status in its sibling `status` file.
+        let bin = tmp.path().join("Pure Point bin");
+        std::fs::create_dir(&bin).unwrap();
+        let record = bin.join("argv.txt");
+        let stub = bin.join("pu");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$(dirname \"$0\")/argv.txt\"\nexit \"$(cat \"$(dirname \"$0\")/status\")\"\n",
+        )
+        .unwrap();
+        let hooks = repo.join(".git").join("hooks");
+        write_hooks(&hooks, stub.to_str().unwrap(), &repo)
+            .await
+            .unwrap();
+        let commit = |message: &str| {
+            std::fs::write(repo.join("f.txt"), message).unwrap();
+            git(&repo, &["add", "f.txt"]);
+            // Pin hooksPath so a user-level core.hooksPath cannot bypass the hook.
+            std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@test.com",
+                    "-c",
+                ])
+                .arg(format!("core.hooksPath={}", hooks.display()))
+                .args(["commit", "-m", message])
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+        };
+
+        std::fs::write(bin.join("status"), "1").unwrap();
+        let refused = commit("refused");
+        assert!(
+            !refused.status.success(),
+            "a failing gate must block the commit"
+        );
+        let argv = std::fs::read_to_string(&record).unwrap();
+        assert_eq!(
+            argv.lines().collect::<Vec<_>>(),
+            [
+                "gate",
+                "pre-commit",
+                "--project-root",
+                repo.to_str().unwrap()
+            ]
+        );
+
+        std::fs::write(bin.join("status"), "0").unwrap();
+        let accepted = commit("accepted");
+        assert!(
+            accepted.status.success(),
+            "{}",
+            String::from_utf8_lossy(&accepted.stderr)
+        );
+    }
+
+    #[cfg(windows)]
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

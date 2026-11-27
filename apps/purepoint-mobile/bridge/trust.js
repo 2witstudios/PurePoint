@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import {
   randomBytes,
@@ -7,7 +7,7 @@ import {
   createHash,
   timingSafeEqual,
 } from "node:crypto";
-import { ensureHostTLS, privateEntry } from "./trust-tls.js";
+import { ensureHostTLS, privateEntry, privateDirectory } from "./trust-tls.js";
 import { pairingEndpoint } from "./endpoints.js";
 import { acquirePrivateLock } from "./lock-helper.js";
 const opaque = () => randomBytes(32).toString("base64url");
@@ -36,6 +36,8 @@ async function publish(file, value, assertHeld) {
     handle = null;
     assertHeld();
     await rename(temp, file);
+    // Windows cannot flush a directory handle; NTFS journals the rename.
+    if (process.platform === "win32") return assertHeld();
     const directory = await open(path.dirname(file), "r");
     try {
       await directory.sync();
@@ -91,8 +93,7 @@ export async function openTrustStore({
   now = Date.now,
   helperPath,
 }) {
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await privateEntry(directory, true);
+  await privateDirectory(directory);
   let lockFailure;
   let notifyLoss;
   const lock = await acquirePrivateLock({

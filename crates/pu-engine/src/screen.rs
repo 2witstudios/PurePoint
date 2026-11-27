@@ -317,4 +317,151 @@ mod tests {
         let t = ScreenTracker::new(&buf, 24, 80);
         assert_eq!(t.input_box().unwrap().text, "hello");
     }
+
+    // --- ConPTY captures from WIN-1.1 (`spikes/conpty`) ------------------
+    //
+    // `results/<name>.raw.txt` is the escaped byte stream a real ConPTY sent
+    // (120x30), and `fixtures/<name>.txt` is the screen the spike parsed from
+    // it. Replaying the bytes must give that screen, and the heuristics read
+    // the parsed screen (with its attributes: Claude's placeholder is dim)
+    // into the phase the spike recorded (REQ-WINAPP-018).
+
+    macro_rules! conpty_capture {
+        ($name:literal) => {
+            (
+                $name,
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../spikes/conpty/results/",
+                    $name,
+                    ".raw.txt"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../spikes/conpty/fixtures/",
+                    $name,
+                    ".txt"
+                )),
+            )
+        };
+    }
+
+    /// Inverse of the spike's `escape_raw`: `\e \r \n \a \xHH` are escapes,
+    /// a real newline follows each `\n`, and any other backslash is literal.
+    fn unescape_capture(raw: &str) -> Vec<u8> {
+        let raw = raw.replace("\\n\n", "\\n");
+        let mut out = Vec::new();
+        let mut chars = raw.chars().peekable();
+        while let Some(c) = chars.next() {
+            let escaped = match (c, chars.peek()) {
+                ('\\', Some('e')) => Some(0x1b),
+                ('\\', Some('r')) => Some(b'\r'),
+                ('\\', Some('n')) => Some(b'\n'),
+                ('\\', Some('a')) => Some(0x07),
+                _ => None,
+            };
+            if let Some(byte) = escaped {
+                chars.next();
+                out.push(byte);
+                continue;
+            }
+            if c == '\\' && chars.peek() == Some(&'x') {
+                let hex: String = chars.clone().skip(1).take(2).collect();
+                if let Ok(byte) = u8::from_str_radix(&hex, 16)
+                    && hex.len() == 2
+                {
+                    chars.nth(2);
+                    out.push(byte);
+                    continue;
+                }
+            }
+            let mut utf8 = [0; 4];
+            out.extend_from_slice(c.encode_utf8(&mut utf8).as_bytes());
+        }
+        out
+    }
+
+    /// The spike's `screen_text`: rows trimmed, trailing blank rows dropped.
+    fn fixture_text(screen: &vt100::Screen) -> String {
+        let (_, cols) = screen.size();
+        let rows: Vec<String> = screen
+            .rows(0, cols)
+            .map(|r| r.trim_end().to_string())
+            .collect();
+        format!("{}\n", rows.join("\n").trim_end_matches('\n'))
+    }
+
+    #[test]
+    fn given_conpty_captures_should_replay_to_their_fixtures_and_recorded_phases() {
+        for ((name, raw, fixture), phase) in [
+            (conpty_capture!("pwsh"), "busy"),
+            (conpty_capture!("cmd"), "busy"),
+            (conpty_capture!("cmd-conpty"), "busy"),
+            (conpty_capture!("cmd-passthrough"), "busy"),
+            (conpty_capture!("claude"), "input_ready"),
+            (conpty_capture!("claude-conpty"), "input_ready"),
+            (conpty_capture!("claude-passthrough"), "input_ready"),
+            (conpty_capture!("claude-untrusted-dir"), "dialog"),
+            // Redacting the user name changed its width, so the relative
+            // cursor moves around it land elsewhere: the phase still holds.
+            (conpty_capture!("codex"), "dialog"),
+            (conpty_capture!("codex-trusted-override"), "busy"),
+            (conpty_capture!("codex-conpty"), "busy"),
+            (conpty_capture!("codex-passthrough"), "busy"),
+        ] {
+            let mut parser = vt100::Parser::new(30, 120, 0);
+            parser.process(&unescape_capture(raw));
+            if name != "codex" {
+                assert_eq!(fixture_text(parser.screen()), fixture, "{name}: screen");
+            }
+            assert_eq!(input_phase(parser.screen()), phase, "{name}: phase");
+            // The same bytes through the engine's own buffer and tracker.
+            let buffer = OutputBuffer::new();
+            buffer.write(&unescape_capture(raw));
+            let tracker = ScreenTracker::new(&buffer, 30, 120);
+            assert_eq!(tracker.is_ready(), phase == "input_ready", "{name}: ready");
+        }
+    }
+
+    /// Plain-text fixtures with no attributes to lose: typed text in the
+    /// Claude box is a draft, and dialogs and bare prompts are never ready.
+    #[test]
+    fn given_conpty_screen_fixtures_should_classify_like_the_spike() {
+        for (name, fixture, phase) in [
+            (
+                "claude-typed",
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../spikes/conpty/fixtures/claude-typed.txt"
+                )),
+                "has_draft",
+            ),
+            (
+                "claude-untrusted-dir",
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../spikes/conpty/fixtures/claude-untrusted-dir.txt"
+                )),
+                "dialog",
+            ),
+            (
+                "pwsh-resize-after-70x30",
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../spikes/conpty/fixtures/pwsh-resize-after-70x30.txt"
+                )),
+                "busy",
+            ),
+        ] {
+            let mut parser = vt100::Parser::new(30, 120, 0);
+            parser.process(fixture.replace('\n', "\r\n").as_bytes());
+            assert_eq!(input_phase(parser.screen()), phase, "{name}");
+        }
+        let typed = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../spikes/conpty/fixtures/claude-typed.txt"
+        ));
+        let rows: Vec<String> = typed.lines().map(str::to_owned).collect();
+        assert!(!find_input_box(&rows).unwrap().is_empty());
+    }
 }

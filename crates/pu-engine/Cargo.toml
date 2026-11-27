@@ -7,22 +7,42 @@ publish.workspace = true
 
 [dependencies]
 pu-core = { path = "../pu-core" }
+pu-transport = { path = "../pu-transport" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 indexmap = { workspace = true }
 tokio = { workspace = true }
-nix = { version = "0.31", features = ["term", "signal", "process", "fs", "resource", "user"] }
 libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 vt100 = "0.16.2"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 base64 = { workspace = true }
 notify = "8"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tempfile = "3"
+fs4 = "1.1"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["term", "signal", "process", "fs", "resource", "user"] }
+
+[target.'cfg(windows)'.dependencies]
+which = "8"
+windows-sys = { version = "0.61", features = [
+    "Wdk_System_Threading",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Environment",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+] }
 
 [[bin]]
 name = "pu-engine"
