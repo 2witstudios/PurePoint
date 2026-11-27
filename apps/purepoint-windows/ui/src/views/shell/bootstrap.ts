@@ -126,8 +126,10 @@ export function startApp(app: AppState, deps: StartAppDeps = defaultDeps): () =>
   };
 
   // Listen first, so no daemon or installer change between the first reads and the
-  // listeners is lost.
-  app.connect().then(keep, logged('listening for backend events'));
+  // listeners is lost. The projects subscription starts only once the listeners are in: its
+  // first `projects-changed` (the daemon's registered projects) is sent once, on subscribing,
+  // and an event emitted before the webview listens is dropped, leaving the sidebar empty.
+  const listening = app.connect().then(keep, logged('listening for backend events'));
   deps
     .onInstallerState((state) => {
       deps.setInstallerState(state);
@@ -142,7 +144,9 @@ export function startApp(app: AppState, deps: StartAppDeps = defaultDeps): () =>
   }, logged('reading the installer status'));
 
   // The local daemon's projects, followed from here on (the projects subscription).
-  app.restoreProjects();
+  void listening.then(() => {
+    if (!stopped) app.restoreProjects();
+  });
   // Machines: connect the registered ones and follow the registry (WIN-8.14).
   if (deps.loadMachines !== undefined) deps.loadMachines(app);
   if (deps.startAgentSignals !== undefined) keep(deps.startAgentSignals(app));

@@ -53,7 +53,9 @@ describe('startApp', () => {
     });
     expect(deps.startThemeSync).toHaveBeenCalledOnce();
     expect(app.connect).toHaveBeenCalledOnce();
-    expect(app.restoreProjects).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(app.restoreProjects).toHaveBeenCalledOnce();
+    });
     await vi.waitFor(() => {
       expect(deps.setInstallerState).toHaveBeenCalledWith({ state: 'running' });
     });
@@ -71,6 +73,23 @@ describe('startApp', () => {
     expect(app.stopFollowingLocalProjects).toHaveBeenCalledOnce();
   });
 
+  it('follows the projects only once the backend listeners are in', async () => {
+    const { app, stopListening } = fakeApp();
+    let listen: (stop: typeof stopListening) => void = () => {};
+    app.connect.mockReturnValueOnce(
+      new Promise<typeof stopListening>((resolve) => {
+        listen = resolve;
+      }),
+    );
+    startApp(app as unknown as AppState, fakeDeps().deps);
+    await Promise.resolve();
+    expect(app.restoreProjects).not.toHaveBeenCalled();
+    listen(stopListening);
+    await vi.waitFor(() => {
+      expect(app.restoreProjects).toHaveBeenCalledOnce();
+    });
+  });
+
   it('drops listeners that arrive after it stopped', async () => {
     const { app, stopListening } = fakeApp();
     const { deps } = fakeDeps();
@@ -81,5 +100,6 @@ describe('startApp', () => {
     });
     await Promise.resolve();
     expect(app.handleDaemonState).not.toHaveBeenCalled();
+    expect(app.restoreProjects).not.toHaveBeenCalled();
   });
 });
