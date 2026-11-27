@@ -13,6 +13,9 @@
 // - The listener is on the bubble phase and leaves a key a focused control already handled
 //   (`defaultPrevented`), so an editor's own Alt+Arrow or a dialog's keys win; the Mac's local
 //   monitor sees a key before any view.
+// - Holding a chord auto-repeats its keydown; only the navigation actions in
+//   `REPEATABLE_ACTIONS` run again on a repeat. Any other action (Close Agent, Close Pane, New
+//   Tab, a split, ...) runs once per press, and its repeats are still consumed.
 // - WebView2's own browser keys (F5, Ctrl+R, Ctrl+P, Ctrl+F, F12, zoom, ...) are turned off in
 //   the backend (`src-tauri/src/webview.rs`, REQ-WINAPP-065), so they never reach the browser.
 
@@ -48,6 +51,16 @@ export function hotkeyActionFor(
   return bindings.actionFor(event, isTerminalTarget(event.target));
 }
 
+/** The actions a held chord repeats: moving between tabs and panes, nothing that creates or closes. */
+export const REPEATABLE_ACTIONS: ReadonlySet<HotkeyAction> = new Set<HotkeyAction>([
+  'nextTab',
+  'previousTab',
+  'focusUp',
+  'focusDown',
+  'focusLeft',
+  'focusRight',
+]);
+
 export interface HotkeyMonitorOptions {
   /** The current bindings (the key binding store's state). */
   readonly bindings: () => HotkeyBindings;
@@ -65,6 +78,7 @@ export function startHotkeyMonitor(options: HotkeyMonitorOptions): () => void {
     // Consumed, as the Mac's monitor returns nil: nothing else sees the chord.
     event.preventDefault();
     event.stopPropagation();
+    if (event.repeat && !REPEATABLE_ACTIONS.has(action)) return;
     options.run(action);
   };
   target.addEventListener('keydown', onKeyDown);

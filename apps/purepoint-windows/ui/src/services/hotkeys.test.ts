@@ -20,9 +20,11 @@ function chord(
   code: string,
   mods: { ctrl?: boolean; alt?: boolean; shift?: boolean } = {},
   target: EventTarget = document.body,
+  repeat = false,
 ): KeyboardEvent {
   const event = new KeyboardEvent('keydown', {
     code,
+    repeat,
     ctrlKey: mods.ctrl === true,
     altKey: mods.alt === true,
     shiftKey: mods.shift === true,
@@ -33,7 +35,11 @@ function chord(
   return event;
 }
 
-function eventFor(action: HotkeyAction, target: EventTarget = document.body): KeyboardEvent {
+function eventFor(
+  action: HotkeyAction,
+  target: EventTarget = document.body,
+  repeat = false,
+): KeyboardEvent {
   const binding = defaultBinding(action);
   return chord(
     binding.code,
@@ -43,6 +49,7 @@ function eventFor(action: HotkeyAction, target: EventTarget = document.body): Ke
       shift: binding.modifiers.includes('shift'),
     },
     target,
+    repeat,
   );
 }
 
@@ -135,6 +142,54 @@ describe('startHotkeyMonitor', () => {
     stop();
     window.dispatchEvent(eventFor('splitRight'));
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a held destructive or creating chord, should run it once and consume its repeats', () => {
+    const run = vi.fn();
+    const store = createKeyBindingStore(null);
+    const stop = startHotkeyMonitor({ bindings: () => store.getState(), run });
+    for (const action of [
+      'closeAgent',
+      'closePane',
+      'newTab',
+      'splitRight',
+      'splitBelow',
+    ] as const) {
+      run.mockClear();
+      window.dispatchEvent(eventFor(action));
+      for (let i = 0; i < 3; i++) {
+        const repeat = eventFor(action, document.body, true);
+        window.dispatchEvent(repeat);
+        expect(repeat.defaultPrevented, action).toBe(true);
+      }
+      expect(run, action).toHaveBeenCalledTimes(1);
+    }
+    stop();
+  });
+
+  it('given a held navigation chord, should repeat it', () => {
+    const run = vi.fn();
+    const store = createKeyBindingStore(null);
+    const stop = startHotkeyMonitor({ bindings: () => store.getState(), run });
+    for (const action of ['nextTab', 'previousTab', 'focusLeft'] as const) {
+      run.mockClear();
+      window.dispatchEvent(eventFor(action));
+      window.dispatchEvent(eventFor(action, document.body, true));
+      window.dispatchEvent(eventFor(action, document.body, true));
+      expect(run, action).toHaveBeenCalledTimes(3);
+    }
+    stop();
+  });
+
+  it('given a held reserved chord in a terminal, should still leave it to the terminal', () => {
+    const run = vi.fn();
+    const store = createKeyBindingStore(null);
+    const stop = startHotkeyMonitor({ bindings: () => store.getState(), run });
+    const repeat = chord('KeyC', { ctrl: true }, terminalTextarea(), true);
+    window.dispatchEvent(repeat);
+    expect(repeat.defaultPrevented).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+    stop();
   });
 
   it('given a rebinding, should apply it live', () => {
