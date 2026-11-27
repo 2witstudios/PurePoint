@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, cp, writeFile, readFile, rm } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  cp,
+  writeFile,
+  readFile,
+  realpath,
+  rm,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
@@ -52,8 +60,11 @@ test(
   "exact Pi 1.1.0 relocated RPC loads packages, refreshes sections across reload/resume/compaction and preserves native tools/UI/cancel",
   { timeout: win32 ? 240000 : 120000 },
   async (t) => {
-    const folder = await mkdtemp(
-      path.join(os.tmpdir(), "pointguard-rpc-proof-"),
+    // Long-name path: CI's temp folder is an 8.3 short name, and Pi resolves
+    // some package paths to their long spelling, so one skill seen under both
+    // spellings would collide with itself.
+    const folder = await realpath(
+      await mkdtemp(path.join(os.tmpdir(), "pointguard-rpc-proof-")),
     );
     let rpc;
     t.after(async () => {

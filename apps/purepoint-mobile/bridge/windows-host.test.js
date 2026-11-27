@@ -144,10 +144,15 @@ test(
       const sid = await currentUserSid();
       const acl = await readAcl(dir);
       assert.equal(acl.protected, true);
-      assert.deepEqual(
-        new Set(acl.aces.map((a) => a.sid)),
-        new Set([sid, "S-1-5-18"]),
+      // icacls names the built-in Administrator (a CI runner's account) LA,
+      // and an elevated one may keep Administrators, which isPrivateAcl allows.
+      const sids = new Set(
+        acl.aces.map((a) =>
+          a.sid === "LA" && sid.endsWith("-500") ? sid : a.sid,
+        ),
       );
+      sids.delete("S-1-5-32-544");
+      assert.deepEqual(sids, new Set([sid, "S-1-5-18"]));
       assert.ok(acl.aces.every((a) => a.rights === "FA" && a.flags === "OICI"));
       // icacls' own listing (names are localized; the flags are not).
       const listing = execFileSync(icacls, [dir], {
@@ -158,7 +163,7 @@ test(
         .split(/\r?\n/)
         .map((l) => l.replace(dir, "").trim())
         .filter((l) => /:\(/.test(l));
-      assert.equal(entries.length, 2, listing);
+      assert.equal(entries.length, acl.aces.length, listing);
       for (const entry of entries) {
         assert.match(entry, /:\(OI\)\(CI\)\(F\)$/, entry);
         assert.doesNotMatch(entry, /\(I\)/, entry);
