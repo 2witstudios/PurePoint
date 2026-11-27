@@ -1,6 +1,7 @@
 //! Tauri backend for the PurePoint Windows app (DEC-7).
 
 pub mod attach;
+pub mod automation;
 pub mod chrome;
 pub mod conversations;
 pub mod daemon;
@@ -19,7 +20,8 @@ pub mod window_state;
 #[cfg(windows)]
 mod webview;
 
-/// Label of the single main window declared in `tauri.conf.json`.
+/// Label of the single main window declared in `tauri.conf.json` (`"create": false`: `setup`
+/// builds it from that declaration, see [`create_main_window`]).
 pub const MAIN_WINDOW: &str = "main";
 
 /// Whether this build hides WebView2's default context menu and DevTools.
@@ -37,6 +39,29 @@ pub fn protocol_version() -> u32 {
 /// drops it all before the new page starts its own. Terminal sessions and chat sockets close,
 /// watchers stop (and release tokens are forgotten), and subscriptions stop. Also runs on the
 /// first load, when everything is still empty.
+/// Build the main window from its `tauri.conf.json` declaration, with the WebDriver switches
+/// a debug build under tauri-driver needs ([`automation::browser_args`]).
+fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
+    let mut config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == MAIN_WINDOW)
+        .cloned()
+        .expect("tauri.conf.json declares the main window");
+    if let Some(args) = automation::browser_args(
+        std::env::var("TAURI_WEBVIEW_AUTOMATION").ok().as_deref(),
+        std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+            .ok()
+            .as_deref(),
+    ) {
+        config.additional_browser_args = Some(args);
+    }
+    tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?.build()?;
+    Ok(())
+}
+
 fn reset_for_page_load<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     use tauri::Manager;
     if let Some(attach) = app.try_state::<attach::AttachState>() {
@@ -178,6 +203,7 @@ pub fn run() {
         })
         .setup(|app| {
             use tauri::Manager;
+            create_main_window(app)?;
             {
                 let daemon = daemon::DaemonState::for_app(app.handle());
                 daemon.start();

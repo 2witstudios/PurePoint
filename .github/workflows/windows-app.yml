@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   build:
-    name: Build & Test
+    name: Windows App build & test
     runs-on: windows-latest
     timeout-minutes: 60
     defaults:
@@ -81,7 +81,7 @@ jobs:
           cargo test --locked --all-targets
       - run: npm run tauri -- build --debug --no-bundle
 
-  # End-to-end tests (WIN-5.7), in their own job so "Build & Test" reports the build, the unit
+  # End-to-end tests (WIN-5.7), in their own job so the build job reports the build, the unit
   # tests and the Rust checks alone. The e2e must pass all the same. run.mjs builds the debug app
   # (with the bundled UI), sets up the drivers (ui/e2e/setup-drivers.ps1: tauri-driver and the
   # msedgedriver matching the runner's WebView2) and stages the app beside the workspace-built
@@ -123,13 +123,12 @@ jobs:
       - name: Install the Point Guard bridge dependencies
         working-directory: apps/purepoint-mobile
         run: npm ci --ignore-scripts
-      - name: DIAG smoke spec only
-        continue-on-error: true
+      - name: End-to-end tests
         env:
           PU_E2E_KEEP: "1"
-        run: npm run e2e -- --spec ui/e2e/specs/smoke.e2e.ts
+        run: npm run e2e
       - name: DIAG msedgedriver and app
-        continue-on-error: true
+        if: failure()
         run: node ui/e2e/diagnose.mjs
       - name: Retain e2e screenshots and logs
         if: always()

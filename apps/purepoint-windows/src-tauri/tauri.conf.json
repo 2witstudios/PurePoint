@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "PurePoint",
         "width": 1000,
         "height": 700,
