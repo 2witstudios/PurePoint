@@ -8,7 +8,8 @@
 // fake `ssh.cmd` (`PU_SSH`; fixtures/fakeSsh.ts). The Point Guard spec runs the app-managed runtime
 // in development mode with its LOCALAPPDATA and APPDATA in the temp profile and Pi answering from
 // a loopback fixture provider (fixtures/fakeProvider.ts); the Credential Manager entries its chat
-// saves are removed afterwards (fixtures/credentials.ts).
+// saves are removed afterwards (fixtures/credentials.ts). The parity walkthrough (WIN-11.1) ends in
+// a Point Guard chat, so it gets the same runtime setup.
 
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -29,6 +30,8 @@ let driver: TauriDriver | null = null;
 let provider: FakeProvider | null = null;
 let credentialsBefore: Set<string> | null = null;
 let specName = 'spec';
+/** The specs that chat with Point Guard through the fixture provider. */
+const POINT_GUARD_SPECS: ReadonlySet<string> = new Set(['pointGuard', 'walkthrough']);
 
 function specArtifacts(): string {
   const dir = join(workspace.artifactsDir, specName);
@@ -118,7 +121,7 @@ export const config: WebdriverIO.Config = {
         process.env.PU_E2E_REMOTE_ROOT = remote.root;
         appEnv = { ...appEnv, ...writeFakeSsh(join(runRoot, 'fake-ssh'), remote.socket) };
       }
-      if (specName === 'pointGuard') {
+      if (POINT_GUARD_SPECS.has(specName)) {
         provider = await FakeProvider.start();
         provider.writePiAgentConfig(fixture.home);
         credentialsBefore = pairingCredentials();
@@ -142,6 +145,8 @@ export const config: WebdriverIO.Config = {
   },
 
   afterTest: async (test, _context, result) => {
+    // The walkthrough saves its own screenshot per step (NN-step.png); keep only its failures.
+    if (specName === 'walkthrough' && result.passed) return;
     const status = result.passed ? 'passed' : 'failed';
     const file = `${safeName(test.title)}-${status}.png`;
     try {
