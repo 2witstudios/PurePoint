@@ -441,10 +441,10 @@ export class PiChatModel {
       const key = [...this.drafts.keys()].find((k) => k !== this.draftKey);
       if (key !== undefined) this.drafts.delete(key);
     }
-    const value = JSON.stringify(Object.fromEntries(this.drafts));
-    this.writer.schedule('drafts', () => {
-      this.setPref(KEY_DRAFTS, value);
-    });
+    // Written now, not through the coalesced writer: a quit (Point Guard's quit gate exits the
+    // app without the page taking part) must never find a draft write still waiting on a timer.
+    // The list was already serialized for this edit, so the write itself is the only extra cost.
+    this.setPref(KEY_DRAFTS, JSON.stringify(Object.fromEntries(this.drafts)));
   }
 
   private saveSubmissions(): void {

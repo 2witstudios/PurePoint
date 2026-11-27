@@ -85,16 +85,20 @@ describe('Point Guard', () => {
     expect(await lastAssistantText()).not.toContain('slow part 60.');
   });
 
-  // TODO(WIN-9.5): the relaunch never completes under tauri-driver while the managed runtime
-  // runs: closing the window goes through Point Guard's quit gate (stop while idle, WIN-9.3),
-  // so `reloadSession` loses its session ("invalid session id") and the case times out. The
-  // recovery itself (drafts keyed by role across the bridge's per-launch port) is covered by
-  // piChat.test.ts "given a relaunch onto a new managed port should recover the draft".
+  // TODO(WIN-9.5): the harness cannot relaunch through Point Guard's quit gate. Closing the
+  // window while the managed runtime runs goes through the gate (stop while idle, WIN-9.3), which
+  // prevents the close and exits the app itself, so tauri-driver loses its session ("invalid
+  // session id") and `reloadSession` times out. What the case would check is now guaranteed by
+  // `PiChatModel.saveDraft`: every draft edit is written to localStorage at once (not on the
+  // coalesced writer's timer), so no draft write is pending when the gate exits the app. The
+  // recovery across the bridge's per-launch port is covered by piChat.test.ts "given a relaunch
+  // onto a new managed port should recover the draft", and the immediate write by "given a quit
+  // right after typing should already have the draft in storage".
   it.skip('recovers the draft after a relaunch', async function () {
     this.timeout(300_000);
     await type('A draft that survives a relaunch');
-    // The draft reaches localStorage within a quarter second; WebView2 commits it to disk within
-    // about five more, and the relaunch ends the app without a shutdown.
+    // The draft reaches localStorage on the keystroke; WebView2 commits it to disk within about
+    // five seconds, and the relaunch ends the app without a shutdown.
     await browser.pause(8000);
     await browser.reloadSession();
     await openPointGuard();

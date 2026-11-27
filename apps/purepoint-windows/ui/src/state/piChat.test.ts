@@ -463,6 +463,23 @@ describe('PiChatModel preview', () => {
 });
 
 describe('PiChatModel managed drafts', () => {
+  it('given a quit right after typing should already have the draft in storage', () => {
+    const preferences = memoryPreferences();
+    const make = () =>
+      new PiChatModel({
+        recovery: memoryRecoveryStore(),
+        secrets: memorySecretStore(),
+        preferences,
+        // A writer that would never fire before the quit: drafts must not wait on it.
+        writerDelayMs: 60_000,
+      });
+    const first = make();
+    first.setDraft('Typed just before quitting');
+    // No flush: the app exits without the page taking part.
+    const second = make();
+    expect(second.draft).toBe('Typed just before quitting');
+  });
+
   it('given a relaunch onto a new managed port should recover the draft', async () => {
     const SECOND = 'ws://127.0.0.1:4200/v1';
     const preferences = memoryPreferences();
