@@ -526,8 +526,21 @@ export class AppState implements ProjectStateOwner {
   handleDaemonState(state: DaemonConnectionState): void {
     this.store.setState({ daemonConnection: state });
     const banner = daemonBannerMessage(state);
-    if (banner !== null) this.setDaemonError(banner);
+    if (banner !== null) {
+      this.setDaemonError(banner);
+      this.daemonStateBanner = banner;
+    } else if (state.state === 'connected') {
+      // The daemon is back: drop the banner its earlier failure put up, but keep any
+      // unrelated error shown since.
+      if (this.daemonStateBanner !== null && this.daemonError === this.daemonStateBanner) {
+        this.setDaemonError(null);
+      }
+      this.daemonStateBanner = null;
+    }
   }
+
+  /** The banner the last failed `daemon-state` showed, cleared once the daemon connects. */
+  private daemonStateBanner: string | null = null;
 
   // MARK: Project management
 

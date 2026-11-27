@@ -202,9 +202,14 @@ impl DaemonLifecycle {
         }
     }
 
-    /// Record a request failure that says the daemon is gone.
+    /// Record a request failure that says the daemon is gone. While a start is under way the
+    /// daemon is expected to be unreachable, so that is not a failure: reporting it would
+    /// show a "not running" banner nothing clears, and would drop ownership of the daemon
+    /// being launched.
     pub fn note_failure(&self, error: &DaemonError) {
-        if matches!(error, DaemonError::NotRunning(_)) {
+        if matches!(error, DaemonError::NotRunning(_))
+            && !matches!(self.state(), ConnectionState::Starting)
+        {
             *lock(&self.launched_pid) = None;
             self.set_state(ConnectionState::failed(error));
         }
@@ -603,6 +608,26 @@ mod tests {
             [ConnectionState::Starting, connected]
         );
         server.abort();
+    }
+
+    #[test]
+    fn given_start_under_way_should_not_report_unreachable_daemon_as_failed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let lifecycle = lifecycle(&tmp.path().join("d.sock"));
+        let gone = DaemonError::NotRunning("Daemon is not running (test)".into());
+        lifecycle.set_state(ConnectionState::Starting);
+        *lock(&lifecycle.launched_pid) = Some(7);
+        lifecycle.note_failure(&gone);
+        assert_eq!(lifecycle.state(), ConnectionState::Starting);
+        assert_eq!(lifecycle.launched_pid(), Some(7));
+
+        lifecycle.set_state(ConnectionState::Connected {
+            pid: Some(7),
+            launched: true,
+        });
+        lifecycle.note_failure(&gone);
+        assert_eq!(lifecycle.state(), ConnectionState::failed(&gone));
+        assert_eq!(lifecycle.launched_pid(), None);
     }
 
     #[tokio::test]
