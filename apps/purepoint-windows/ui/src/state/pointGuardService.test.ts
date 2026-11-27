@@ -252,6 +252,54 @@ describe('PointGuardServiceState', () => {
     expect(state.store.getState().enrollment).toBeNull();
   });
 
+  it('given a pairing code, should poll its status only until it expires', async () => {
+    let clock = 1_000_000;
+    const { state, fake } = await readyState(
+      standard((operation) => {
+        if (operation === 'pairing.create')
+          return { enrollmentId: 'e1', code: 'x', expiresAt: clock + 2500 };
+        if (operation === 'pairing.status') {
+          clock += 1000;
+          return { status: 'pending' };
+        }
+        return {};
+      }),
+    );
+    await state.connectPhone();
+    await state.pollEnrollment(
+      () => false,
+      0,
+      () => clock,
+    );
+    // Asked at +0, +1000 and +2000 (each answer moves the clock on); then the code has expired.
+    expect(fake.sent.filter((r) => r.operation === 'pairing.status')).toHaveLength(3);
+    expect(state.store.getState().enrollmentStatus).toBe('pending');
+    const before = fake.sent.length;
+    await state.pollEnrollment(
+      () => false,
+      0,
+      () => clock,
+    );
+    expect(fake.sent.length).toBe(before);
+  });
+
+  it('given a cancelled or consumed poll, should stop asking', async () => {
+    const { state, fake } = await readyState(
+      standard((operation) => {
+        if (operation === 'pairing.create')
+          return { enrollmentId: 'e1', code: 'x', expiresAt: Date.now() + 60_000 };
+        if (operation === 'pairing.status') return { status: 'consumed' };
+        return {};
+      }),
+    );
+    await state.connectPhone();
+    await state.pollEnrollment(() => true, 0);
+    expect(fake.sent.filter((r) => r.operation === 'pairing.status')).toHaveLength(0);
+    await state.pollEnrollment(() => false, 0);
+    expect(fake.sent.filter((r) => r.operation === 'pairing.status')).toHaveLength(1);
+    expect(state.store.getState().enrollmentStatus).toBe('consumed');
+  });
+
   it('asks for Tailscale when there is no phone endpoint', async () => {
     const fake = fakeBackend(standard());
     const state = new PointGuardServiceState({ backend: fake.backend });

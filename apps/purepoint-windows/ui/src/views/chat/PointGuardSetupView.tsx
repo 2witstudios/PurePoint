@@ -526,12 +526,8 @@ export function PointGuardPhoneView({
 
   useEffect(() => {
     const run = { cancelled: false };
-    void (async () => {
-      while (!run.cancelled && service.store.getState().enrollmentStatus === 'pending') {
-        await service.refreshEnrollment();
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    })();
+    // Stops once the code is used or expires (or the sheet closes).
+    void service.pollEnrollment(() => run.cancelled);
     return () => {
       run.cancelled = true;
     };

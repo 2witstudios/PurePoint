@@ -530,6 +530,28 @@ export class PointGuardServiceState {
     }
   }
 
+  /**
+   * The Connect phone sheet's status poll: refresh the pending pairing code every `intervalMs`
+   * until it is used, closed or replaced, `cancelled()` says so, or the code expires (`expiresAt`,
+   * ms since the epoch) - an expired code can never be consumed, so asking is pointless.
+   */
+  async pollEnrollment(
+    cancelled: () => boolean,
+    intervalMs = 1000,
+    now: () => number = Date.now,
+  ): Promise<void> {
+    const live = () => {
+      if (cancelled() || this.s.enrollmentStatus !== 'pending') return false;
+      const expiresAt = field(this.s.enrollment, 'expiresAt');
+      return typeof expiresAt === 'number' && now() < expiresAt;
+    };
+    while (live()) {
+      await this.refreshEnrollment();
+      if (!live()) return;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+
   async refreshEnrollment(): Promise<void> {
     const id = text(field(this.s.enrollment, 'enrollmentId'));
     if (id === null) return;
