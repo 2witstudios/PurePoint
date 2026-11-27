@@ -357,6 +357,26 @@ describe('AppState backend events', () => {
     expect(Object.keys(registry.workspace('ws-ag-1')?.panes ?? {})).toHaveLength(2);
   });
 
+  it('clears the daemon-failure banner once the daemon connects, but not other errors', () => {
+    const { app } = setup();
+    const failed = {
+      state: 'failed',
+      kind: 'not_running',
+      message: 'Daemon is not running (x)',
+    } as const;
+    app.handleDaemonState(failed);
+    expect(app.daemonError).toBe('Daemon is not running (x)');
+    app.handleDaemonState({ state: 'starting' });
+    expect(app.daemonError).toBe('Daemon is not running (x)');
+    app.handleDaemonState({ state: 'connected', pid: 1, launched: true });
+    expect(app.daemonError).toBeNull();
+
+    app.handleDaemonState(failed);
+    app.setDaemonError('Could not save the project order.');
+    app.handleDaemonState({ state: 'connected', pid: 1, launched: true });
+    expect(app.daemonError).toBe('Could not save the project order.');
+  });
+
   it('suspends and shuts down on quit only when this app launched the daemon', async () => {
     const { app, requests } = setup();
     app.openProject('C:\\a');
