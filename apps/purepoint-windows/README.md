@@ -30,6 +30,8 @@ Backend checks run from `apps/purepoint-windows/src-tauri`: `cargo fmt -- --chec
 
 CI runs all of these in `.github/workflows/windows-app.yml`.
 
+The installer that workflow uploads as an artifact is a development build: it carries `tauri.conf.json`'s version (`0.1.0`), not a release version. Only `release.yml` stamps a release's version.
+
 ## Releases
 
 A `v<version>` tag runs `.github/workflows/release.yml`. Its Windows jobs (WIN-10.4, DIST-009) publish to the same GitHub release as the Mac and Linux builds:

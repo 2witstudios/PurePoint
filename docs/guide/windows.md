@@ -10,7 +10,9 @@ PurePoint runs natively on Windows 11 (22H2 or later, x64 and arm64). You get th
 - installs the PurePoint plugin for Claude Code;
 - starts the daemon and supervises it while the app is open.
 
-Builds that aren't code-signed yet make SmartScreen show "Windows protected your PC". Choose **More info**, then **Run anyway**.
+Builds that aren't code-signed yet make SmartScreen show "Windows protected your PC". Choose **More info**, then **Run anyway**. A build made without an updater signing key shows "Updates not configured" in the app; update it by downloading and running the newer installer.
+
+There is also `PurePoint_<version>_arm64-setup.exe` for Arm PCs. The arm64 installer is built in CI but has not been tested on Arm hardware yet.
 
 **CLI only.** From PowerShell:
 
@@ -18,7 +20,7 @@ Builds that aren't code-signed yet make SmartScreen show "Windows protected your
 irm https://raw.githubusercontent.com/2witstudios/PurePoint/main/scripts/install.ps1 | iex
 ```
 
-The script downloads the release archive and verifies its signature. It then removes the downloaded-from-the-internet mark from the binaries and installs them to `%USERPROFILE%\.pu\bin`. Set `PU_VERSION` to pin a release. The script doesn't change `PATH`: it prints the command to add the folder, or does it when you save the script and run it with `-AddToPath`.
+The script downloads the release archive and its checksum and checks who built it before installing. When the release has a `.minisig` signature, it verifies it against the PurePoint key built into the script (with `minisign` if it's on `PATH`, otherwise with its own verifier). When the GitHub CLI is installed and signed in (`gh auth login`), it also runs `gh attestation verify`. At least one of the two must succeed, and a check that fails always stops the install. If neither can run, for example for a release without signatures and no signed-in `gh`, the install stops unless you set `PU_INSTALL_SKIP_VERIFY=1`, which installs with a warning. It then removes the downloaded-from-the-internet mark from the binaries and installs them to `%USERPROFILE%\.pu\bin`. Set `PU_VERSION` to pin a release. The script doesn't change `PATH`: it prints the command to add the folder, or does it when you save the script and run it with `-AddToPath`.
 
 **From source.** You need Rust 1.89 (MSVC; `rust-toolchain.toml` selects it), Node 22+, Git for Windows and the Visual Studio C++ build tools.
 
@@ -76,6 +78,35 @@ Point Guard listens only on your tailnet address. The commands are the same as i
 | Project data | `<project>\.pu\` (manifest, worktrees, `workspaces.json`), the same as on macOS |
 | Point Guard state | `%LOCALAPPDATA%\PurePoint\point-guard\` |
 | Secrets (pairing) | Windows Credential Manager, service `PurePoint.PointGuard.Pairing` |
+
+## Remove PurePoint
+
+Uninstall the app from **Settings → Apps → Installed apps**. The uninstaller stops the app, the daemon and Point Guard, deletes the program files and removes the sign-in Run values for the app, the daemon (`PurePoint Engine`) and Point Guard (`PurePoint Point Guard`). Tick **Delete the application data** to also remove the app's own settings and WebView2 data (`%APPDATA%\dev.purepoint.app`, `%LOCALAPPDATA%\dev.purepoint.app`).
+
+It keeps everything outside the install folder:
+
+- `%USERPROFILE%\.pu`: the copied `pu.exe` and `pu-engine.exe`, the daemon's state and logs, the Claude Code plugin marketplace and your agent settings;
+- the `%USERPROFILE%\.pu\bin` entry in your user `PATH`;
+- the `pu@purepoint` plugin and the `purepoint` marketplace registered with Claude Code;
+- Point Guard's state, including paired devices, in `%LOCALAPPDATA%\PurePoint\point-guard`;
+- pairing secrets in Windows Credential Manager (generic credentials ending in `.PurePoint.PointGuard.Pairing`);
+- each project's `.pu` folder and worktrees.
+
+To remove the rest, run these in PowerShell. Do the first two before uninstalling the app (or any time, if you installed only the CLI):
+
+```powershell
+pu phone uninstall            # stop Point Guard and remove its Run value
+pu daemon uninstall           # remove the daemon's Run value
+pu daemon stop
+claude plugins uninstall pu@purepoint
+claude plugins marketplace remove purepoint
+cmdkey /list | Select-String 'target=(\S+\.PurePoint\.PointGuard\.Pairing)' |
+  ForEach-Object { cmdkey /delete:$($_.Matches[0].Groups[1].Value) }
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\PurePoint\point-guard"
+Remove-Item -Recurse -Force "$env:USERPROFILE\.pu"
+```
+
+Then remove `%USERPROFILE%\.pu\bin` from your user `PATH`: run `rundll32 sysdm.cpl,EditEnvironmentVariables`, select **Path** under your user variables, choose **Edit** and delete the entry. Delete a project's `.pu` folder only once you no longer need its worktrees.
 
 ## Troubleshooting
 
