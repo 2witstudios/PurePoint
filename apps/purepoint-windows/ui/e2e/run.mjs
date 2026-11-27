@@ -11,10 +11,12 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -122,9 +124,18 @@ try {
 
   // The debug app embeds the UI at build time, so a binary older than any UI or backend source
   // would test stale code: rebuild when anything under ui/src, src-tauri/src or the configs is newer.
-  if (!existsSync(debugApp) || process.env.PU_E2E_REBUILD === '1' || appIsStale(debugApp)) {
+  // `cargo build`/`test`/`clippy` in src-tauri write the same exe without the bundled UI (it then
+  // loads the dev server at localhost:1420), so only a binary this script built — recorded in a
+  // stamp beside it — is trusted.
+  if (
+    !existsSync(debugApp) ||
+    process.env.PU_E2E_REBUILD === '1' ||
+    !builtByUs(debugApp) ||
+    appIsStale(debugApp)
+  ) {
     step('Build the debug app');
     sh('npx', ['tauri', 'build', '--debug', '--no-bundle'], { cwd: appDir, shell: true });
+    writeFileSync(stampFor(debugApp), String(statSync(debugApp).mtimeMs));
   }
 
   // Lay the app out as the installer bundles it (pu.exe and pu-engine.exe beside the exe, the
@@ -171,6 +182,18 @@ try {
   );
 }
 process.exit(exitCode);
+
+function stampFor(binary) {
+  return `${binary}.e2e-stamp`;
+}
+
+/** True when `binary` is the one `tauri build --debug` produced here (not a later cargo build). */
+function builtByUs(binary) {
+  const stamp = stampFor(binary);
+  return (
+    existsSync(stamp) && readFileSync(stamp, 'utf8').trim() === String(statSync(binary).mtimeMs)
+  );
+}
 
 /** True when any app source is newer than the built debug app (mtime comparison). */
 function appIsStale(binary) {
