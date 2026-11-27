@@ -10,7 +10,9 @@ PurePoint runs natively on Windows 11 (22H2 or later, x64 and arm64). You get th
 - installs the PurePoint plugin for Claude Code;
 - starts the daemon and supervises it while the app is open.
 
-Builds that aren't code-signed yet make SmartScreen show "Windows protected your PC". Choose **More info**, then **Run anyway**. A build made without an updater signing key shows "Updates not configured" in the app; update it by downloading and running the newer installer.
+The installer isn't code-signed yet, so SmartScreen shows "Windows protected your PC" the first time. Choose **More info**, then **Run anyway**.
+
+**Updates.** The app checks for a new release shortly after it starts and then once a day, and asks before it downloads and installs one (**Check for Updates…** checks right away). Updates are signed, and the app installs only an update signed with the PurePoint release key. v0.8.0 predates update signing; to leave it, install v0.8.1 or later by hand once.
 
 There is also `PurePoint_<version>_arm64-setup.exe` for Arm PCs. The arm64 installer is built in CI but has not been tested on Arm hardware yet.
 

@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { UpdaterState } from '../services/updater.ts';
 import {
+  AUTOMATIC_CHECK_DELAY_MS,
+  AUTOMATIC_CHECK_INTERVAL_MS,
   checkForUpdates,
+  checkForUpdatesInBackground,
   createUpdaterStore,
+  startAutomaticUpdateChecks,
   downloadUpdate,
   installUpdate,
   type UpdaterCommands,
@@ -87,5 +91,69 @@ describe('updater store', () => {
     const store = createUpdaterStore();
     await checkForUpdates(store, commands({ check: new Error('offline') }));
     expect(store.getState().status).toEqual({ state: 'error', message: 'offline' });
+  });
+});
+
+describe('automatic update checks', () => {
+  it('opens the dialog only when a background check finds an update', async () => {
+    const quiet = createUpdaterStore();
+    await checkForUpdatesInBackground(
+      quiet,
+      commands({ check: { state: 'upToDate', currentVersion: '0.1.0' } }),
+    );
+    expect(quiet.getState().dialogOpen).toBe(false);
+    expect(quiet.getState().status).toEqual({ state: 'upToDate', currentVersion: '0.1.0' });
+
+    const found = createUpdaterStore();
+    await checkForUpdatesInBackground(found, commands({ check: available }));
+    expect(found.getState().dialogOpen).toBe(true);
+    expect(found.getState().status).toEqual(available);
+  });
+
+  it('stays quiet on failure and skips when busy, found, unconfigured or open', async () => {
+    const failing = createUpdaterStore();
+    await checkForUpdatesInBackground(failing, commands({ check: new Error('offline') }));
+    expect(failing.getState().dialogOpen).toBe(false);
+    expect(failing.getState().status).toEqual({ state: 'idle' });
+
+    const skipped: UpdaterState[] = [
+      available,
+      { state: 'readyToRestart', version: '0.2.0' },
+      { state: 'notConfigured' },
+      { state: 'downloading', version: '0.2.0', downloaded: 0, total: null },
+    ];
+    for (const status of skipped) {
+      const store = createUpdaterStore();
+      store.getState().setStatus(status);
+      const backend = commands({ check: available });
+      await checkForUpdatesInBackground(store, backend);
+      expect(backend.check).not.toHaveBeenCalled();
+    }
+    const open = createUpdaterStore();
+    open.getState().openDialog();
+    const backend = commands({ check: available });
+    await checkForUpdatesInBackground(open, backend);
+    expect(backend.check).not.toHaveBeenCalled();
+  });
+
+  it('checks after the launch delay, then daily, until stopped', () => {
+    vi.useFakeTimers();
+    try {
+      const store = createUpdaterStore();
+      const backend = commands({ check: { state: 'upToDate', currentVersion: '0.1.0' } });
+      const stop = startAutomaticUpdateChecks(store, backend);
+      vi.advanceTimersByTime(AUTOMATIC_CHECK_DELAY_MS - 1);
+      expect(backend.check).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(backend.check).toHaveBeenCalledTimes(1);
+      store.getState().setStatus({ state: 'idle' });
+      vi.advanceTimersByTime(AUTOMATIC_CHECK_INTERVAL_MS);
+      expect(backend.check).toHaveBeenCalledTimes(2);
+      stop();
+      vi.advanceTimersByTime(AUTOMATIC_CHECK_INTERVAL_MS * 3);
+      expect(backend.check).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -12,7 +12,7 @@ import {
 } from '../../services/installer.ts';
 import { localLayoutHostIO } from '../../services/fs.ts';
 import { onUpdaterState, updaterStatus } from '../../services/updater.ts';
-import { useUpdaterStore } from '../../state/updaterStore.ts';
+import { startAutomaticUpdateChecks, useUpdaterStore } from '../../state/updaterStore.ts';
 import {
   AgentSignalNotifications,
   startAgentSignals,
@@ -61,9 +61,16 @@ const defaultDeps: StartAppDeps = {
   startPointGuard: (app) => startPointGuardSession(app),
 };
 
-/** The updater store follows the backend: its events, then its current state. */
-export function startUpdater(store = useUpdaterStore): () => void {
+/**
+ * The updater store follows the backend (its events, then its current state), and checks for
+ * updates shortly after launch and then daily.
+ */
+export function startUpdater(
+  store = useUpdaterStore,
+  startChecks: () => () => void = () => startAutomaticUpdateChecks(store),
+): () => void {
   let stopped = false;
+  const stopChecks = startChecks();
   let unlisten: (() => void) | null = null;
   onUpdaterState((state) => {
     store.getState().setStatus(state);
@@ -76,6 +83,7 @@ export function startUpdater(store = useUpdaterStore): () => void {
   }, logged('reading the updater status'));
   return () => {
     stopped = true;
+    stopChecks();
     unlisten?.();
   };
 }
