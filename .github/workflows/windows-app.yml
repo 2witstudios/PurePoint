@@ -124,12 +124,7 @@ jobs:
         working-directory: apps/purepoint-mobile
         run: npm ci --ignore-scripts
       - name: End-to-end tests
-        env:
-          PU_E2E_KEEP: "1"
         run: npm run e2e
-      - name: DIAG msedgedriver and app
-        if: failure()
-        run: node ui/e2e/diagnose.mjs
       - name: Retain e2e screenshots and logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
