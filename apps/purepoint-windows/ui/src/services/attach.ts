@@ -73,6 +73,21 @@ function wireData(data: string | Uint8Array): string | number[] {
   return typeof data === 'string' ? data : Array.from(data);
 }
 
+/**
+ * Runs sends one after another: each starts once the one before it has settled. Tauri runs every
+ * async command invocation as its own task on a multi-threaded runtime, so two `attach_input`
+ * calls in flight together can reach the session in either order, and fast typing came out
+ * transposed ("menu" as "meun"). The Mac writes keystrokes to its socket in order on one queue.
+ */
+function serialSender(): <T>(send: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve();
+  return <T>(send: () => Promise<T>): Promise<T> => {
+    const result = tail.then(send, send);
+    tail = result.catch(() => undefined);
+    return result;
+  };
+}
+
 function isEnd(event: AttachEvent): event is AttachEnd {
   return event.type === 'exited' || event.type === 'gone' || event.type === 'failed';
 }
@@ -110,6 +125,8 @@ export async function openAttach(
     resetBeforeReplay: options.resetBeforeReplay ?? false,
     machineId: options.machineId ?? null,
   });
+  // Keystrokes, pastes and delivered input reach the PTY in the order they were sent.
+  const inOrder = serialSender();
   return {
     id,
     agentId,
@@ -117,20 +134,24 @@ export async function openAttach(
       return ended;
     },
     async input(data, inputOptions) {
-      await invoke<boolean>('attach_input', {
-        sessionId: id,
-        data: wireData(data),
-        submit: inputOptions?.submit ?? false,
-        deliver: false,
-      });
+      await inOrder(() =>
+        invoke<boolean>('attach_input', {
+          sessionId: id,
+          data: wireData(data),
+          submit: inputOptions?.submit ?? false,
+          deliver: false,
+        }),
+      );
     },
     deliver(data) {
-      return invoke<boolean>('attach_input', {
-        sessionId: id,
-        data: wireData(data),
-        submit: false,
-        deliver: true,
-      });
+      return inOrder(() =>
+        invoke<boolean>('attach_input', {
+          sessionId: id,
+          data: wireData(data),
+          submit: false,
+          deliver: true,
+        }),
+      );
     },
     async resize(cols, rows) {
       await invoke('attach_resize', { sessionId: id, cols, rows });

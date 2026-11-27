@@ -90,4 +90,49 @@ describe('attach service', () => {
     await session.close();
     expect(invoke).toHaveBeenLastCalledWith('attach_close', { sessionId: 7 });
   });
+
+  it('given keystrokes sent back to back, should send each only after the one before settles', async () => {
+    const { session } = await open();
+    const pending: { data: unknown; settle: (ok: boolean) => void }[] = [];
+    invoke.mockImplementation(
+      (_command, args) =>
+        new Promise((resolve, reject) => {
+          pending.push({
+            data: args?.data,
+            settle: (ok) => {
+              if (ok) resolve(true);
+              else reject(new Error('session gone'));
+            },
+          });
+        }),
+    );
+    const sends = [
+      session.input('m'),
+      session.input('e'),
+      session.deliver('n'),
+      session.input('u'),
+    ];
+    const settled = Promise.allSettled(sends);
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+    await flush();
+    expect(pending.map((p) => p.data)).toEqual(['m']);
+    pending[0]?.settle(true);
+    await flush();
+    expect(pending.map((p) => p.data)).toEqual(['m', 'e']);
+    // A failed send does not hold up the ones after it.
+    pending[1]?.settle(false);
+    await flush();
+    expect(pending.map((p) => p.data)).toEqual(['m', 'e', 'n']);
+    pending[2]?.settle(true);
+    await flush();
+    expect(pending.map((p) => p.data)).toEqual(['m', 'e', 'n', 'u']);
+    pending[3]?.settle(true);
+    const results = await settled;
+    expect(results.map((r) => r.status)).toEqual([
+      'fulfilled',
+      'rejected',
+      'fulfilled',
+      'fulfilled',
+    ]);
+  });
 });
