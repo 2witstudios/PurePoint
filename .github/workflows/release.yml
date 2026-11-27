@@ -754,7 +754,8 @@ jobs:
           done
           ls -la
 
-      # The x64 archive, installed by install.ps1 into a throwaway directory, then run.
+      # The x64 archive, installed by install.ps1 into a throwaway directory, then run (pu has
+      # no --version flag; --help runs the binary without starting a daemon).
       - name: Install with install.ps1 into a throwaway directory
         if: matrix.arch == 'x64'
         shell: pwsh
@@ -762,7 +763,7 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP 'smoke-bin'
           ./scripts/install.ps1 -Archive "dist/purepoint-$env:VERSION-$env:TARGET.zip" -InstallDir $dir
           if ($LASTEXITCODE) { exit 1 }
-          & (Join-Path $dir 'pu.exe') --version
+          & (Join-Path $dir 'pu.exe') --help
           if ($LASTEXITCODE) { exit 1 }
 
       - name: Upload build
