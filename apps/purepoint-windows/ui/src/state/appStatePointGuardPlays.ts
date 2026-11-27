@@ -21,13 +21,18 @@ export interface PointGuardPromptSource {
 
 let home: Promise<string> | null = null;
 
-/** The home folder, read once. */
+/** The home folder, read once it is known: a failed read is not cached, so the next call asks again. */
 export function pointGuardPromptRoot(): Promise<string> {
-  home ??= invoke<string | null>('pointguard_home').then((path) => {
+  if (home !== null) return home;
+  const lookup = invoke<string | null>('pointguard_home').then((path) => {
     if (path === null) throw new Error('The home folder is unknown.');
     return path;
   });
-  return home;
+  home = lookup;
+  lookup.catch(() => {
+    if (home === lookup) home = null;
+  });
+  return lookup;
 }
 
 const asPrompt = (prompt: SavedPrompt): PointGuardPrompt => ({
