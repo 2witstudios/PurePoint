@@ -714,7 +714,7 @@ mod tests {
 
     /// The checked-in fixture `tests/fixtures/claude/projects/C--Users-dev-PurePoint/`, named
     /// the way Claude Code on Windows named this machine's project dirs
-    /// (`C:\Users\jminh\dev` → `C--Users-jminh-dev`), with Windows `cwd`s, a non-message
+    /// (`C:\Users\dev\project` → `C--Users-dev-project`), with Windows `cwd`s, a non-message
     /// record first, and a `subagents/` transcript that must not become a session.
     #[test]
     fn windows_project_dir_fixture_loads_as_loose_session() {
@@ -757,8 +757,8 @@ mod tests {
     #[test]
     fn encodes_project_dirs_like_claude_code() {
         assert_eq!(
-            encode_project_dir(r"C:\Users\jminh\dev"),
-            "C--Users-jminh-dev"
+            encode_project_dir(r"C:\Users\dev\project"),
+            "C--Users-dev-project"
         );
         assert_eq!(
             encode_project_dir(r"C:\WINDOWS\system32"),

@@ -32,7 +32,7 @@
     "updater": {
       "pubkey": "PLACEHOLDER-NOT-A-KEY: set TAURI_UPDATER_PUBKEY when running scripts/build-release.mjs",
       "endpoints": [
-        "https://github.com/2witstudios/purepoint/releases/download/appcast/latest-windows.json"
+        "https://github.com/2witstudios/PurePoint/releases/download/appcast/latest-windows.json"
       ],
       "requireSignedVersion": true,
       "windows": { "installMode": "passive" }

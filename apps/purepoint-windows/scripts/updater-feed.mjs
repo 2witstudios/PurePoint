@@ -1,6 +1,6 @@
 // The update feed of the Windows app (WIN-10.3, REQ-WINAPP-076), written by build-release.mjs.
 //
-// The app checks https://github.com/2witstudios/purepoint/releases/download/appcast/latest-windows.json:
+// The app checks https://github.com/2witstudios/PurePoint/releases/download/appcast/latest-windows.json:
 // the fixed `appcast` release that also carries the Mac's Sparkle appcast.xml, so each platform
 // replaces only its own asset. The installer itself is an asset of the versioned release
 // (`v<version>`), which the feed's `url` points at.
@@ -21,8 +21,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export const FEED_NAME = 'latest-windows.json';
-export const FEED_URL = `https://github.com/2witstudios/purepoint/releases/download/appcast/${FEED_NAME}`;
-export const DOWNLOAD_BASE = 'https://github.com/2witstudios/purepoint/releases/download';
+export const FEED_URL = `https://github.com/2witstudios/PurePoint/releases/download/appcast/${FEED_NAME}`;
+export const DOWNLOAD_BASE = 'https://github.com/2witstudios/PurePoint/releases/download';
 
 const PLATFORM_ARCH = { x64: 'x86_64', arm64: 'aarch64' };
 

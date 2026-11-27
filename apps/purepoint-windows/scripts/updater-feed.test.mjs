@@ -32,7 +32,7 @@ test('the feed is the appcast release asset the app config names', () => {
   assert.deepEqual(config.plugins.updater.endpoints, [FEED_URL]);
   assert.equal(
     FEED_URL,
-    'https://github.com/2witstudios/purepoint/releases/download/appcast/latest-windows.json',
+    'https://github.com/2witstudios/PurePoint/releases/download/appcast/latest-windows.json',
   );
   assert.match(config.plugins.updater.pubkey, /^PLACEHOLDER/);
 });
@@ -90,7 +90,7 @@ test('the manifest lists the NSIS installer of the versioned release', () => {
   });
   const entry = {
     signature: 'SIG',
-    url: 'https://github.com/2witstudios/purepoint/releases/download/v0.2.0/PurePoint_0.2.0_x64-setup.exe',
+    url: 'https://github.com/2witstudios/PurePoint/releases/download/v0.2.0/PurePoint_0.2.0_x64-setup.exe',
   };
   assert.deepEqual(manifest, {
     version: '0.2.0',
