@@ -11,8 +11,8 @@
 //! - **Claude**: `%USERPROFILE%\.claude\projects\<encoded cwd>\<session id>.jsonl`, or
 //!   `%CLAUDE_CONFIG_DIR%\projects\...` when that is set. The project directory name is the
 //!   session's working directory with every non-alphanumeric character replaced by `-`, so
-//!   the drive colon and each backslash become dashes: `C:\Users\jminh\dev` →
-//!   `C--Users-jminh-dev`, `C:\WINDOWS\system32` → `C--WINDOWS-system32` (see
+//!   the drive colon and each backslash become dashes: `C:\Users\dev\project` →
+//!   `C--Users-dev-project`, `C:\WINDOWS\system32` → `C--WINDOWS-system32` (see
 //!   [`claude::encode_project_dir`]). Records carry the real path as `"cwd":"C:\\Users\\..."`
 //!   and `gitBranch` (`"HEAD"` outside a branch), and lines end in LF. Each session may have a
 //!   sibling `<session id>\` directory with `subagents\agent-*.jsonl` (+ `.meta.json`) and

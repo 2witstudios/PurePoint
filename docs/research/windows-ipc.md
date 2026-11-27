@@ -77,7 +77,7 @@ Recommendation: use the HKCU `Run` value as the default. It is the simplest, nee
 | Mechanism | Result | Cleanup |
 |---|---|---|
 | `schtasks /Create /SC ONLOGON /TN PurePointSpike /TR "cmd /c exit" /RL LIMITED /F` | `ERROR: Access is denied.` (exit 1) | nothing created |
-| same command plus `/RU DESKTOP-…\jminh /IT` | `ERROR: Access is denied.` | nothing created |
+| same command plus `/RU DESKTOP-EXAMPLE\dev /IT` | `ERROR: Access is denied.` | nothing created |
 | COM `RegisterTaskDefinition`, logon trigger with `UserId`, LUA, InteractiveToken | REGISTERED, state 3 (Ready) | `DeleteTask` OK |
 | COM logon trigger with no `UserId` | `E_ACCESSDENIED` (0x80070005) | nothing created |
 | `Register-ScheduledTask … -AtLogOn -User me`, run on demand | OK, LastTaskResult 0 | `Unregister-ScheduledTask` OK |

@@ -106,8 +106,24 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_runs_only_for_version_tag_pushes(self):
         # PyYAML reads the bare `on` key as boolean True.
         triggers = self.workflow[True]
-        self.assertEqual(list(triggers), ["push"])
+        self.assertEqual(list(triggers), ["push", "workflow_dispatch"])
         self.assertEqual(triggers["push"], {"tags": ["v*"]})
+        self.assertIsNone(triggers["workflow_dispatch"])
+
+    def test_a_manual_run_is_a_windows_dry_run_that_publishes_nothing(self):
+        tag_only = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
+        for name in ("build-macos", "sign-macos", "linux", "sbom", "sign-linux", "attest", "publish"):
+            with self.subTest(job=name):
+                self.assertEqual(self.jobs[name]["if"], tag_only)
+        # linux-phone needs linux, so it is skipped with it.
+        self.assertIn("linux", self.jobs["linux-phone"]["needs"])
+        self.assertNotIn("if", self.jobs["windows"])
+        self.assertIn("workflow_dispatch", self.jobs["sign-windows"]["if"])
+        version = steps(self.jobs["version"])[0]
+        self.assertIn('if [ "$EVENT_NAME" = workflow_dispatch ]', version["run"])
+        self.assertIn('echo "raw=0.0.0"', version["run"])
+        # A dry run never queues behind, or cancels, a real release.
+        self.assertIn("github.event_name == 'push' && 'release'", self.workflow["concurrency"]["group"])
 
     def test_token_permissions_are_granted_per_job(self):
         self.assertEqual(self.workflow["permissions"], {})
@@ -189,7 +205,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
         signers = {"sign-macos", "sign-linux", "sign-windows"}
         for name in signers:
             with self.subTest(job=name):
-                self.assertEqual(self.jobs[name]["environment"], "release")
+                if name == "sign-windows":
+                    # Its dry run (workflow_dispatch) gets no environment and no secrets.
+                    job = self.jobs[name]
+                    self.assertEqual(job["environment"], "${{ github.event_name == 'push' && 'release' || '' }}")
+                    expressions = re.findall(r"\$\{\{[^}]*\}\}", json.dumps(job))
+                    gated = [e for e in expressions if "secrets." in e]
+                    self.assertTrue(gated)
+                    for expression in gated:
+                        self.assertRegex(expression, r"^\$\{\{ github\.event_name == 'push' && secrets\.[A-Z_]+ \|\| '' \}\}$")
+                else:
+                    self.assertEqual(self.jobs[name]["environment"], "release")
                 self.assertIn("refs/tags/v", self.jobs[name]["if"])
         for name, job in self.jobs.items():
             if name not in signers:
@@ -353,7 +379,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         job = self.jobs["sign-windows"]
         self.assertEqual(set(job["needs"]), {"version", "windows"})
         sign = next(step for step in steps(job) if step.get("name") == "Sign archives")
-        self.assertEqual(sign["env"], {"RELEASE_MINISIGN_KEY": "${{ secrets.RELEASE_MINISIGN_KEY }}"})
+        self.assertEqual(sign["env"], {"RELEASE_MINISIGN_KEY": "${{ github.event_name == 'push' && secrets.RELEASE_MINISIGN_KEY || '' }}"})
         script = sign["run"]
         self.assertIn('if [ -z "$RELEASE_MINISIGN_KEY" ]', script)
         self.assertIn("::warning", script)
@@ -376,7 +402,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_authenticode_runs_only_with_a_certificate_and_leaves_none_behind(self):
         job = self.jobs["sign-windows"]
         check = next(step for step in steps(job) if step.get("id") == "authenticode")
-        self.assertEqual(check["env"], {"WINDOWS_CERTIFICATE_PFX": "${{ secrets.WINDOWS_CERTIFICATE_PFX }}"})
+        self.assertEqual(check["env"], {"WINDOWS_CERTIFICATE_PFX": "${{ github.event_name == 'push' && secrets.WINDOWS_CERTIFICATE_PFX || '' }}"})
         self.assertIn("::warning", check["run"])
         sign = next(step for step in steps(job) if step.get("name") == "Authenticode-sign archives and installers")
         self.assertEqual(sign["if"], "steps.authenticode.outputs.enabled == 'true'")
@@ -393,7 +419,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_windows_update_feed_is_signed_checked_and_replaces_only_its_own_asset(self):
         job = self.jobs["sign-windows"]
         feed = next(step for step in steps(job) if step.get("name") == "Sign installers for the updater and write latest-windows.json")
-        self.assertEqual(feed["env"]["TAURI_SIGNING_PRIVATE_KEY"], "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}")
+        self.assertEqual(feed["env"]["TAURI_SIGNING_PRIVATE_KEY"], "${{ github.event_name == 'push' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}")
         self.assertEqual(feed["env"]["TAURI_UPDATER_PUBKEY"], "${{ vars.TAURI_UPDATER_PUBKEY }}")
         self.assertIn("node scripts/sign-release-feed.mjs", feed["run"])
         self.assertIn("_x64-setup.exe", feed["run"])

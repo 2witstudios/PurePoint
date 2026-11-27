@@ -5,6 +5,10 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 ## [Unreleased]
 
 ### Added
+- PurePoint runs natively on Windows 11 (x64 and arm64), with no WSL. `pu-engine` and `pu` are native Windows programs: the daemon listens on a private named pipe, agents run in ConPTY terminals and are stopped as a whole process tree, `pu daemon install` starts the daemon at sign-in through your user's Run key, and `pu phone` runs Point Guard for phone pairing over Tailscale. See [PurePoint on Windows](docs/guide/windows.md).
+- A Windows desktop app (`PurePoint_<version>_<x64|arm64>-setup.exe`, a per-user installer that needs no administrator rights) with the macOS app's features. On first launch it installs `pu` and `pu-engine` to `%USERPROFILE%\.pu\bin`, adds that folder to your user `PATH`, installs the Claude Code plugin and supervises the daemon. The arm64 installer has not been tested on Arm hardware yet.
+- `scripts/install.ps1` installs the Windows CLI from PowerShell (`irm https://raw.githubusercontent.com/2witstudios/PurePoint/main/scripts/install.ps1 | iex`). Like `install.sh`, it verifies the release's minisign signature or its GitHub attestation before installing, and stops if neither can be checked unless `PU_INSTALL_SKIP_VERIFY=1` is set.
+- `pu daemon status --json` prints the daemon's health and autostart state as JSON.
 - Projects can be reordered, and every device shows the same order. Each machine's daemon saves the order of its projects. On the Mac, drag a project within its section or use Move Up / Move Down in its menu; on the iPad, use Move Up / Move Down; on the phone, long-press a machine and choose Reorder Projects…. Changes reach every device following that machine right away. `pu projects` lists projects in the same order. New projects are added at the end.
 - Paste an image (Cmd+V) into any agent's terminal, or drop files on a remote agent's terminal, and the macOS app uploads it to the agent's machine and types its path there, so remote agents can see screenshots. Uploads are kept in `~/.pu/attachments` on that machine for 7 days.
 

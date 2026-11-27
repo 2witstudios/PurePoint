@@ -285,7 +285,7 @@ fn committed_config_carries_the_placeholder_and_the_appcast_feed() {
     assert_eq!(
         updater["endpoints"],
         serde_json::json!([
-            "https://github.com/2witstudios/purepoint/releases/download/appcast/latest-windows.json"
+            "https://github.com/2witstudios/PurePoint/releases/download/appcast/latest-windows.json"
         ])
     );
     assert_eq!(updater["requireSignedVersion"], true);
