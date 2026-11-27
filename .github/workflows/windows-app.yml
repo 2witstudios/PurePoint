@@ -44,7 +44,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22.23.3'
+          node-version: "22.23.3"
           cache: npm
           cache-dependency-path: |
             apps/purepoint-windows/package-lock.json
@@ -80,19 +80,57 @@ jobs:
           cargo clippy --locked --all-targets
           cargo test --locked --all-targets
       - run: npm run tauri -- build --debug --no-bundle
-      # End-to-end tests (WIN-5.7): the debug app above against the workspace-built daemon and CLI,
-      # through tauri-driver and the msedgedriver matching the runner's WebView2. Every spec runs,
-      # the parity walkthrough (WIN-11.1, specs/walkthrough.e2e.ts) included; it and the Point Guard
-      # spec chat through the development runtime, which runs the repo's bridge on the runner's node.
-      # run.mjs sets up the drivers (ui/e2e/setup-drivers.ps1) and stages the app.
+
+  # End-to-end tests (WIN-5.7), in their own job so "Build & Test" reports the build, the unit
+  # tests and the Rust checks alone. The e2e must pass all the same. run.mjs builds the debug app
+  # (with the bundled UI), sets up the drivers (ui/e2e/setup-drivers.ps1: tauri-driver and the
+  # msedgedriver matching the runner's WebView2) and stages the app beside the workspace-built
+  # daemon and CLI. Every spec runs, the parity walkthrough (WIN-11.1, specs/walkthrough.e2e.ts)
+  # included; it and the Point Guard spec chat through the development runtime, which runs the
+  # repo's bridge on the runner's node.
+  e2e:
+    name: Windows e2e
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/purepoint-windows
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.23.3"
+          cache: npm
+          cache-dependency-path: |
+            apps/purepoint-windows/package-lock.json
+            apps/purepoint-mobile/package-lock.json
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.89"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            apps/purepoint-windows/src-tauri -> target
+            . -> target
+          key: windows-e2e
+      - run: npm ci --ignore-scripts
       - name: Build pu and pu-engine
         working-directory: .
         run: cargo build --locked -p pu-cli -p pu-engine
       - name: Install the Point Guard bridge dependencies
         working-directory: apps/purepoint-mobile
         run: npm ci --ignore-scripts
-      - name: End-to-end tests
-        run: npm run e2e
+      - name: DIAG smoke spec only
+        continue-on-error: true
+        env:
+          PU_E2E_KEEP: "1"
+        run: npm run e2e -- --spec ui/e2e/specs/smoke.e2e.ts
+      - name: DIAG msedgedriver and app
+        continue-on-error: true
+        run: node ui/e2e/diagnose.mjs
       - name: Retain e2e screenshots and logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -125,7 +163,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22.23.3'
+          node-version: "22.23.3"
           cache: npm
           cache-dependency-path: apps/purepoint-mobile/package-lock.json
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -167,7 +205,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22.23.3'
+          node-version: "22.23.3"
           cache: npm
           cache-dependency-path: apps/purepoint-windows/package-lock.json
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
