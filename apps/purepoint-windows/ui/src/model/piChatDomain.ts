@@ -46,6 +46,14 @@ export function isImage(file: PiComposerAttachment): boolean {
   return file.mimeType.startsWith('image/');
 }
 
+/**
+ * The composer chip's thumbnail: a `data:` URL built from the attachment's base64, since the
+ * app CSP's `img-src` allows `data:` but not `blob:`. `null` for files that are not images.
+ */
+export function attachmentThumbnailSrc(file: PiComposerAttachment): string | null {
+  return isImage(file) ? `data:${file.mimeType};base64,${file.data}` : null;
+}
+
 /** The decoded size of a base64 string. */
 export function base64Bytes(data: string): number {
   const length = data.replace(/=+$/, '').length;

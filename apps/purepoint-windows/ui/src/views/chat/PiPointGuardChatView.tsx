@@ -30,8 +30,7 @@ import {
 } from 'react';
 import { useStore } from 'zustand';
 import {
-  base64ToBytes,
-  isImage,
+  attachmentThumbnailSrc,
   PiTranscriptWindow,
   type PiChatMessage,
   type PiComposerAttachment,
@@ -820,18 +819,15 @@ function Transcript({
   );
 }
 
-function AttachmentChip({ file, onRemove }: { file: PiComposerAttachment; onRemove: () => void }) {
-  const url = useMemo(() => {
-    if (!isImage(file) || typeof URL.createObjectURL !== 'function') return null;
-    const bytes = base64ToBytes(file.data);
-    return URL.createObjectURL(new Blob([bytes as BlobPart], { type: file.mimeType }));
-  }, [file]);
-  useEffect(
-    () => () => {
-      if (url !== null) URL.revokeObjectURL(url);
-    },
-    [url],
-  );
+export function AttachmentChip({
+  file,
+  onRemove,
+}: {
+  file: PiComposerAttachment;
+  onRemove: () => void;
+}) {
+  // A data: URL, not blob: — the CSP's img-src does not allow blob: (and need not be widened).
+  const url = attachmentThumbnailSrc(file);
   return (
     <div className="pg-attachment-chip" data-testid="pg-attachment">
       {url !== null ? (
