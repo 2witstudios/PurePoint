@@ -88,13 +88,25 @@ jobs:
       - run: cargo clippy --all-targets $WINDOWS_CRATES
       - run: cargo test --all-targets $WINDOWS_CRATES
       - run: cargo build -p pu-cli -p pu-engine
+      # pu refuses a pu-engine other users can write, and the runner's temp folders grant that,
+      # so stage the binaries as an install would: in a folder only this user, SYSTEM and
+      # Administrators can write.
+      - name: Stage pu and pu-engine in a private folder
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:RUNNER_TEMP 'pu-ci-bin'
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          & "$env:SystemRoot\System32\icacls.exe" $bin /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
+          if ($LASTEXITCODE) { throw 'icacls failed' }
+          Copy-Item "$env:CARGO_TARGET_DIR/debug/pu.exe", "$env:CARGO_TARGET_DIR/debug/pu-engine.exe" -Destination $bin
+          "PU_CI_BIN=$bin" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       # End-to-end CLI run against a real daemon under a temp HOME (WIN-4.6).
       - name: CLI smoke run
         shell: pwsh
         run: >-
           ./scripts/windows-smoke.ps1 -Agent terminal
-          -PuPath "$env:CARGO_TARGET_DIR/debug/pu.exe"
-          -EnginePath "$env:CARGO_TARGET_DIR/debug/pu-engine.exe"
+          -PuPath "$env:PU_CI_BIN/pu.exe"
+          -EnginePath "$env:PU_CI_BIN/pu-engine.exe"
 
   linux-musl:
     name: Static Linux build
