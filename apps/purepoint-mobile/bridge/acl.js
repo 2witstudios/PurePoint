@@ -98,13 +98,28 @@ export async function readAcl(target) {
  * Administrators. A directory must be protected with no inherited entries; a
  * file may inherit from its (checked) private parent.
  */
+/**
+ * Whether an entry's SID is the current user. icacls writes the machine's
+ * built-in Administrator (RID 500, e.g. a CI runner's account) as the `LA`
+ * alias rather than its SID.
+ */
+function isUser(sid, userSid) {
+  return (
+    sid === userSid ||
+    (sid === "LA" && /^S-1-5-21-\d+-\d+-\d+-500$/.test(userSid))
+  );
+}
+
+const isTrusted = (sid, userSid) =>
+  isUser(sid, userSid) || [SYSTEM_SID, "S-1-5-32-544"].includes(sid);
+
 export function isPrivateAcl(acl, userSid, { directory = false } = {}) {
   if (directory && !acl.protected) return false;
-  if (!acl.aces.some((a) => a.sid === userSid)) return false;
+  if (!acl.aces.some((a) => isUser(a.sid, userSid))) return false;
   return acl.aces.every(
     (a) =>
       a.type === "A" &&
-      [userSid, SYSTEM_SID, "S-1-5-32-544"].includes(a.sid) &&
+      isTrusted(a.sid, userSid) &&
       !(directory && a.flags.includes("ID")),
   );
 }
@@ -150,7 +165,7 @@ export function writableByOthers(acl, userSid) {
       a.type === "A" &&
       !a.flags.includes("IO") &&
       grantsWrite(a.rights) &&
-      ![userSid, SYSTEM_SID, "S-1-5-32-544"].includes(a.sid),
+      !isTrusted(a.sid, userSid),
   );
 }
 

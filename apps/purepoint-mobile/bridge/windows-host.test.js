@@ -119,6 +119,20 @@ test("saved ACL parsing: protected owner-only DACLs pass, anything wider fails",
   assert.throws(() => parseSavedAcl("garbage"), /Unreadable/);
 });
 
+test("saved ACL parsing: the built-in Administrator's LA alias is that user only", () => {
+  const admin = "S-1-5-21-3414932011-3134797172-3625386099-500";
+  // What makePrivate leaves for a CI runner's built-in Administrator account.
+  const runner = parseSavedAcl(
+    `d
+D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;LA)
+`,
+  );
+  assert.equal(isPrivateAcl(runner, admin, { directory: true }), true);
+  assert.equal(writableByOthers(runner, admin), false);
+  assert.equal(isPrivateAcl(runner, USER, { directory: true }), false);
+  assert.equal(writableByOthers(runner, USER), true);
+});
+
 test(
   "given a state directory, should replace its ACL with user + SYSTEM only",
   windows,
