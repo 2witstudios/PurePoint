@@ -1,5 +1,6 @@
 // The pane grid (WIN-7.4) against real `terminal` agents: a workspace row shows its grid; the tab
-// strip splits and closes panes; the divider drags; tabs reorder, move and split off by HTML5 drag
+// strip splits and closes panes (a split or New Tab opens the palette for its empty tab, closed
+// with Escape); the divider drags; tabs reorder, move and split off by HTML5 drag
 // and drop; the layout saves to `.pu/workspaces.json` (a valid version 4 document) and comes back
 // after a relaunch; and `pu grid` run from the CLI changes the app's layout.
 //
@@ -144,6 +145,18 @@ async function clickBarButton(leafId: number, label: string): Promise<void> {
   await $(`${barSelector(leafId)} button[aria-label="${label}"]`).click();
 }
 
+/**
+ * A split or New Tab opens the command palette for the empty tab it made (Swift `PaneTabBar` sets
+ * `pendingPaletteSurfaceId`; WIN-7.5): check it does, then close it with Escape as a user would.
+ */
+async function dismissEmptyTabPalette(): Promise<void> {
+  const palette = $('[data-testid="command-palette"]');
+  await expect(palette).toBeDisplayed({ wait: 15_000 });
+  await expect(palette.$('input[aria-label="Filter"]')).toBeFocused();
+  await browser.keys(['Escape']);
+  await expect($('[data-testid="palette-backdrop"]')).not.toBeExisting({ wait: 10_000 });
+}
+
 describe('Pane grid', () => {
   const fixture = DaemonFixture.existing();
   const layoutFile = join(fixture.projectRoot, '.pu', 'workspaces.json');
@@ -203,6 +216,7 @@ describe('Pane grid', () => {
     await clickBarButton(0, 'Split Right');
     await waitForPaneCount(2, 'Split Right');
     await expect($('[data-testid="pane-empty-tab"]')).toBeDisplayed();
+    await dismissEmptyTabPalette();
 
     const divider = await $('[data-testid="pane-divider"]');
     expect(await divider.getAttribute('aria-valuenow')).toBe('50');
@@ -249,6 +263,7 @@ describe('Pane grid', () => {
     await waitForTabs({ 0: [0], 1: [1] }, 'assign');
     await clickBarButton(1, 'New Tab');
     await waitForTabs({ 0: [0], 1: [1, 2] }, 'New Tab');
+    await dismissEmptyTabPalette();
 
     await dragTab(2, { kind: 'tab', surfaceId: 1 });
     await waitForTabs({ 0: [0], 1: [2, 1] }, 'reorder within a pane');
