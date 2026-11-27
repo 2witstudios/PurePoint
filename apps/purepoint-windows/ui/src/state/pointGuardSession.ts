@@ -7,6 +7,7 @@
 // once the runtime is ready; the runtime's working folder becomes `AppState.pointGuardRoot`
 // (ContentView's `onReceive(pointGuardService.$activeCwd)`), activating the Point Guard workspace
 // when the dashboard is showing.
+import { homeDir } from '@tauri-apps/api/path';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { AppState } from './appState.ts';
 import { PiChatModel, pointGuardChatBinding } from './piChat.ts';
@@ -83,18 +84,36 @@ export function setPointGuardSession(app: object, session: PointGuardSession): v
 }
 
 /**
+ * The home folder: the backend's `pointguard_home` (`%USERPROFILE%`, as the daemon and Pi read
+ * it), else Tauri's home folder; null when neither answers.
+ */
+export function lookupPointGuardHome(): Promise<string | null> {
+  return pointGuardPromptRoot()
+    .catch(() => homeDir())
+    .then((path) => (path === '' ? null : path))
+    .catch(() => null);
+}
+
+/** How long to wait before asking for an unknown home folder again (doubling, capped). */
+export const HOME_RETRY_FIRST_MS = 1000;
+export const HOME_RETRY_MAX_MS = 30_000;
+
+/**
  * Attach the service and follow the runtime's working folder into `app.pointGuardRoot`;
  * returns the stop.
  */
 export function startPointGuardSession(
   app: AppState,
   session: PointGuardSession = pointGuardSessionFor(app),
-  home: Promise<string | null> = pointGuardPromptRoot().catch(() => null),
+  home: () => Promise<string | null> = lookupPointGuardHome,
 ): () => void {
   let stopped = false;
   // Pi's default folder is the home folder, which is too broad to be a project: the folder is
-  // followed only once the home folder is known, so it never reaches the daemon as one.
+  // followed only once the home folder is known, so it never reaches the daemon as one. This
+  // fails closed: while the home folder is unknown nothing is followed, and the lookup is
+  // retried until it answers.
   let homeKnown = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const follow = (cwd: string) => {
     if (!homeKnown) return;
     const root = cwd === '' ? null : cwd;
@@ -105,12 +124,24 @@ export function startPointGuardSession(
       app.activatePointGuardWorkspace();
     }
   };
-  void home.then((path) => {
-    if (stopped) return;
-    app.setHomeDirectory(path);
-    homeKnown = true;
-    follow(session.service.store.getState().activeCwd);
-  });
+  const lookup = (delay: number) => {
+    void home()
+      .catch(() => null)
+      .then((path) => {
+        if (stopped) return;
+        if (path === null) {
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            lookup(Math.min(delay * 2, HOME_RETRY_MAX_MS));
+          }, delay);
+          return;
+        }
+        app.setHomeDirectory(path);
+        homeKnown = true;
+        follow(session.service.store.getState().activeCwd);
+      });
+  };
+  lookup(HOME_RETRY_FIRST_MS);
   const unsubscribe = session.service.store.subscribe((state, previous) => {
     if (state.activeCwd !== previous.activeCwd) follow(state.activeCwd);
   });
@@ -119,6 +150,7 @@ export function startPointGuardSession(
   });
   return () => {
     stopped = true;
+    if (retryTimer !== null) clearTimeout(retryTimer);
     unsubscribe();
     session.service.detach();
   };
