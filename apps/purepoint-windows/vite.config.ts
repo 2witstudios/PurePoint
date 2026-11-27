@@ -12,6 +12,16 @@ const outDir = fileURLToPath(new URL('./dist', import.meta.url));
 // (WIN-9.4); its one package import, `ws`, resolves to this app's copy.
 const wsPackage = fileURLToPath(new URL('./node_modules/ws/wrapper.mjs', import.meta.url));
 
+/**
+ * Whether the e2e hooks on `window` are honoured (`__PU_TEST_HOOKS__`): never in a release
+ * bundle, where a page script setting `__PU_OPENER_SPY__` could otherwise silence the opener.
+ * `tauri build --debug` (the e2e app) sets TAURI_ENV_DEBUG; the dev server and Vitest are not
+ * production builds.
+ */
+export function testHooksEnabled(mode: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.TAURI_ENV_DEBUG === 'true' || mode !== 'production';
+}
+
 /** Settings › About's Build (WIN-8.11): the commit the app is built from. */
 function buildId(): string {
   try {
@@ -23,11 +33,14 @@ function buildId(): string {
 
 // Tauri loads the dev server from a fixed port and the production bundle from
 // ../dist (see src-tauri/tauri.conf.json); keep the two in step.
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   root: uiRoot,
   plugins: [react()],
   clearScreen: false,
-  define: { __PUREPOINT_BUILD__: JSON.stringify(buildId()) },
+  define: {
+    __PUREPOINT_BUILD__: JSON.stringify(buildId()),
+    __PU_TEST_HOOKS__: JSON.stringify(testHooksEnabled(mode)),
+  },
   server: {
     port: 1420,
     strictPort: true,
@@ -51,4 +64,4 @@ export default defineConfig({
     css: { include: [/tokens.css/] },
     alias: [{ find: /^ws$/, replacement: wsPackage }],
   },
-});
+}));

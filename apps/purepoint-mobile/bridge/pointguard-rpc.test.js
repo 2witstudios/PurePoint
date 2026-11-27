@@ -31,7 +31,7 @@ export default function(pi) {
     }
     let content="fixture response";
     if(last?.role!=="toolResult" && text==="make artifact") content=fauxToolCall("write",{path:"artifact.txt",content:"verified artifact"});
-    if(last?.role!=="toolResult" && text==="storage evidence") content=fauxToolCall("bash",{command:"df -k ."});
+    if(last?.role!=="toolResult" && text==="storage evidence") content=fauxToolCall("bash",{command:"echo storage-evidence"});
     const m={...fauxAssistantMessage(content,{stopReason:typeof content==="string"?"stop":"toolUse"}),api:model.api,provider:model.provider,model:model.id};
     stream.push({type:"start",partial:m});stream.push({type:"done",reason:m.stopReason,message:m});stream.end(m);
    })().catch(e=>{ const m=fauxAssistantMessage("",{stopReason:"error",errorMessage:String(e)});stream.push({type:"error",reason:"error",error:m});stream.end(m); });
@@ -107,7 +107,14 @@ test(
       const child = new Rpc(process.execPath, args, cwd, {
         HOME: home,
         USERPROFILE: home, // Windows os.homedir()
-        ...(win32 ? { SystemRoot: process.env.SystemRoot } : {}),
+        // Windows: the bash tool finds Git Bash under Program Files.
+        ...(win32
+          ? Object.fromEntries(
+              ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)"]
+                .filter((name) => process.env[name])
+                .map((name) => [name, process.env[name]]),
+            )
+          : {}),
         PATH: "/usr/bin:/bin",
         PI_CODING_AGENT_DIR: path.join(home, ".pi/agent"),
         PI_SKIP_VERSION_CHECK: "1",
@@ -202,17 +209,16 @@ test(
       await readFile(path.join(cwd, "artifact.txt"), "utf8"),
       "verified artifact",
     );
-    if (!win32) {
-      await run("storage evidence");
-      assert.ok(
-        events.some(
-          (e) =>
-            e.type === "tool_execution_end" &&
-            e.toolName === "bash" &&
-            !e.isError,
-        ),
-      );
-    }
+    // `echo` runs in every shell the bash tool may pick (sh, Git Bash), so this holds on Windows.
+    await run("storage evidence");
+    assert.ok(
+      events.some(
+        (e) =>
+          e.type === "tool_execution_end" &&
+          e.toolName === "bash" &&
+          !e.isError,
+      ),
+    );
     const first = await report();
     assert.deepEqual(first.tools, ["read", "bash", "edit", "write"]);
     // /pointguard info is display-only; it must never reach the model.

@@ -11,7 +11,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { openRuntimeState } from "./runtime-state.js";
-import { privateTemp } from "./private-temp.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 import { assertPrivate } from "./acl.js";
 // Skipped on Windows: symlinks need Developer Mode on Windows (Unix only); the rest run there with the lock helper.
 const posixOnly = {

@@ -134,10 +134,21 @@ async function startBridge(
   return bridge;
 }
 
-/** The backend socket's behaviour: the Mac's headers, text records, 1001 on close. */
+/** Credential Manager: the backend saves the managed secret here and the socket reads it. */
+const savedSecrets = memorySecretStore();
+
+/** The backend's `pointguard_chat_connection`: saves the secret, returns what the page sees. */
+function managedConnection(bridge: Bridge, secret = bridge.secret) {
+  savedSecrets.secrets.set(bridge.endpoint, secret);
+  return { endpoint: bridge.endpoint, clientId: bridge.clientId };
+}
+
+/** The backend socket's behaviour: the secret saved for the endpoint, the Mac's headers, text
+ * records, 1001 on close. */
 const wsTransport: PiChatTransport = {
-  open: ({ endpoint, secret, clientId }, handlers) =>
+  open: ({ endpoint, clientId }, handlers) =>
     new Promise((resolve, reject) => {
+      const secret = savedSecrets.secrets.get(endpoint) ?? '';
       const ws = new WebSocket(endpoint, {
         headers: { Authorization: `Bearer ${secret}`, 'X-PointGuard-Client-ID': clientId },
         maxPayload: 4 * 1024 * 1024,
@@ -191,7 +202,7 @@ function makeChat(preferences = memoryPreferences(), recovery = memoryRecoverySt
   const chat = new PiChatModel({
     transport: wsTransport,
     recovery,
-    secrets: memorySecretStore(),
+    secrets: savedSecrets,
     preferences,
     writerDelayMs: 0,
     retryUnitMs: 20,
@@ -230,7 +241,8 @@ function until(
 
 async function connected(chat = makeChat()): Promise<{ chat: PiChatModel; bridge: Bridge }> {
   const bridge = await startBridge();
-  await chat.bindManagedConnection(bridge.endpoint, bridge.secret, bridge.clientId);
+  const managed = managedConnection(bridge);
+  chat.bindManagedConnection(managed.endpoint, managed.clientId);
   await until(chat, () => chat.connected, 'the connection');
   return { chat, bridge };
 }
@@ -260,7 +272,8 @@ describe('PiChatModel against the bridge fixture', () => {
   it('given a wrong secret should report the refusal and keep retrying', async () => {
     const bridge = await startBridge();
     const chat = makeChat();
-    await chat.bindManagedConnection(bridge.endpoint, 'x'.repeat(32), bridge.clientId);
+    const managed = managedConnection(bridge, 'x'.repeat(32));
+    chat.bindManagedConnection(managed.endpoint, managed.clientId);
     await until(chat, () => chat.error?.includes('(401)') === true, 'the refusal');
     expect(chat.connected).toBe(false);
     expect(chat.connectionStatus).toBe('Connection lost · Point Guard continues on this PC');
@@ -474,7 +487,7 @@ describe('PiChatModel against the bridge fixture', () => {
 
     const again = makeChat(preferences, recovery);
     await again.loaded;
-    await again.bindManagedConnection(bridge.endpoint, bridge.secret, bridge.clientId);
+    again.bindManagedConnection(bridge.endpoint, bridge.clientId);
     await until(again, () => again.connected, 'the reconnection');
     expect(again.draft).toBe('Draft for the history');
     await again.changeSession();

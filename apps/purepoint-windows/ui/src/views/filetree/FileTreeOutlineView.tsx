@@ -1,7 +1,8 @@
 // Port of apps/purepoint-macos/purepoint-macos/Views/Editor/FileTreeOutlineView.swift (WIN-8.4):
 // binds a FileTreeState to the outline (FileTreeOutlineViewController) and performs its menu
 // actions: expand and collapse through the state, Open in Default App and Reveal in Explorer
-// through the opener (`NSWorkspace` on the Mac), Copy Path through the clipboard, and Rename… and
+// through the opener (`NSWorkspace` on the Mac; a program or script is never opened, Reveal is
+// offered instead), Copy Path through the clipboard, and Rename… and
 // Delete… through the host after a dialog.
 //
 // Difference from Swift: a remote file's Open Local Copy (fetch it to a temp file, then open that)
@@ -12,7 +13,12 @@ import { joinPath, parentPath, type FileNode } from '../../model/fileNode';
 import { fileHostErrorMessage } from '../../services/fileHost';
 import { openInDefaultApp, revealInExplorer } from '../../services/opener';
 import type { FileTreeState } from '../../state/fileTreeState';
-import { FileTreeDeleteDialog, FileTreeErrorDialog, FileTreeRenameDialog } from './FileTreeDialogs';
+import {
+  FileTreeBlockedOpenDialog,
+  FileTreeDeleteDialog,
+  FileTreeErrorDialog,
+  FileTreeRenameDialog,
+} from './FileTreeDialogs';
 import {
   FileTreeOutlineViewController,
   type FileTreeActions,
@@ -31,6 +37,7 @@ function copy(text: string): void {
 type Pending =
   | { readonly kind: 'rename'; readonly node: FileNode }
   | { readonly kind: 'delete'; readonly node: FileNode }
+  | { readonly kind: 'blocked'; readonly node: FileNode }
   | { readonly kind: 'error'; readonly title: string; readonly message: string };
 
 export function FileTreeOutlineView({ fileTreeState, onFileSelected }: FileTreeOutlineViewProps) {
@@ -47,7 +54,8 @@ export function FileTreeOutlineView({ fileTreeState, onFileSelected }: FileTreeO
     onNodeExpanded: (node) => void fileTreeState.expandNode(node),
     onNodeCollapsed: (node) => void fileTreeState.collapseNode(node),
     onOpenInDefaultApp: (node) => {
-      openInDefaultApp(node.absolutePath);
+      // A program or script would run: offer Reveal in Explorer instead.
+      if (openInDefaultApp(node.absolutePath) === 'blocked') setPending({ kind: 'blocked', node });
     },
     onRevealInExplorer: (node) => {
       revealInExplorer(node.absolutePath);
@@ -118,6 +126,19 @@ export function FileTreeOutlineView({ fileTreeState, onFileSelected }: FileTreeO
                 fail(`Could not delete ${node.name}`, error);
               },
             );
+          }}
+        />
+      )}
+      {pending?.kind === 'blocked' && (
+        <FileTreeBlockedOpenDialog
+          node={pending.node}
+          onCancel={() => {
+            setPending(null);
+          }}
+          onReveal={() => {
+            const { node } = pending;
+            setPending(null);
+            revealInExplorer(node.absolutePath);
           }}
         />
       )}

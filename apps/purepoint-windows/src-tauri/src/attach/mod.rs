@@ -12,8 +12,8 @@
 pub mod session;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -28,32 +28,104 @@ use session::{AttachEvent, AttachOptions, AttachSession, AttachSink};
 /// How long `attach_input` with `deliver` waits for a connection (`deliverInput`).
 pub const DELIVER_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A Tauri channel as an [`AttachSink`].
-pub struct ChannelSink(pub Channel<InvokeResponseBody>);
+/// A Tauri channel as an [`AttachSink`]. The first send that fails (the page that opened the
+/// session reloaded or its renderer crashed, so nothing reads the channel) tears the session
+/// down: it leaves [`AttachState`], which drops it and closes its daemon connection.
+pub struct ChannelSink {
+    channel: Channel<InvokeResponseBody>,
+    teardown: Teardown,
+}
+
+/// Removes one session from the table, once.
+struct Teardown {
+    failed: AtomicBool,
+    id: u32,
+    sessions: Weak<Mutex<Sessions>>,
+}
+
+impl Teardown {
+    fn sent(&self, result: tauri::Result<()>) {
+        if result.is_err() && !self.failed.swap(true, Ordering::AcqRel) {
+            let removed = self
+                .sessions
+                .upgrade()
+                .and_then(|sessions| lock(&sessions).remove(&self.id));
+            // Dropped outside the lock: this aborts the session's own task.
+            drop(removed);
+        }
+    }
+}
+
+impl ChannelSink {
+    fn new(channel: Channel<InvokeResponseBody>, id: u32, sessions: &Arc<Mutex<Sessions>>) -> Self {
+        Self {
+            channel,
+            teardown: Teardown {
+                failed: AtomicBool::new(false),
+                id,
+                sessions: Arc::downgrade(sessions),
+            },
+        }
+    }
+
+    fn failed(&self) -> bool {
+        self.teardown.failed.load(Ordering::Acquire)
+    }
+}
 
 impl AttachSink for ChannelSink {
     fn event(&self, event: AttachEvent) {
+        if self.failed() {
+            return;
+        }
         if let Ok(json) = serde_json::to_string(&event) {
-            let _ = self.0.send(InvokeResponseBody::Json(json));
+            self.teardown
+                .sent(self.channel.send(InvokeResponseBody::Json(json)));
         }
     }
 
     fn output(&self, bytes: Vec<u8>) {
-        let _ = self.0.send(InvokeResponseBody::Raw(bytes));
+        if self.failed() {
+            return;
+        }
+        self.teardown
+            .sent(self.channel.send(InvokeResponseBody::Raw(bytes)));
     }
+}
+
+type Sessions = HashMap<u32, Arc<AttachSession>>;
+
+fn lock(sessions: &Mutex<Sessions>) -> std::sync::MutexGuard<'_, Sessions> {
+    sessions.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Tauri state: the open sessions by id.
 #[derive(Default)]
 pub struct AttachState {
     next_id: AtomicU32,
-    sessions: Mutex<HashMap<u32, Arc<AttachSession>>>,
+    sessions: Arc<Mutex<Sessions>>,
 }
 
 impl AttachState {
-    fn insert(&self, session: AttachSession) -> u32 {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        self.lock().insert(id, Arc::new(session));
+    fn next_id(&self) -> u32 {
+        self.next_id.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Starts a session streaming to `channel` and returns its id.
+    pub fn open(
+        &self,
+        client: crate::daemon::client::DaemonClient,
+        options: AttachOptions,
+        channel: Channel<InvokeResponseBody>,
+    ) -> u32 {
+        let id = self.next_id();
+        let sink = Arc::new(ChannelSink::new(channel, id, &self.sessions));
+        let session = AttachSession::start(client, options, sink.clone());
+        let mut sessions = self.lock();
+        // The channel may already have failed (a reload raced the open): then never insert.
+        if !sink.failed() {
+            sessions.insert(id, Arc::new(session));
+        }
         id
     }
 
@@ -68,8 +140,22 @@ impl AttachState {
         self.lock().remove(&id)
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u32, Arc<AttachSession>>> {
-        self.sessions.lock().unwrap_or_else(|e| e.into_inner())
+    /// Closes every session (the page that opened them is gone). Returns how many.
+    pub fn clear(&self) -> usize {
+        let drained: Vec<_> = self.lock().drain().collect();
+        drained.len()
+    }
+
+    pub fn len(&self) -> usize {
+        self.lock().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Sessions> {
+        lock(&self.sessions)
     }
 }
 
@@ -119,8 +205,7 @@ pub async fn attach_open(
     let mut options = AttachOptions::new(agent_id, cols, rows);
     options.focused = focused.unwrap_or(false);
     options.reset_before_replay = reset_before_replay.unwrap_or(false);
-    let session = AttachSession::start(client, options, Arc::new(ChannelSink(on_event)));
-    Ok(attach.insert(session))
+    Ok(attach.open(client, options, on_event))
 }
 
 /// Send input on the session's connection. With `deliver`, waits up to 5 s for a
@@ -218,14 +303,69 @@ mod tests {
     fn given_channel_sink_should_send_output_raw_and_events_as_json() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = seen.clone();
-        let sink = ChannelSink(Channel::new(move |body| {
-            record.lock().unwrap().push(body);
-            Ok(())
-        }));
+        let sessions = Arc::new(Mutex::new(Sessions::new()));
+        let sink = ChannelSink::new(
+            Channel::new(move |body| {
+                record.lock().unwrap().push(body);
+                Ok(())
+            }),
+            1,
+            &sessions,
+        );
         sink.output(vec![0, 1, 255]);
         sink.event(AttachEvent::Live);
         let seen = seen.lock().unwrap();
         assert!(matches!(&seen[0], InvokeResponseBody::Raw(bytes) if bytes == &[0, 1, 255]));
         assert!(matches!(&seen[1], InvokeResponseBody::Json(json) if json == r#"{"type":"live"}"#));
+        assert!(!sink.failed());
+    }
+
+    /// A client whose daemon is not running: the session retries, emitting events.
+    fn absent_daemon() -> (tempfile::TempDir, crate::daemon::client::DaemonClient) {
+        let dir = tempfile::tempdir().unwrap();
+        let client =
+            crate::daemon::client::DaemonClient::local(&dir.path().join("pu.sock")).unwrap();
+        (dir, client)
+    }
+
+    #[tokio::test]
+    async fn given_a_failed_channel_send_should_tear_the_session_down() {
+        let (_dir, client) = absent_daemon();
+        let attach = AttachState::default();
+        let sends = Arc::new(AtomicU32::new(0));
+        let counted = sends.clone();
+        // The page is gone: every send fails.
+        let channel = Channel::new(move |_| {
+            counted.fetch_add(1, Ordering::Relaxed);
+            Err(tauri::Error::WebviewNotFound)
+        });
+        let id = attach.open(client, AttachOptions::new("ag-1", 80, 24), channel);
+        for _ in 0..250 {
+            if attach.is_empty() && sends.load(Ordering::Relaxed) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(attach.is_empty(), "session {id} is still open");
+        assert!(attach.get(id).is_err());
+        let after = sends.load(Ordering::Relaxed);
+        assert!(after >= 1);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        // Nothing more is sent once torn down.
+        assert_eq!(sends.load(Ordering::Relaxed), after);
+    }
+
+    #[tokio::test]
+    async fn given_a_reload_should_clear_every_session() {
+        let (_dir, client) = absent_daemon();
+        let attach = AttachState::default();
+        let quiet = || Channel::new(|_| Ok(()));
+        let a = attach.open(client.clone(), AttachOptions::new("ag-1", 80, 24), quiet());
+        let b = attach.open(client, AttachOptions::new("ag-2", 80, 24), quiet());
+        assert_eq!(attach.len(), 2);
+        assert_eq!(attach.clear(), 2);
+        assert!(attach.is_empty());
+        assert!(attach.get(a).is_err() && attach.get(b).is_err());
+        assert_eq!(attach.clear(), 0);
     }
 }

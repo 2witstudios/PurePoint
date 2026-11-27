@@ -433,3 +433,32 @@ fn removing_a_watched_worktree_before_release() {
         "removal succeeds once released"
     );
 }
+
+/// A page reload: every watcher stops (silently) and every release token is forgotten.
+#[test]
+fn reset_stops_every_watcher_and_forgets_releases() {
+    let temp = TempDir::new();
+    let wt = fake_repo(&temp, "wt");
+    let (watchers, events) = recording();
+    let state = commands::WatcherState::with_watchers(watchers.clone());
+    watchers.watch(WatchSpec::FileTree { root: wt.clone() });
+    watchers.watch(WatchSpec::Worktree {
+        worktree_path: wt.clone(),
+    });
+    watchers.watch(WatchSpec::Manifest {
+        project_root: temp.path().to_path_buf(),
+    });
+    let released = state.release(&wt);
+    assert_eq!(released.released, 2);
+    assert_eq!(state.pending_releases(), 1);
+    settle(&events);
+
+    assert_eq!(state.reset(), 1);
+    assert!(watchers.active().is_empty());
+    assert_eq!(state.pending_releases(), 0);
+    assert_eq!(state.restore(released.token), 0);
+    std::fs::write(wt.join("src.txt"), "x").unwrap();
+    std::thread::sleep(Duration::from_millis(900));
+    assert!(events.lock().unwrap().is_empty(), "no events after reset");
+    assert_eq!(state.reset(), 0);
+}

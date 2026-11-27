@@ -226,6 +226,33 @@ describe('FileTreeSidebarView', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
+  it('refuses to open a script in its default app and offers Reveal in Explorer', async () => {
+    const opened: string[] = [];
+    (globalThis as SpyGlobal).__PU_OPENER_SPY__ = opened;
+    const host = memoryFileHost(
+      { [`${ROOT}\\build.cmd`]: 'echo hi', [`${ROOT}\\notes.txt`]: 'n' },
+      { folders: [ROOT], isLocal: true },
+    );
+    const state = new FileTreeState();
+    await state.load(ROOT, host);
+    render(<FileTreeSidebarView fileTreeState={state} onHide={vi.fn()} onFileSelected={vi.fn()} />);
+    const menuItem = (target: string, title: string) => {
+      fireEvent.contextMenu(row(target), { clientX: 10, clientY: 10 });
+      fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: title }));
+    };
+    menuItem('build.cmd', 'Open in Default App');
+    const alert = screen.getByRole('alertdialog', { name: 'build.cmd was not opened' });
+    expect(alert).toHaveTextContent('Windows would run this file');
+    expect(opened).toEqual([]);
+    fireEvent.click(within(alert).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    menuItem('build.cmd', 'Open in Default App');
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal in Explorer' }));
+    expect(opened).toEqual([`reveal:${ROOT}\\build.cmd`]);
+    menuItem('notes.txt', 'Open in Default App');
+    expect(opened).toEqual([`reveal:${ROOT}\\build.cmd`, `open-path:${ROOT}\\notes.txt`]);
+  });
+
   it('closes the context menu on Escape', async () => {
     await mounted();
     fireEvent.contextMenu(row('README.md'), { clientX: 10, clientY: 10 });

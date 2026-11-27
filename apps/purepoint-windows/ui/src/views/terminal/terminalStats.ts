@@ -1,6 +1,9 @@
 // Terminal byte accounting for the end-to-end tests (WIN-7.3): how many output bytes each pane
 // received and xterm.js parsed, and an FNV-1a checksum of them. The checksum costs a pass over
-// every byte, so it runs only while `globalThis.__PU_TERMINAL_STATS__` is true (the e2e sets it).
+// every byte, so it runs only while `globalThis.__PU_TERMINAL_STATS__` is true (the e2e sets it),
+// and only in debug builds (`__PU_TEST_HOOKS__`).
+
+import { testHooksEnabled } from '../../services/testHooks';
 
 export const FNV_OFFSET = 0x811c9dc5;
 const FNV_PRIME = 0x01000193;
@@ -20,5 +23,5 @@ interface StatsGlobal {
 }
 
 export function statsEnabled(): boolean {
-  return (globalThis as StatsGlobal).__PU_TERMINAL_STATS__ === true;
+  return testHooksEnabled() && (globalThis as StatsGlobal).__PU_TERMINAL_STATS__ === true;
 }

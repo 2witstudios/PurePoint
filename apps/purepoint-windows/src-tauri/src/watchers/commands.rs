@@ -79,6 +79,24 @@ impl WatcherState {
         guard.map_or(0, ReleaseGuard::restore)
     }
 
+    /// Stops every watcher and forgets every release (the page reloaded or its renderer
+    /// crashed, so nothing will restore them or unwatch). The watchers stop emitting before
+    /// this returns; their handles close on the blocking pool. Returns how many were stopped.
+    pub fn reset(&self) -> usize {
+        let stopped = self.0.watchers.stop_all();
+        self.releases().guards.clear();
+        let count = stopped.len();
+        if !stopped.is_empty() {
+            std::thread::spawn(move || stopped.join());
+        }
+        count
+    }
+
+    /// The release tokens still held.
+    pub fn pending_releases(&self) -> usize {
+        self.releases().guards.len()
+    }
+
     /// Forgets a release, leaving its watchers stopped; false for an unknown token.
     pub fn discard(&self, token: u64) -> bool {
         self.releases().guards.remove(&token).is_some()
@@ -101,6 +119,7 @@ pub async fn watch_manifest(
     state: State<'_, WatcherState>,
     project_root: String,
 ) -> Result<WatchId, String> {
+    crate::files::roots::global().add(&project_root);
     let spec = WatchSpec::Manifest {
         project_root: PathBuf::from(project_root),
     };
@@ -113,6 +132,7 @@ pub async fn watch_worktree(
     state: State<'_, WatcherState>,
     worktree_path: String,
 ) -> Result<WatchId, String> {
+    crate::files::roots::global().add(&worktree_path);
     let spec = WatchSpec::Worktree {
         worktree_path: PathBuf::from(worktree_path),
     };
@@ -125,6 +145,7 @@ pub async fn watch_file_tree(
     state: State<'_, WatcherState>,
     root: String,
 ) -> Result<WatchId, String> {
+    crate::files::roots::global().add(&root);
     let spec = WatchSpec::FileTree {
         root: PathBuf::from(root),
     };

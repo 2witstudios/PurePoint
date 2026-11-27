@@ -9,7 +9,7 @@ import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
-import { privateTemp } from "./private-temp.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 // Skipped on Windows: POSIX modes and symlinks (Unix only); the rest run there with the lock helper.
 const posixOnly = {
   skip: process.platform === "win32" && "POSIX modes and symlinks (Unix only)",

@@ -1,7 +1,14 @@
 // Port of apps/purepoint-macos/purepoint-macosTests/MarkdownHTMLRendererTests.swift (WIN-8.6): every
 // Swift case, then the escaping guarantees the preview relies on.
 import { describe, expect, it } from 'vitest';
-import { escapeHtml, markdownPage, renderInline, renderMarkdown, safeUrl } from './markdownHtml';
+import {
+  escapeHtml,
+  markdownPage,
+  renderInline,
+  renderMarkdown,
+  safeImageUrl,
+  safeUrl,
+} from './markdownHtml';
 
 describe('MarkdownHTMLRenderer (Swift cases)', () => {
   it('renders heading and paragraph', () => {
@@ -87,7 +94,27 @@ describe('markdownHtml escaping', () => {
     ]) {
       expect(safeUrl(bad), bad).toBe('#');
     }
-    expect(renderInline('![x](javascript:alert(1))')).toBe('<img alt="x" src="#">)');
+    expect(renderInline('![x](javascript:alert(1))')).toBe('x)');
+  });
+
+  it('loads preview images over https only, showing the alt text otherwise', () => {
+    expect(safeImageUrl('https://a.example/i.png')).toBe('https://a.example/i.png');
+    for (const bad of [
+      'http://a.example/i.png',
+      'file://server/share/i.png',
+      'file:///C:/Users/me/i.png',
+      String.raw`\\server\share\i.png`,
+      '//server/share/i.png',
+      'docs/i.png',
+      'data:image/png;base64,AAAA',
+      'javascript:alert(1)',
+      String.raw`https:\\server\i.png`,
+    ]) {
+      expect(safeImageUrl(bad), bad).toBeNull();
+      expect(renderInline(`![alt](${bad})`), bad).not.toContain('<img');
+    }
+    expect(renderInline('![alt](file://server/share/i.png)')).toBe('alt');
+    expect(markdownPage('')).toContain('img-src https:;');
   });
 
   it('applies inline markup', () => {

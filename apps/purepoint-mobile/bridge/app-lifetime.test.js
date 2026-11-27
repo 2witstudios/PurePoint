@@ -9,7 +9,7 @@ import os from "node:os";
 import { watchAppLifetime } from "./app-lifetime.js";
 import { openRuntimeState } from "./runtime-state.js";
 import { openTrustStore } from "./trust.js";
-import { privateTemp } from "./private-temp.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 // Skipped on Windows: POSIX signals and /usr/bin/true (Unix only); the rest run there with the lock helper.
 const posixOnly = {
   skip: process.platform === "win32" && "POSIX signals and /usr/bin/true (Unix only)",

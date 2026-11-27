@@ -14,10 +14,11 @@ describe('pairing secret', () => {
     invoke.mockReset();
   });
 
-  it('given the chat store should read and save by endpoint', async () => {
-    invoke.mockResolvedValueOnce('secret');
-    expect(await credentialManagerSecrets.read('ws://127.0.0.1:1/v1')).toBe('secret');
-    expect(invoke).toHaveBeenLastCalledWith('pointguard_pairing_read', {
+  it('given the chat store should ask for and save by endpoint, never read the secret', async () => {
+    invoke.mockResolvedValueOnce(true);
+    expect(await credentialManagerSecrets.has('ws://127.0.0.1:1/v1')).toBe(true);
+    expect('read' in credentialManagerSecrets).toBe(false);
+    expect(invoke).toHaveBeenLastCalledWith('pointguard_pairing_has', {
       endpoint: 'ws://127.0.0.1:1/v1',
     });
     invoke.mockResolvedValueOnce(null);

@@ -263,12 +263,24 @@ pub fn run_local(command: &HostCommand) -> CommandResult {
     }
 }
 
+/// `%SystemRoot%\System32\taskkill.exe`, never a `taskkill` found on PATH or in the current
+/// directory (the worktree, which an agent can write).
+#[cfg(windows)]
+fn taskkill_path() -> std::path::PathBuf {
+    let root = std::env::var_os("SystemRoot")
+        .filter(|root| std::path::Path::new(root).is_absolute())
+        .unwrap_or_else(|| r"C:\Windows".into());
+    std::path::Path::new(&root)
+        .join("System32")
+        .join("taskkill.exe")
+}
+
 /// Ends the child and everything it started. git runs aliases and hooks through a shell, so
 /// stopping git.exe alone would leave its children holding the pipes.
 fn kill_tree(child: &mut Child) {
     #[cfg(windows)]
     {
-        let mut taskkill = Command::new("taskkill");
+        let mut taskkill = Command::new(taskkill_path());
         taskkill.args(["/T", "/F", "/PID", &child.id().to_string()]);
         taskkill
             .stdin(Stdio::null())
@@ -280,4 +292,15 @@ fn kill_tree(child: &mut Child) {
         }
     }
     let _ = child.kill();
+}
+
+#[cfg(all(test, windows))]
+mod taskkill_tests {
+    #[test]
+    fn taskkill_is_the_system_copy() {
+        let path = super::taskkill_path();
+        assert!(path.is_absolute(), "{path:?}");
+        assert!(path.ends_with("System32/taskkill.exe"), "{path:?}");
+        assert!(path.exists(), "{path:?}");
+    }
 }

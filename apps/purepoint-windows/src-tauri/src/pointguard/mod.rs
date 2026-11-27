@@ -189,12 +189,40 @@ pub async fn pointguard_request(
         .await
 }
 
-/// The local chat endpoint and secret, while ready.
+/// The local chat, while ready: what the page binds to. The desktop chat secret is saved in
+/// Credential Manager under the endpoint (where `pointguard_chat_open` reads it) and never
+/// returned to the page.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedChat {
+    pub endpoint: String,
+    pub client_id: String,
+}
+
+/// Saves the connection's secret by endpoint and returns what the page may see.
+pub fn bind_managed_chat(
+    store: &dyn crate::secrets::pairing::SecretStore,
+    connection: ChatConnection,
+) -> Result<ManagedChat, String> {
+    let endpoint =
+        crate::secrets::pairing::save_checked(store, &connection.endpoint, &connection.secret)?;
+    Ok(ManagedChat {
+        endpoint,
+        client_id: connection.client_id,
+    })
+}
+
+/// The local chat endpoint and client id, while ready.
 #[tauri::command]
-pub fn pointguard_chat_connection(
+pub async fn pointguard_chat_connection(
     state: State<'_, PointGuardState>,
-) -> Result<ChatConnection, String> {
-    state.service.chat_connection()
+    secrets: State<'_, crate::secrets::pairing::PairingSecrets>,
+) -> Result<ManagedChat, String> {
+    let connection = state.service.chat_connection()?;
+    let store = secrets.0.clone();
+    tauri::async_runtime::spawn_blocking(move || bind_managed_chat(store.as_ref(), connection))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// The home folder Point Guard and the daemon use (`%USERPROFILE%`, as `pu_core` resolves it):
@@ -212,4 +240,30 @@ pub fn pointguard_home() -> Option<String> {
 #[tauri::command]
 pub fn pointguard_validate_folder(path: String) -> Result<String, String> {
     runtime::validated_folder(&path).map(|p| p.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::secrets::pairing::{MemoryStore, chat_secret};
+
+    #[test]
+    fn given_the_managed_chat_should_keep_its_secret_in_the_store_not_the_reply() {
+        let store = MemoryStore::default();
+        let secret = "s".repeat(40);
+        let managed = bind_managed_chat(
+            &store,
+            ChatConnection {
+                endpoint: "ws://127.0.0.1:8787/v1".into(),
+                secret: secret.clone(),
+                client_id: "desktop-1".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&managed).unwrap(),
+            serde_json::json!({ "endpoint": "ws://127.0.0.1:8787/v1", "clientId": "desktop-1" })
+        );
+        assert_eq!(chat_secret(&store, &managed.endpoint).unwrap().1, secret);
+    }
 }

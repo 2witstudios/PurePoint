@@ -152,14 +152,18 @@ function isRule(line: string): boolean {
   );
 }
 
-const IMAGE = /^!\[([^\]]*)\]\((https?:\/\/[^\s]+)\)$/u;
+// Only https: a `file:` or UNC image would make Windows authenticate to the host it names (an NTLM
+// hash leak), and plain http is readable and alterable on the way. The app's CSP allows https
+// images only, and each still loads only when the reader clicks Load image.
+const IMAGE = /^!\[([^\]]*)\]\((https:\/\/[^\s]+)\)$/iu;
 
 function image(line: string): { alt: string; url: string } | null {
   const match = IMAGE.exec(line);
   if (!match) return null;
   const url = match[2] ?? '';
   try {
-    new URL(url);
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || parsed.hostname === '') return null;
   } catch {
     return null;
   }

@@ -520,8 +520,11 @@ export class PiChatModel {
 
   // MARK: - Connection
 
-  /** Bind the app-owned bridge's local chat (WIN-9.3 `onConnection`). */
-  async bindManagedConnection(endpoint: string, secret: string, clientId: string): Promise<void> {
+  /**
+   * Bind the app-owned bridge's local chat (WIN-9.3 `onConnection`). The backend has already
+   * saved its secret under `endpoint`.
+   */
+  bindManagedConnection(endpoint: string, clientId: string): void {
     if (!UUID.test(clientId)) {
       this.error = 'Invalid managed desktop identity.';
       return;
@@ -530,7 +533,7 @@ export class PiChatModel {
     this._clientId = clientId;
     this.setPref(KEY_CLIENT_ID, clientId);
     this.managedEndpoint = piEndpoint(endpoint);
-    await this.pair(endpoint, secret);
+    this.connectSaved(endpoint);
   }
 
   /** Save the secret for `endpoint` and connect to it. */
@@ -590,7 +593,7 @@ export class PiChatModel {
     this.connectionTask = task;
     void (async () => {
       await this.recoveryTask;
-      const secret = await this.secrets.read(address).catch(() => '');
+      const saved = await this.secrets.has(address).catch(() => false);
       if (this.connectionTask !== task) return;
       this.connectionTask = null;
       if (
@@ -601,12 +604,12 @@ export class PiChatModel {
         this.opening
       )
         return;
-      this.startConnection(address, secret);
+      this.startConnection(address, saved);
     })();
   }
 
-  private startConnection(endpoint: string, secret: string): void {
-    if (secret === '') {
+  private startConnection(endpoint: string, saved: boolean): void {
+    if (!saved) {
       this.error = 'Add the pairing secret in Connection settings.';
       return;
     }
@@ -618,7 +621,7 @@ export class PiChatModel {
     this.opening = true;
     this.transport
       .open(
-        { endpoint, secret, clientId: this._clientId },
+        { endpoint, clientId: this._clientId },
         {
           onMessage: (text) => {
             if (current !== this.generation) return;
@@ -1170,7 +1173,7 @@ export function pointGuardChatBinding(chat: PiChatModel): {
 } {
   return {
     onConnection: (connection) => {
-      void chat.bindManagedConnection(connection.endpoint, connection.secret, connection.clientId);
+      chat.bindManagedConnection(connection.endpoint, connection.clientId);
     },
     onDisconnect: () => {
       chat.disconnect();

@@ -351,7 +351,9 @@ impl DaemonLifecycle {
             .ok()
             .and_then(|text| text.trim().parse::<u32>().ok())
             .filter(|pid| *pid > 0);
-        let Some(pid) = pid.filter(|pid| process::is_engine(*pid)) else {
+        // One handle for the check, the wait and the kill: the PID cannot be reused by
+        // another process while it is open, so what is killed is what was verified.
+        let Some(engine) = pid.and_then(process::Engine::open) else {
             let _ = std::fs::remove_file(&pid_path);
             return;
         };
@@ -359,12 +361,16 @@ impl DaemonLifecycle {
             .client
             .request_with_timeout(&Request::Shutdown, PROBE_TIMEOUT)
             .await;
-        let exited =
-            tokio::task::spawn_blocking(move || process::wait_exit(pid, Duration::from_secs(3)))
-                .await
-                .unwrap_or(false);
-        if !exited {
-            process::terminate(pid);
+        let terminated = tokio::task::spawn_blocking(move || {
+            let exited = engine.wait_exit(Duration::from_secs(3));
+            if !exited {
+                engine.terminate();
+            }
+            !exited
+        })
+        .await
+        .unwrap_or(false);
+        if terminated {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
@@ -487,12 +493,36 @@ pub(crate) mod process {
         }
     }
 
-    /// True if `pid` is a live `pu-engine.exe`: a PID file outlives a killed daemon, and
-    /// the PID may since belong to an unrelated process.
-    pub fn is_engine(pid: u32) -> bool {
-        let Some(process) = Process::open(pid, PROCESS_QUERY_LIMITED_INFORMATION) else {
-            return false;
-        };
+    // SAFETY: a process handle may be used and closed from any thread.
+    unsafe impl Send for Process {}
+
+    /// A live `pu-engine.exe`, held open by one handle that can query, wait on and terminate
+    /// it: a PID file outlives a killed daemon and the PID may since belong to an unrelated
+    /// process, so the image is checked on the same handle that is later waited on and
+    /// killed (the PID cannot be reused while it is open).
+    pub struct Engine(Process);
+
+    impl Engine {
+        pub fn open(pid: u32) -> Option<Self> {
+            let process = Process::open(
+                pid,
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE,
+            )?;
+            is_engine_image(&process).then_some(Self(process))
+        }
+
+        /// Wait up to `timeout` for it to exit; true once it has.
+        pub fn wait_exit(&self, timeout: Duration) -> bool {
+            wait_handle(&self.0, timeout)
+        }
+
+        pub fn terminate(&self) {
+            // SAFETY: a live process handle opened with PROCESS_TERMINATE.
+            unsafe { TerminateProcess(self.0.0, 1) };
+        }
+    }
+
+    fn is_engine_image(process: &Process) -> bool {
         let mut buf = [0u16; 1024];
         let mut len = buf.len() as u32;
         // SAFETY: buf and len describe a writable buffer of len u16s.
@@ -508,34 +538,36 @@ pub(crate) mod process {
             .is_some_and(|name| name.eq_ignore_ascii_case(pu_core::engine_binary::ENGINE_EXE))
     }
 
-    /// Wait up to `timeout` for `pid` to exit; true once it has (or cannot be opened).
-    pub fn wait_exit(pid: u32, timeout: Duration) -> bool {
-        let Some(process) = Process::open(pid, PROCESS_SYNCHRONIZE) else {
-            return true;
-        };
+    fn wait_handle(process: &Process, timeout: Duration) -> bool {
         let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
-        // SAFETY: a live process handle we own.
+        // SAFETY: a live process handle we own, opened with SYNCHRONIZE.
         unsafe { WaitForSingleObject(process.0, ms) == WAIT_OBJECT_0 }
     }
 
-    pub fn terminate(pid: u32) {
-        if let Some(process) = Process::open(pid, PROCESS_TERMINATE) {
-            // SAFETY: a live process handle opened for termination.
-            unsafe { TerminateProcess(process.0, 1) };
-        }
+    /// Wait up to `timeout` for `pid` to exit; true once it has (or cannot be opened).
+    #[cfg(test)]
+    pub fn wait_exit(pid: u32, timeout: Duration) -> bool {
+        Process::open(pid, PROCESS_SYNCHRONIZE).is_none_or(|p| wait_handle(&p, timeout))
     }
 }
 
 #[cfg(not(windows))]
 pub(crate) mod process {
     use std::time::Duration;
-    pub fn is_engine(_pid: u32) -> bool {
-        false
+    pub struct Engine;
+    impl Engine {
+        pub fn open(_pid: u32) -> Option<Self> {
+            None
+        }
+        pub fn wait_exit(&self, _timeout: Duration) -> bool {
+            true
+        }
+        pub fn terminate(&self) {}
     }
+    #[cfg(test)]
     pub fn wait_exit(_pid: u32, _timeout: Duration) -> bool {
         true
     }
-    pub fn terminate(_pid: u32) {}
 }
 
 /// Shared handle for Tauri state.
@@ -743,5 +775,13 @@ mod tests {
                 .unwrap(),
             "daemon did not exit after Shutdown"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn given_a_process_that_is_not_the_engine_should_not_open_it() {
+        // This test binary is alive but is not pu-engine.exe: never verified, never killed.
+        assert!(process::Engine::open(std::process::id()).is_none());
+        assert!(process::Engine::open(0).is_none());
     }
 }

@@ -5,10 +5,15 @@
 //! Mac's Keychain item uses (`keyring` names it `<endpoint>.<service>`, with the endpoint as
 //! user name). It is never written to a file.
 //!
-//! Tauri surface (front end: `ui/src/services/pairingSecret.ts`): `pointguard_pairing_read`
-//! (the chat's secret for an endpoint, empty when none is saved), `pointguard_pairing_save`
-//! (the chat binding an endpoint) and `pointguard_pairing_import` (Settings: a pairing code,
-//! or an address and secret typed in), which validates, saves and returns the endpoint.
+//! The secret never goes back to the page: the chat socket's command
+//! (`pointguard_chat_open`) and the managed connection (`pointguard_chat_connection`) read
+//! and save it here themselves, keyed by endpoint. A page script can only ask whether one is
+//! saved, or hand one in.
+//!
+//! Tauri surface (front end: `ui/src/services/pairingSecret.ts`): `pointguard_pairing_has`
+//! (whether a secret is saved for an endpoint), `pointguard_pairing_save` (a secret typed into
+//! the chat) and `pointguard_pairing_import` (Settings: a pairing code, or an address and
+//! secret typed in), which validates, saves and returns the endpoint.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -122,6 +127,27 @@ pub fn read(store: &dyn SecretStore, endpoint: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The canonical endpoint and its saved secret, for the chat socket to authenticate with.
+pub fn chat_secret(store: &dyn SecretStore, address: &str) -> Result<(String, String), String> {
+    let address = endpoint(address).ok_or(BAD_ADDRESS)?;
+    let secret = read(store, &address);
+    if !valid_secret(&secret) {
+        return Err(NO_SECRET.into());
+    }
+    Ok((address, secret))
+}
+
+/// Validate and save `secret` for `address`; returns the canonical endpoint.
+pub fn save_checked(
+    store: &dyn SecretStore,
+    address: &str,
+    secret: &str,
+) -> Result<String, String> {
+    let address = checked(address, secret)?;
+    save(store, secret, &address)?;
+    Ok(address)
+}
+
 /// Save (or replace) the secret for `endpoint` (`PiPairingSecret.save`).
 pub fn save(store: &dyn SecretStore, secret: &str, endpoint: &str) -> Result<(), String> {
     store
@@ -152,6 +178,7 @@ pub const BAD_ADDRESS: &str =
     "Enter a Tailscale address ending in /v1, such as ws://100.100.1.2:8787/v1.";
 pub const BAD_SECRET: &str = "Enter the pairing secret from Point Guard (at least 32 characters).";
 pub const BAD_CODE: &str = "This is not a Point Guard pairing code.";
+pub const NO_SECRET: &str = "Add the pairing secret in Connection settings.";
 
 fn checked(address: &str, secret: &str) -> Result<String, String> {
     let address = endpoint(address).ok_or(BAD_ADDRESS)?;
@@ -200,14 +227,15 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
-/// The saved secret for `endpoint` ('' when none).
+/// Whether a usable secret is saved for `endpoint`. The secret itself never leaves the
+/// backend.
 #[tauri::command]
-pub async fn pointguard_pairing_read(
+pub async fn pointguard_pairing_has(
     secrets: tauri::State<'_, PairingSecrets>,
     endpoint: String,
-) -> Result<String, String> {
+) -> Result<bool, String> {
     let store = secrets.0.clone();
-    blocking(move || Ok(read(store.as_ref(), &endpoint))).await
+    blocking(move || Ok(chat_secret(store.as_ref(), &endpoint).is_ok())).await
 }
 
 /// Save the secret for `endpoint`.
@@ -218,11 +246,7 @@ pub async fn pointguard_pairing_save(
     secret: String,
 ) -> Result<(), String> {
     let store = secrets.0.clone();
-    blocking(move || {
-        let address = checked(&endpoint, &secret)?;
-        save(store.as_ref(), &secret, &address)
-    })
-    .await
+    blocking(move || save_checked(store.as_ref(), &endpoint, &secret).map(|_| ())).await
 }
 
 /// Settings' import: a pairing code or an address and secret. Returns the endpoint saved.
@@ -270,6 +294,31 @@ mod tests {
         ] {
             assert!(ok(bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn given_a_chat_endpoint_should_find_its_secret_by_canonical_endpoint() {
+        let store = MemoryStore::default();
+        assert_eq!(
+            chat_secret(&store, "ws://127.0.0.1:1/v1"),
+            Err(NO_SECRET.into())
+        );
+        assert_eq!(
+            save_checked(&store, " WS://127.0.0.1:1/v1 ", SECRET),
+            Ok("ws://127.0.0.1:1/v1".into())
+        );
+        assert_eq!(
+            chat_secret(&store, "ws://127.0.0.1:1/v1"),
+            Ok(("ws://127.0.0.1:1/v1".into(), SECRET.into()))
+        );
+        assert_eq!(
+            chat_secret(&store, "ws://8.8.8.8:1/v1"),
+            Err(BAD_ADDRESS.into())
+        );
+        assert_eq!(
+            save_checked(&store, "ws://127.0.0.1:1/v1", "short"),
+            Err(BAD_SECRET.into())
+        );
     }
 
     #[test]

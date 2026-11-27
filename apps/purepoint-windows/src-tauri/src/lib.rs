@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod files;
 pub mod git;
 pub mod installer;
+pub mod navigation;
 pub mod pointguard;
 pub mod secrets;
 pub mod subscriptions;
@@ -31,10 +32,41 @@ pub fn protocol_version() -> u32 {
     pu_core::protocol::PROTOCOL_VERSION
 }
 
+/// The main window's page started loading (a reload, or the renderer restarted after a crash):
+/// nothing on the old page reads its channels or will close what it opened, so the backend
+/// drops it all before the new page starts its own. Terminal sessions and chat sockets close,
+/// watchers stop (and release tokens are forgotten), and subscriptions stop. Also runs on the
+/// first load, when everything is still empty.
+fn reset_for_page_load<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    use tauri::Manager;
+    if let Some(attach) = app.try_state::<attach::AttachState>() {
+        attach.clear();
+    }
+    if let Some(sockets) = app.try_state::<pointguard::chat::ChatSockets>() {
+        sockets.clear();
+    }
+    if let Some(watchers) = app.try_state::<watchers::commands::WatcherState>() {
+        watchers.reset();
+    }
+    if let Some(subscriptions) = app.try_state::<subscriptions::Subscriptions>() {
+        subscriptions.stop_all();
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .on_page_load(|webview, payload| {
+            use tauri::Manager;
+            if webview.label() == MAIN_WINDOW
+                && payload.event() == tauri::webview::PageLoadEvent::Started
+            {
+                reset_for_page_load(webview.app_handle());
+            }
+        })
         // Links from terminals and chat open in the user's browser (WIN-7.3).
         .plugin(tauri_plugin_opener::init())
+        // The window only ever shows the app: other navigations are refused.
+        .plugin(navigation::plugin())
         // Open Project's folder picker (WIN-8.15).
         .plugin(tauri_plugin_dialog::init())
         // Agent signal toasts (WIN-7.7).
@@ -49,6 +81,7 @@ pub fn run() {
         .manage(secrets::pairing::PairingSecrets::default())
         .invoke_handler(tauri::generate_handler![
             files::index::file_index,
+            files::open::open_in_default_app,
             files::text::fs_stat_text,
             files::text::fs_read_text,
             files::text::fs_read_document,
@@ -122,7 +155,7 @@ pub fn run() {
             pointguard::chat::pointguard_chat_close,
             pointguard::recovery::pointguard_recovery_load,
             pointguard::recovery::pointguard_recovery_save,
-            secrets::pairing::pointguard_pairing_read,
+            secrets::pairing::pointguard_pairing_has,
             secrets::pairing::pointguard_pairing_save,
             secrets::pairing::pointguard_pairing_import,
         ])
@@ -193,5 +226,33 @@ mod tests {
     #[test]
     fn links_the_pu_core_protocol() {
         assert!(protocol_version() > 0);
+    }
+
+    /// The webview's CSP: images from the app, data URIs and https only (chat images load on a
+    /// click; `file:`/UNC never, so Windows never authenticates to a host a reply names), no
+    /// `asset:` protocol, no plugins, no `<base>` and no form posts.
+    #[test]
+    fn csp_allows_https_images_and_locks_down_the_rest() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let csp = config["app"]["security"]["csp"].as_str().unwrap();
+        let directives: Vec<Vec<&str>> = csp
+            .split(';')
+            .map(|d| d.split_whitespace().collect())
+            .filter(|d: &Vec<&str>| !d.is_empty())
+            .collect();
+        let find = |name: &str| {
+            directives
+                .iter()
+                .find(|d| d[0] == name)
+                .map(|d| d[1..].to_vec())
+                .unwrap_or_else(|| panic!("no {name} in {csp}"))
+        };
+        assert_eq!(find("img-src"), ["'self'", "data:", "https:"]);
+        assert_eq!(find("object-src"), ["'none'"]);
+        assert_eq!(find("base-uri"), ["'none'"]);
+        assert_eq!(find("form-action"), ["'none'"]);
+        assert_eq!(find("default-src"), ["'self'"]);
+        assert!(!csp.contains("asset:") && !csp.contains("file:"), "{csp}");
     }
 }

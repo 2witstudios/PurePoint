@@ -13,7 +13,7 @@ import { terminalConnection } from "./terminals.js";
 import { openTrustStore } from "./trust.js";
 import { serve } from "./network.js";
 import { daemonEndpoint } from "./pipe-name.js";
-import { privateTemp } from "./private-temp.js";
+import { privateTemp } from "./private-temp.test-helper.js";
 
 async function fixture(t) {
   const home = await privateTemp("mw-");
